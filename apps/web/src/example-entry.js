@@ -1,4 +1,5 @@
 // This classic bundle starts before the application and never imports remote code.
+import './page-recovery.js?v=20261018-recovery-1';
 const raw = window.name ? JSON.parse(window.name) : Object.fromEntries(new URLSearchParams(location.search));
 const config = { ...raw, layout: raw.layout === 'mobile' ? 'mobile' : 'desktop' };
 const query = new URLSearchParams(config);
@@ -25,4 +26,4 @@ document.addEventListener('click', (event) => {
   event.preventDefault();
   if (button.form.reportValidity()) button.form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: button }));
 }, true);
-import('./main.js?v=20261012-content-1');
+import('./bootstrap.js?v=20261012-content-1');

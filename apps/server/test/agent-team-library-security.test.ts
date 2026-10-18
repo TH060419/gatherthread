@@ -11,6 +11,7 @@ import { CollaborationService } from "../src/service.js";
 import { AgentTeams } from "../src/agent-teams.js";
 import { AgentTeamLibrary } from "../src/agent-team-library.js";
 import { ApiError } from "../src/errors.js";
+import { AGENT_TEAM_REVISION_EPOCH } from "../src/agent-team-schema.js";
 
 function fixture(path = ":memory:") {
   const db = new CollaborationDatabase(path), service = new CollaborationService(db);
@@ -166,6 +167,83 @@ test("different devices of one account share the same CAS revision and cannot ov
   } finally { f.close(); }
 });
 
+test("deleting and recreating a Team ID cannot make another device's stale save revision valid again", () => {
+  const f = fixture(); try {
+    const original = f.save("reused-team-id");
+    f.library.delete(f.actor, "team", original.id, f.key());
+    const replacement = f.save(original.id, { ...f.draft, name: "A different replacement Team" });
+    assert.throws(() => f.library.save(f.second, original.id, { draft: { ...f.draft, name: "Stale other-device overwrite" },
+      expected_revision: original.revision, idempotency_key: f.key() }), code("conflict"));
+    assert.ok(replacement.revision > original.revision);
+    assert.equal(f.library.read(f.actor, original.id).draft.name, "A different replacement Team");
+  } finally { f.close(); }
+});
+
+test("a recreated tested Team cannot borrow the old Team's stale composer or Enable revision", async () => {
+  const f = fixture(); try {
+    const prepare = async (name: string) => {
+      const saved = f.save("recreated-tested-id", { ...f.draft, name });
+      const probe = f.library.test(f.actor, saved.id, f.session.id, { expected_revision: saved.revision,
+        content_revision: 0, idempotency_key: f.key() });
+      assert.equal((await f.finishProbe(probe.run.id)).status, "completed");
+      return f.library.control(f.actor, saved.id, f.session.id, { enabled: true,
+        expected_revision: saved.revision, idempotency_key: f.key() }).team;
+    };
+    const old = await prepare("The original team"), staleTask = { content: "Run only the original reviewed configuration",
+      expected_revision: old.revision, content_revision: 0, idempotency_key: f.key() };
+    f.library.delete(f.actor, "team", old.id, f.key());
+    const replacement = await prepare("A different tested replacement");
+    assert.throws(() => f.library.start(f.second, replacement.id, f.session.id, staleTask), code("conflict"));
+    assert.throws(() => f.library.control(f.second, replacement.id, f.session.id, { enabled: true,
+      expected_revision: old.revision, idempotency_key: f.key() }), code("conflict"));
+    assert.ok(replacement.revision > old.revision);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_runs WHERE purpose='task'").get()!.n, 0);
+  } finally { f.close(); }
+});
+
+test("account revision allocation is replay-safe, rollback-safe and isolated between owners", () => {
+  const f = fixture(); try {
+    const input = { draft: f.draft, expected_revision: null, idempotency_key: f.key() };
+    const saved = f.library.save(f.actor, "atomic-clock", input).team;
+    const revision = () => Number(f.db.sqlite.prepare("SELECT last_revision FROM agent_team_revision_clocks WHERE user_id=?").get(f.actor.user_id)!.last_revision);
+    assert.equal(Number.isSafeInteger(saved.revision), true); assert.ok(saved.revision > AGENT_TEAM_REVISION_EPOCH);
+    assert.equal(f.library.save(f.actor, saved.id, input).replayed, true);
+    assert.equal(f.library.save(f.actor, saved.id, { ...input, expected_revision: saved.revision, idempotency_key: f.key() }).team.revision, saved.revision);
+    assert.equal(revision(), saved.revision, "Exact retries and unchanged configuration do not allocate another revision");
+    assert.throws(() => f.library.save(f.actor, saved.id, { ...input, expected_revision: saved.revision + 1,
+      idempotency_key: f.key() }), code("conflict"));
+    const other = f.library.save(f.peer, "other-account-clock", { ...input, idempotency_key: f.key() }).team;
+    assert.equal(other.revision, AGENT_TEAM_REVISION_EPOCH + 1); assert.equal(revision(), saved.revision);
+    f.db.sqlite.exec(`CREATE TRIGGER synthetic_team_write_failure BEFORE UPDATE ON agent_team_definitions
+      WHEN NEW.id='atomic-clock' BEGIN SELECT RAISE(ABORT,'Synthetic definition write failure'); END;`);
+    const edit = { ...input, draft: { ...f.draft, name: "A later accepted edit" }, expected_revision: saved.revision, idempotency_key: f.key() };
+    assert.throws(() => f.library.save(f.actor, saved.id, edit), /Synthetic definition write failure/u);
+    assert.equal(revision(), saved.revision, "A failed definition write rolls back its revision allocation");
+    assert.equal(f.library.read(f.actor, saved.id).draft.name, f.draft.name);
+    f.db.sqlite.exec("DROP TRIGGER synthetic_team_write_failure");
+    const accepted = f.library.save(f.actor, saved.id, edit);
+    assert.equal(accepted.replayed, false); assert.ok(accepted.team.revision > saved.revision);
+  } finally { f.close(); }
+});
+
+test("interleaved Team edits preserve a successful test when control advances to a nonconsecutive revision", async () => {
+  const f = fixture(); try {
+    const saved = f.save("tested-revision-team"), probe = f.library.test(f.actor, saved.id, f.session.id,
+      { expected_revision: saved.revision, content_revision: 0, idempotency_key: f.key() });
+    assert.equal((await f.finishProbe(probe.run.id)).status, "completed");
+    const other = f.save("interleaved-team");
+    const enabled = f.library.control(f.actor, saved.id, f.session.id, { enabled: true,
+      expected_revision: saved.revision, idempotency_key: f.key() }).team;
+    assert.ok(enabled.revision > other.revision); assert.equal(enabled.tested_revision, enabled.revision);
+    assert.equal(enabled.test_status, "passed");
+    f.library.save(f.actor, other.id, { draft: { ...f.draft, name: "Interleaved other edit" },
+      expected_revision: other.revision, idempotency_key: f.key() });
+    const disabled = f.library.control(f.actor, saved.id, f.session.id, { enabled: false, idempotency_key: f.key() }).team;
+    assert.ok(disabled.revision > enabled.revision + 1); assert.equal(disabled.tested_revision, disabled.revision);
+    assert.equal(disabled.test_status, "passed");
+  } finally { f.close(); }
+});
+
 test("an account-wide saved Team never silently substitutes another session's native runtime; explicit rebinding requires a fresh test", async () => {
   const f = fixture(); try {
     const saved = f.save();
@@ -292,6 +370,82 @@ test("deleting a private configuration still fences its pending probe after its 
     assert.equal(f.teams.store.row(accepted.run.id).status, "stopped");
     assert.equal(f.library.list(f.actor).teams.length, 0);
   } finally { f.close(); }
+});
+
+test("a lost post-commit probe cancellation cannot leave an edited/deleted Team's old test executable", async t => {
+  for (const mutation of ["save", "delete"] as const) await t.test(mutation, async () => {
+    const f = fixture(); try {
+      const saved = f.save(), accepted = f.library.test(f.actor, saved.id, f.session.id,
+        { expected_revision: saved.revision, content_revision: 0, idempotency_key: f.key() });
+      await f.teams.pump();
+      const request = f.teams.read(f.actor, f.session.id, accepted.run.id).run.steps[0]!.request_event_id!;
+      assert.ok(request);
+      const original = f.teams.stopPrivateTest.bind(f.teams); let cancellations = 0;
+      f.teams.stopPrivateTest = (actor, id) => {
+        cancellations++;
+        if (cancellations === 1) throw new Error("Synthetic transient cancellation failure after metadata commit");
+        original(actor, id);
+      };
+      const input = { draft: { ...f.draft, name: "A committed replacement" }, expected_revision: saved.revision, idempotency_key: f.key() };
+      const removeKey = f.key(), perform = () => mutation === "save"
+        ? f.library.save(f.actor, saved.id, input) : f.library.delete(f.actor, "team", saved.id, removeKey);
+      assert.throws(perform, /Synthetic transient cancellation failure/u);
+      const statusBeforeRecovery = f.teams.store.row(accepted.run.id).status;
+      if (mutation === "save") assert.equal(f.library.read(f.actor, saved.id).draft.name, input.draft.name);
+      else assert.equal(f.library.list(f.actor).teams.length, 0);
+      const recovered = perform(); assert.equal(recovered.replayed, true);
+      assert.equal(statusBeforeRecovery, "stopped", "Metadata commit must durably fence the old probe even before cancellation recovery");
+      assert.equal(f.teams.store.row(accepted.run.id).status, "stopped");
+      assert.equal(cancellations, 2, "An exact receipt retry must also recover its unfinished physical cancellation");
+      assert.equal(f.db.teamRequestMayExecute(request), false);
+      assert.notEqual(f.service.claimAgentRequest(f.actor, f.session.id, request, f.runtime.id).status, "claimed");
+    } finally { f.close(); }
+  });
+});
+
+test("restart retires legacy orphan probes whose definition was changed before its old cancellation failed", async t => {
+  for (const change of ["edit", "delete"] as const) for (const status of ["running", "paused"] as const) {
+    await t.test(`${change} / ${status}`, async () => {
+      const f = fixture(); let restored: AgentTeams | undefined;
+      try {
+        const saved = f.save(), accepted = f.library.test(f.actor, saved.id, f.session.id,
+          { expected_revision: saved.revision, content_revision: 0, idempotency_key: f.key() });
+        await f.teams.pump();
+        if (status === "paused") f.teams.control(f.actor, f.session.id, accepted.run.id, { action: "pause", idempotency_key: f.key() });
+        const request = f.teams.read(f.actor, f.session.id, accepted.run.id).run.steps[0]!.request_event_id!;
+        // Persist the prior preview's reproducible post-commit failure: the
+        // definition changed, but stopPrivateTest failed before fencing its run.
+        if (change === "edit") f.db.sqlite.prepare(`UPDATE agent_team_definitions
+          SET config_json=json_set(config_json,'$.draft.name','Synthetic legacy changed definition'),
+            revision=revision+1,tested_revision=NULL,test_run_id=NULL,test_session_id=NULL WHERE id=?`).run(saved.id);
+        else f.db.sqlite.prepare("DELETE FROM agent_team_definitions WHERE id=?").run(saved.id);
+        f.teams.close(); restored = new AgentTeams(f.service, undefined, { autoStart: false });
+        const recovered = restored.read(f.actor, f.session.id, accepted.run.id).run;
+        assert.equal(recovered.status, "stopped"); assert.equal(recovered.error_code, "test_replaced");
+        assert.throws(() => restored!.control(f.actor, f.session.id, recovered.id, { action: "resume", idempotency_key: f.key() }), code("conflict"));
+        assert.equal(f.db.teamRequestMayExecute(request), false);
+        await restored.pump(); assert.equal(restored.read(f.actor, f.session.id, recovered.id).run.calls_used, 1);
+      } finally { restored?.close(); f.close(); }
+    });
+  }
+});
+
+test("restart preserves an accepted task snapshot after its saved Team is deleted", async () => {
+  const f = fixture(); let restored: AgentTeams | undefined;
+  try {
+    const saved = f.save(), probe = f.library.test(f.actor, saved.id, f.session.id,
+      { expected_revision: saved.revision, content_revision: 0, idempotency_key: f.key() });
+    assert.equal((await f.finishProbe(probe.run.id)).status, "completed");
+    const enabled = f.library.control(f.actor, saved.id, f.session.id, { enabled: true,
+      expected_revision: saved.revision, idempotency_key: f.key() }).team;
+    const accepted = f.library.start(f.actor, saved.id, f.session.id, { expected_revision: enabled.revision,
+      content: "The accepted immutable task survives deleting its configuration", content_revision: 0, idempotency_key: f.key() });
+    f.library.delete(f.actor, "team", saved.id, f.key()); f.teams.close();
+    restored = new AgentTeams(f.service, undefined, { autoStart: false });
+    assert.equal(restored.read(f.actor, f.session.id, accepted.run.id).run.status, "paused");
+    restored.control(f.actor, f.session.id, accepted.run.id, { action: "resume", idempotency_key: f.key() }); await restored.pump();
+    assert.equal(restored.read(f.actor, f.session.id, accepted.run.id).run.calls_used, 1);
+  } finally { restored?.close(); f.close(); }
 });
 
 const concurrentWriter = String.raw`

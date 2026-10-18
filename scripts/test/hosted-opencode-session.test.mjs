@@ -272,14 +272,17 @@ test('failure diagnostics contain only the failing phase, not provider or tool d
 // timers. Only OpenCode's process and the loopback destination are fictional.
 const { createServer } = await import('node:http');
 const { createRequire } = await import('node:module');
+const { channel } = await import('node:diagnostics_channel');
 const { Pool, fetch: runnerFetch } = await import('undici');
 const { createOpencodeDispatcher, OPENCODE_ROUND_TIMEOUT_MS } = await import('../../ops/hosted-agent/opencode-session.mjs');
 const parserClock = createRequire(import.meta.url)('undici/lib/util/timers.js');
 const flushParser = () => new Promise(resolve => setImmediate(resolve));
 
 for (const phase of ['headers', 'body']) for (const timesOut of [false, true]) {
-  test(`actual final JSON runner ${timesOut ? 'classifies a real 12-minute timeout' : 'survives the old five-minute deadline'} in ${phase}`, { timeout: 5000 }, async () => {
+  test(`actual final JSON runner ${timesOut ? 'classifies a real 12-minute timeout' : 'survives the old five-minute deadline'} in ${phase}`, { timeout: 5000 }, async t => {
     const entered = Promise.withResolvers(), release = Promise.withResolvers();
+    const firstBody = Promise.withResolvers(), bodyChannel = channel('undici:request:bodyChunkReceived');
+    const receivedBody = ({ request }) => { if (request.path === '/session/ses_fixture/message') firstBody.resolve(); };
     const final = JSON.stringify(finalReply());
     let prompts = 0, sse = false;
     const server = createServer(async (request, response) => {
@@ -313,8 +316,24 @@ for (const phase of ['headers', 'body']) for (const timesOut of [false, true]) {
       assert.equal(error.message, 'agent_failed'); assert.equal(error.diagnosticCode, 'agent_timeout');
       assert.deepEqual(Object.keys(error), ['diagnosticCode']); return true;
     }) : result;
+    bodyChannel.subscribe(receivedBody);
+    let cleanupPromise;
+    const cleanup = () => cleanupPromise ??= (async () => {
+      bodyChannel.unsubscribe(receivedBody); release.resolve();
+      // Node's test timeout does not unwind an outstanding awaited promise.
+      // Force transport cleanup from the after hook as well as normal finally.
+      await dispatcher.destroy(); await unrelated.destroy(); server.closeAllConnections();
+      await Promise.allSettled([result, checked]);
+      await new Promise(resolve => server.close(resolve)); parserClock.reset();
+    })();
+    t.after(cleanup);
     try {
-      await entered.promise; await flushParser(); await flushParser();
+      await entered.promise;
+      // Server write completion does not prove the client parser has consumed
+      // its first chunk. A late first chunk refreshes the body timer after the
+      // synthetic five-minute tick, making the second jump miss its deadline.
+      if (phase === 'body') await firstBody.promise;
+      await flushParser(); await flushParser();
       assert.equal(sse, true, 'the SSE connection must not block the final-response connection');
       assert.equal(OPENCODE_ROUND_TIMEOUT_MS, 720_000);
       parserClock.tick(0); parserClock.tick(301_000); await flushParser();
@@ -324,9 +343,7 @@ for (const phase of ['headers', 'body']) for (const timesOut of [false, true]) {
       assert.equal(prompts, 1, 'waiting/timeout must never silently submit a second model request');
       assert.equal(dispatcher.destroyed, true); assert.equal(unrelated.destroyed, false); assert.equal(f.child.closed, true);
     } finally {
-      release.resolve(); await dispatcher.destroy(); await unrelated.destroy();
-      await result.catch(() => {}); server.closeAllConnections();
-      await new Promise(resolve => server.close(resolve)); parserClock.reset();
+      await cleanup();
     }
   });
 }

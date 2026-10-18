@@ -109,6 +109,17 @@ function fixture(api = {}, options = {}) {
     context: () => context, changes: () => changes };
 }
 
+test("Team Stop uses its safe error formatter and drops a late failure after navigation", async () => {
+  const f = fixture(); let reject;
+  const safe = "Team Stop is unconfirmed. Check the previous action.";
+  f.setContext({ teamRun: { id: "team-a", status: "running" }, stopTeam: async () => { throw Error("SYNTHETIC_PRIVATE_ERROR"); },
+    teamError: () => safe });
+  assert.equal(f.control.handleClick(), true); await flush(); assert.equal(f.errorNode.textContent, safe);
+  f.setContext({ stopTeam: () => new Promise((_resolve, no) => { reject = no; }) });
+  f.control.handleClick(); f.setContext({ scope: "scope2", teamRun: null, events: [] });
+  reject(Error("LATE_SYNTHETIC_PRIVATE_ERROR")); await flush(); assert.equal(f.errorNode.textContent, "");
+});
+
 test("personal cloud resume waits for its private selection and cannot write after navigation", async () => {
   let resolve, reads = 0; const writes = [];
   const cloud = request("cloud", "me", "opencode"); cloud.payload.profile_id = "api-fixture";

@@ -191,7 +191,7 @@ test("mobile Cloud rejection reasons stay visible while ready and local labels s
   currentCodexResolution: () => ({ runtime: null, reason: "Connect your Agent on a computer." }),
   currentDshResolution: () => ({ runtime: null, reason: "Connect DSH on a computer." }),
   sendChatButton: element(), sendAgentButton: element(), messageInput: element(),
-  renderAgentProfileControls: noop, historySummaryUi: { updateContext: noop }, agentRequestControl: { update: noop },
+  renderAgentProfileControls: noop, historySummaryUi: { updateContext: noop }, agentRequestControl: { update: noop }, teamRunNotice: { update: noop },
  });
  app.state.sync = { phase: "live" };
  let reasonWrites = 0, reasonText = "";

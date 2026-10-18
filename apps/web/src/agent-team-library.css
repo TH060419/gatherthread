@@ -76,6 +76,10 @@
 .team-runs { display: grid; gap: 8px; margin-top: 10px; }
 .team-run-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
 .team-run-row p { flex: 1 1 220px; margin: 0; font-size: .75rem; overflow-wrap: anywhere; }
+.team-run-row:has(.team-run-reason) { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: start; gap: 6px 12px; }
+.team-run-row .team-run-reason, .team-run-row .team-run-advice { grid-column: 1/-1; line-height: 1.5; }
+.team-run-row .team-run-reason { color: var(--ink); font-weight: 600; }
+.team-run-row:has(.team-run-reason) .team-run-actions { grid-column: 2; grid-row: 1; }
 .team-run-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .agent-team-dialog .team-run-actions button { min-height: 36px; padding: 6px 10px; font-size: .75rem; }
 .team-secondary-dialog { width: min(620px,94vw) !important; }
@@ -83,6 +87,13 @@
 .agent-team-dialog :is(button,input,select,textarea,summary):focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
 .team-composer-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
 .team-composer-fields select { width: 100%; }
+.composer .team-task-notice { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--ink); background: var(--paper-muted); max-height: 120px; overflow-y: auto; }
+.composer .team-task-notice[hidden] { display: none; }
+.team-task-notice > div { flex: 1; min-width: 0; }
+.team-task-notice p { margin: 0; font-size: .75rem; line-height: 1.4; overflow-wrap: anywhere; }
+.team-task-notice p + p { margin-top: 3px; color: var(--ink-soft); }
+.team-task-notice button { flex: 0 0 auto; max-width: 100px; font-size: .75rem; white-space: normal; }
+.composer:has(> .team-task-notice:not([hidden])) { overflow-y: auto; }
 @media (max-width: 700px) {
   .create-dialog.agent-team-dialog { width: 100%; max-width: 100%; max-height: 100%; margin: 0; border-radius: 0; }
   .agent-team-dialog .team-heading { padding: 16px; }

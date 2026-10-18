@@ -9,6 +9,7 @@ import { ApiError, conflict, forbidden } from "./errors.js";
 import { redactJson } from "./redaction.js";
 import type { AgentSharing } from "./agent-sharing.js";
 import { teamOrientation } from "./agent-team-orientation.js";
+import { teamAgentFailureCode } from "./agent-team-errors.js";
 
 const object = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 export function teamPublicAnswer(event: { payload: unknown }): string {
@@ -83,7 +84,7 @@ export class AgentTeams {
     // Idempotent lost-ack retries can read their receipt even if a runtime went offline since acceptance.
     const existing = this.store.sql.prepare("SELECT id FROM agent_team_runs WHERE session_id=? AND user_id=? AND idempotency_key=?")
       .get(sessionId, actor.user_id, validated.idempotency_key);
-    if (!existing) this.validateTargets(actor, sessionId, validated.plan, true);
+    if (!existing && !this.store.startReceipt(actor, sessionId, validated.idempotency_key)) this.validateTargets(actor, sessionId, validated.plan, true);
     const receipt = this.store.create(actor, sessionId, validated, options.purpose, options.onCreated); this.wake(); return receipt;
   }
   list(actor: Actor, sessionId: string) { return this.store.list(actor, sessionId); }
@@ -100,7 +101,11 @@ export class AgentTeams {
     const receipt = this.store.sql.prepare("SELECT 1 FROM agent_team_controls WHERE run_id=? AND idempotency_key=?")
       .get(runId, input.idempotency_key);
     if (!receipt && before.status === "paused" && (input.action === "resume" || input.action === "continue")) {
-      this.validateTargets(this.store.actor(before), sessionId, this.store.plan(before), true);
+      // Settling an already-published answer needs no live executor. Any next
+      // request still passes its exact fresh target checks in pump().
+      const settleOnly = input.action === "resume" && !["agent_timeout", "agent_team_instruction_conflict"].includes(before.error_code ?? "")
+        && this.store.hasUnconsumedSuccess(before);
+      if (!settleOnly) this.validateTargets(this.store.actor(before), sessionId, this.store.plan(before), true);
     }
     const result = this.store.control(actor, sessionId, runId, input);
     if (result.changed) {
@@ -109,7 +114,14 @@ export class AgentTeams {
         // Keep a durably completed result after a lost wakeup; retire any fenced unfinished execution.
         if (before.current_step_id) {
           const step = this.store.step(before.current_step_id); const response = this.response(step, before.session_id);
-          if (!response || before.error_code === "agent_timeout" || before.error_code === "server_restart" && object(response.payload)?.status === "failed") {
+          const payload = object(response?.payload);
+          // The shared broker publishes its own terminal cancellation when a
+          // human pauses this Team. That receipt proves the old execution was
+          // fenced; it is not a completed Agent result to consume on Resume.
+          const pausedShared = before.error_code === "user_paused" && payload?.status === "failed"
+            && payload.outcome === "cancelled" && object(payload.error)?.code === "agent_share_request_cancelled"
+            && this.store.plan(before).nodes.find(node => node.id === step.node_id)?.target.kind === "shared";
+          if (!response || pausedShared || before.error_code === "agent_timeout" || before.error_code === "server_restart" && payload?.status === "failed") {
             this.cancel(before);
             this.store.transaction(() => {
               this.store.sql.prepare("UPDATE agent_team_steps SET status=?,finished_at=? WHERE id=?")
@@ -120,12 +132,24 @@ export class AgentTeams {
         }
       }
       if (input.action === "resume" || input.action === "continue") this.wake();
+    } else if (input.action === "pause" && before.status === "paused" || input.action === "stop" && before.status === "stopped") {
+      // The state receipt can commit before physical cancellation succeeds.
+      // Replay repairs that signal only while the requested decision still
+      // holds; an old Pause receipt must never cancel a later resumed step.
+      this.cancel(before);
     }
     return this.store.read(actor, sessionId, runId);
   }
   validateTargets(actor: Actor, sessionId: string, plan: AgentTeamPlan, online: boolean) {
     this.store.authorize(actor, sessionId, true);
-    for (const node of plan.nodes) this.validateTarget(actor, sessionId, node, online);
+    for (const node of plan.nodes) {
+      try { this.validateTarget(actor, sessionId, node, online); }
+      catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+        throw new ApiError(error.status, error.code, error.message,
+          { node_id: node.id, node_label: node.label, target_kind: node.target.kind });
+      }
+    }
   }
   private validateTarget(actor: Actor, sessionId: string, node: AgentTeamNode, online: boolean) {
     const target = node.target;
@@ -138,17 +162,24 @@ export class AgentTeams {
       const profile = this.hosted?.status(actor).profiles.find(profile => profile.id === target.profile_id);
       if (!profile || profile.provider !== target.provider || profile.model !== target.model
         || profile.api_config_revision !== target.api_config_revision) {
-        throw new ApiError(409, "agent_team_target_unavailable", "The exact cloud model for this team node is unavailable");
+        throw new ApiError(409, "agent_team_model_unavailable", "The exact cloud model for this team node is unavailable");
       }
       return;
     }
-    const runtime = this.service.database.getRuntime(target.runtime_id);
-    if (runtime.session_id !== sessionId || runtime.user_id !== actor.user_id || runtime.purpose !== "execution"
-      || runtime.status === "revoked" || runtime.harness !== target.harness || online && runtime.status !== "online") {
+    let runtime: RuntimeRecord | undefined;
+    try { runtime = this.service.database.getRuntime(target.runtime_id); } catch { /* Missing and foreign selections share one refusal. */ }
+    if (!runtime || runtime.session_id !== sessionId || runtime.user_id !== actor.user_id || runtime.purpose !== "execution"
+      || runtime.harness !== target.harness) {
       throw new ApiError(409, "agent_team_target_unavailable", "Select your own exact authorized Agent runtime in this session");
     }
-    this.service.database.assertActiveDevice({ user_id: runtime.user_id, device_id: runtime.device_id, display_name: actor.display_name });
-    if (!this.supports(runtime, target)) throw new ApiError(409, "agent_team_target_unavailable", "The exact team model or reasoning effort is no longer advertised");
+    if (runtime.status === "revoked") throw new ApiError(409, "agent_team_runtime_revoked", "The selected Agent connection was revoked; select and test a current connection");
+    try { this.service.database.assertActiveDevice({ user_id: runtime.user_id, device_id: runtime.device_id, display_name: actor.display_name }); }
+    catch { throw new ApiError(409, "agent_team_runtime_revoked", "The selected Agent device authorization is no longer active"); }
+    if (online && this.service.database.listSessionRuntimesForUser(sessionId, actor.user_id)
+      .find(item => item.id === target.runtime_id)?.status !== "online") {
+      throw new ApiError(409, "agent_team_runtime_offline", "The selected Agent connection is offline; reconnect it before starting");
+    }
+    if (!this.supports(runtime, target)) throw new ApiError(409, "agent_team_model_unavailable", "The exact team model or reasoning effort is no longer advertised");
   }
   private supports(runtime: RuntimeRecord, target: Extract<AgentTeamNode["target"], { kind: "local" }>) {
     if (!runtime.execution_profiles) return runtime.provider === target.provider && runtime.model === target.model && !target.reasoning_effort;
@@ -275,6 +306,7 @@ export class AgentTeams {
       // Retention also runs while nobody saves/starts a new plan, and reads
       // independently enforce the same cutoff before returning private data.
       this.store.prune();
+      this.retryNativeCancellation();
       // Deadline checks do not wait for provider cooldown or an offline native connector.
       const all = this.store.sql.prepare("SELECT * FROM agent_team_runs WHERE status IN ('running','paused')").all() as unknown as TeamRunRow[];
       for (const run of all) {
@@ -341,10 +373,10 @@ export class AgentTeams {
           if (current.status !== "running") continue;
           if (error instanceof ApiError && error.code === "hosted_user_rate_limit") {
             const seconds = object(error.details)?.retry_after_seconds;
-            this.store.defer(run.id, typeof seconds === "number" ? seconds : 30); continue;
+            this.store.defer(run.id, typeof seconds === "number" && Number.isFinite(seconds) ? seconds : 30, error.code); continue;
           }
           if (error instanceof ApiError && ["hosted_agent_busy", "hosted_user_busy", "hosted_profile_busy"].includes(error.code)) {
-            this.store.defer(run.id, 5); continue;
+            this.store.defer(run.id, 5, error.code); continue;
           }
           const code = error instanceof ApiError ? error.code : "agent_team_execution_failed";
           this.end(current, code === "agent_team_call_limit" ? "call_limit" : code === "agent_team_deadline" ? "timed_out" : "failed", code);
@@ -382,7 +414,8 @@ export class AgentTeams {
           .get(step.request_event_id)?.outcome === "timed_out";
       this.store.sql.prepare("UPDATE agent_team_steps SET response_event_id=?,status=?,finished_at=? WHERE id=?")
         .run(response.id, timeout ? "timed_out" : failure ? "failed" : "completed", this.store.now(), step.id);
-      if (failure) { this.store.settle(run.id, timeout ? "paused" : "failed", timeout ? "agent_timeout" : "agent_team_agent_failed"); return; }
+      if (failure) { this.store.settle(run.id, timeout ? "paused" : "failed", timeout ? "agent_timeout"
+        : teamAgentFailureCode(object(payload?.error)?.code, node.target.kind)); return; }
       if (current.purpose === "test") {
         const answer = teamPublicAnswer(response).trim();
         if (answer.replace(/\r\n/gu, "\n") !== this.probeLines(current, currentStep, node).join("\n")) {
@@ -443,6 +476,36 @@ export class AgentTeams {
       else this.service.pauseTeamAgentRequest(this.store.actor(run), run.session_id, step.request_event_id);
     } catch { /* Durable run-state claim/progress/completion gates independently fence late work. */ }
   }
+  private retryNativeCancellation() {
+    // A crash or temporary cancellation failure may leave a fenced native
+    // claim occupying its runtime after Pause/Stop was acknowledged. Repair
+    // only outstanding current or superseded step claims, never replay work.
+    const runs = this.store.sql.prepare(`SELECT r.*,s.id AS cancellation_step_id,s.request_event_id AS cancellation_request_id FROM agent_team_runs r
+      JOIN agent_team_steps s ON s.run_id=r.id
+      JOIN agent_request_claims c ON c.request_event_id=s.request_event_id
+      WHERE (r.status!='running' OR s.id IS NOT r.current_step_id) AND c.status='claimed'
+        AND (s.cancellation_retry_at IS NULL OR s.cancellation_retry_at<=?)
+      ORDER BY COALESCE(s.cancellation_retry_at,s.finished_at,s.created_at),s.rowid LIMIT 32`)
+      .all(this.store.now()) as unknown as (TeamRunRow & { cancellation_step_id: string; cancellation_request_id: string })[];
+    for (const run of runs) {
+      this.cancel({ ...run, current_step_id: run.cancellation_step_id });
+      // A revoked original browser cannot emit a new cancellation marker. Its
+      // already-fenced native claim still needs trusted, content-free retirement
+      // so another valid executor device does not inherit a ghost busy slot.
+      try { this.service.database.assertTeamRunAuthority(run); }
+      catch (error) {
+        if (error instanceof ApiError) this.store.transaction(() => {
+          if (!this.service.database.teamRequestMayExecute(run.cancellation_request_id)) this.store.sql.prepare(`UPDATE agent_request_claims
+            SET status='paused',lease_expires_at=NULL WHERE request_event_id=? AND status='claimed'`).run(run.cancellation_request_id);
+        });
+      }
+      const pending = this.store.sql.prepare("SELECT 1 FROM agent_request_claims WHERE request_event_id=? AND status='claimed'")
+        .get(run.cancellation_request_id);
+      // Per-step backoff cannot postpone or cancel the run's newer current step.
+      this.store.sql.prepare("UPDATE agent_team_steps SET cancellation_retry_at=? WHERE id=?")
+        .run(pending ? new Date(this.store.clock().getTime() + 5000).toISOString() : null, run.cancellation_step_id);
+    }
+  }
   private end(run: TeamRunRow, status: TeamRunRow["status"], errorCode: string) {
     this.store.transaction(() => {
       const current = this.store.row(run.id); if (current.status !== "running" && current.status !== "paused") return;
@@ -463,12 +526,21 @@ export class AgentTeams {
     this.cancel(run);
   }
   private recover() {
-    const runs = this.store.sql.prepare("SELECT * FROM agent_team_runs WHERE status='running'").all() as unknown as TeamRunRow[];
+    const runs = this.store.sql.prepare("SELECT * FROM agent_team_runs WHERE status IN ('running','paused')").all() as unknown as TeamRunRow[];
     for (const run of runs) {
+      // Earlier previews could commit a definition edit/delete before cancelling
+      // its old probe. Retire that orphan before it can be resumed after upgrade.
+      // Accepted task snapshots deliberately outlive their saved definitions.
+      if (run.purpose === "test" && run.definition_id && !this.store.sql.prepare(`SELECT 1 FROM agent_team_definitions
+        WHERE id=? AND user_id=? AND test_run_id=?`).get(run.definition_id, run.user_id, run.id)) {
+        this.end(run, "stopped", "test_replaced"); continue;
+      }
+      if (run.status !== "running") { this.cancel(run); continue; }
       this.store.settle(run.id, this.store.clock().getTime() >= Date.parse(run.deadline_at) ? "timed_out" : "paused",
         this.store.clock().getTime() >= Date.parse(run.deadline_at) ? "agent_team_deadline" : "server_restart");
       this.cancel(run);
     }
+    this.retryNativeCancellation();
   }
   close() { this.closed = true; if (this.timer) clearInterval(this.timer); this.unsubscribe(); }
 }

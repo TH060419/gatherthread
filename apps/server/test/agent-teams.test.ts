@@ -12,13 +12,16 @@ import { CodeRepository } from "../src/code-repository.js";
 import { ApiError } from "../src/errors.js";
 import { redactJson } from "../src/redaction.js";
 import { randomBytes, randomUUID } from "node:crypto";
+import { teamStartDigest } from "../src/agent-team-schema.js";
+import { spawn } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 
 const directive = (stepId: string, action: "complete" | "delegate" = "complete", target = "worker") =>
   `Public result.\n\n\`\`\`gatherthread-team\n${JSON.stringify({ version: 1, step_id: stepId, action,
     ...(action === "delegate" ? { target_node_id: target, task: "Carry out the subordinate task" } : {}) })}\n\`\`\``;
-function fixture() {
+function fixture(path = ":memory:") {
   let time = Date.now(); const clock = () => new Date(time);
-  const db = new CollaborationDatabase(":memory:", { clock });
+  const db = new CollaborationDatabase(path, { clock });
   const service = new CollaborationService(db);
   const actor = db.bootstrapIdentity({ display_name: "Fixture owner", device_name: "Fixture desktop" }).actor;
   const session = service.createSession(actor, { title: "Team fixture", mode: "multi", idempotency_key: "fixture-team-session" }).session;
@@ -60,6 +63,154 @@ function orientation(f: ReturnType<typeof fixture>, requestId: string) {
   assert.ok(line, "Every task call explicitly receives its current public Team orientation");
   return { content, value: JSON.parse(line) };
 }
+
+for (const code of ["codex_turn_cancelled", "codex_turn_missing", "codex_turn_failed", "harness_execution_failed",
+  "agent_request_abandoned", "unknown_private_provider_detail", "provider_auth_failed"]) {
+  test(`native Team failure keeps an allowlisted category and frozen module only: ${code}`, async () => {
+    const f = fixture(); try {
+      const run = f.start(); await drive(f.teams, () => f.teams.store.row(run.id).calls_used === 1);
+      const step = f.teams.store.steps(run.id)[0]!;
+      const claim = f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id);
+      f.service.completeAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id, `diagnostic-${code}`,
+        { text: "Synthetic executor ended", status: "failed", error: { code, message: "PRIVATE_RAW_DETAIL_MUST_NOT_BE_EXPOSED" } },
+        "fixture-gpt", "low", claim.attempt_count);
+      await drive(f.teams, () => f.teams.store.row(run.id).status === "failed");
+      const detail = f.teams.read(f.actor, f.session.id, run.id).run;
+      const expected = ["unknown_private_provider_detail", "provider_auth_failed"].includes(code) ? "agent_team_agent_failed" : code;
+      assert.equal(detail.error_code, expected);
+      assert.deepEqual(detail.issue, { code: expected, node_id: "lead", node_label: "Director", target_kind: "local", retry_at: null });
+      assert.deepEqual(f.teams.list(f.actor, f.session.id).runs[0]!.issue, detail.issue);
+      assert.equal(JSON.stringify(detail).includes("PRIVATE_RAW_DETAIL_MUST_NOT_BE_EXPOSED"), false);
+      assert.equal(detail.calls_used, 1); assert.equal(detail.steps.length, 1);
+    } finally { f.close(); }
+  });
+}
+
+test("native queued, disconnected and expired-claim Teams expose live wait reasons without changing execution or losing a completed result", async () => {
+  const f = fixture(); try {
+    const run = f.start(); await drive(f.teams, () => f.teams.store.row(run.id).calls_used === 1);
+    let detail = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.deepEqual(detail.issue, { code: "agent_team_waiting_executor", node_id: "lead", node_label: "Director", target_kind: "local", retry_at: null });
+    const step = detail.steps[0]!, request = step.request_event_id!;
+    const claim = f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id);
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.issue, undefined);
+    f.advance(31000);
+    detail = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(detail.issue?.code, "agent_team_runtime_offline"); assert.equal(detail.status, "running");
+    f.service.heartbeatRuntime(f.actor, f.lead.id);
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.issue, undefined);
+    f.advance(Date.parse(String(f.db.sqlite.prepare("SELECT lease_expires_at FROM agent_request_claims WHERE request_event_id=?").get(request)!.lease_expires_at)) - f.clock().getTime());
+    f.service.heartbeatRuntime(f.actor, f.lead.id);
+    detail = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(detail.issue?.code, "agent_team_claim_expired"); assert.equal(detail.calls_used, 1);
+    assert.equal(detail.steps.length, 1); assert.equal(detail.error_code, null);
+    // Presence or lease evidence must not override an already committed answer
+    // still waiting for coordinator consumption after a transient lost wakeup.
+    f.db.sqlite.prepare("UPDATE agent_request_claims SET lease_expires_at=? WHERE request_event_id=?")
+      .run(new Date(f.clock().getTime() + 60000).toISOString(), request);
+    f.service.completeAgentRequest(f.actor, f.session.id, request, f.lead.id, "diagnostic-committed-answer",
+      { text: directive(step.id) }, "fixture-gpt", "low", claim.attempt_count);
+    f.db.sqlite.prepare("UPDATE runtimes SET status='offline' WHERE id=?").run(f.lead.id);
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.issue, undefined);
+    await drive(f.teams, () => f.teams.store.row(run.id).status === "completed");
+  } finally { f.close(); }
+});
+
+test("preflight diagnosis identifies own offline, revoked and changed models but never reveals a foreign or missing runtime", () => {
+  for (const reason of ["offline", "revoked", "model", "missing", "foreign"]) {
+    const f = fixture(); try {
+      const plan = structuredClone(f.plan);
+      if (reason === "offline") f.advance(31000);
+      if (reason === "revoked") f.db.sqlite.prepare("UPDATE runtimes SET status='revoked' WHERE id=?").run(f.lead.id);
+      if (reason === "model") (plan.nodes[0]!.target as { model: string }).model = "not-advertised";
+      if (reason === "missing") (plan.nodes[0]!.target as { runtime_id: string }).runtime_id = "missing-exact-runtime";
+      if (reason === "foreign") {
+        const peer = f.db.createIdentity({ display_name: "Foreign synthetic owner", device_name: "Foreign synthetic device" }).actor;
+        f.service.setMembership(f.actor, f.session.id, peer.user_id, "participant", "diagnostic-peer");
+        const runtime = f.service.registerRuntime(peer, { session_id: f.session.id, device_id: peer.device_id, harness: "codex", provider: "openai",
+          model: "fixture-gpt", local_session_id: "foreign-synthetic-codex", capture_fidelity: "harness_transcript" });
+        (plan.nodes[0]!.target as { runtime_id: string }).runtime_id = runtime.id;
+      }
+      const expected = reason === "offline" ? "agent_team_runtime_offline" : reason === "revoked" ? "agent_team_runtime_revoked"
+        : reason === "model" ? "agent_team_model_unavailable" : "agent_team_target_unavailable";
+      assert.throws(() => f.start(plan), error => error instanceof ApiError && error.code === expected
+        && JSON.stringify(error.details) === JSON.stringify({ node_id: "lead", node_label: "Director", target_kind: "local" }));
+      assert.equal(f.teams.list(f.actor, f.session.id).runs.length, 0);
+    } finally { f.close(); }
+  }
+});
+
+test("Team budget, original authorization and manual pauses have global diagnostics without blaming the current module", async () => {
+  for (const reason of ["deadline", "call_limit", "user_paused", "authority", "restart"]) {
+    const f = fixture(); let restored: AgentTeams | undefined;
+    try {
+      const run = f.start(f.plan, reason === "call_limit" ? 1 : 12);
+      await drive(f.teams, () => f.teams.store.row(run.id).calls_used === 1);
+      if (reason === "deadline") { f.advance(30 * 60000); await f.teams.pump(); }
+      if (reason === "call_limit") { f.complete(run.id, "delegate"); await f.teams.pump(); }
+      if (reason === "user_paused") f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "diagnostic-manual-pause" });
+      if (reason === "authority") { f.service.revokeDevice(f.actor, f.actor.device_id); await f.teams.pump(); }
+      if (reason === "restart") { f.teams.close(); restored = new AgentTeams(f.service, undefined, { clock: f.clock, autoStart: false }); }
+      const result = (restored ?? f.teams).store.summary((restored ?? f.teams).store.row(run.id));
+      assert.deepEqual(result.issue, { code: reason === "deadline" ? "agent_team_deadline" : reason === "call_limit" ? "agent_team_call_limit"
+        : reason === "authority" ? "agent_team_authorization_lost" : reason === "restart" ? "server_restart" : reason,
+        node_id: null, node_label: null, target_kind: null, retry_at: null });
+    } finally { restored?.close(); f.close(); }
+  }
+});
+
+test("unknown dispatch codes and legacy private diagnostics never escape either public error field", async () => {
+  for (const source of ["dispatch", "legacy"]) {
+    const f = fixture(); try {
+      const run = f.start();
+      if (source === "dispatch") {
+        f.service.appendTeamAgentRequest = () => { throw new ApiError(503, "synthetic_private_dispatch_detail", "Synthetic private exception text"); };
+        await drive(f.teams, () => f.teams.store.row(run.id).status === "failed");
+      } else {
+        f.db.sqlite.prepare("UPDATE agent_team_runs SET status='failed',error_code=?,finished_at=? WHERE id=?")
+          .run("synthetic_private_legacy_detail", f.clock().toISOString(), run.id);
+      }
+      assert.match(f.teams.store.row(run.id).error_code!, /^synthetic_private_/u, "Do not rewrite old persistent diagnostics or rollback data");
+      const detail = f.teams.read(f.actor, f.session.id, run.id).run;
+      assert.equal(detail.error_code, "agent_team_execution_failed"); assert.equal(detail.issue?.code, "agent_team_execution_failed");
+      assert.equal(JSON.stringify(detail).includes("synthetic_private_"), false);
+      assert.equal(JSON.stringify(f.teams.list(f.actor, f.session.id)).includes("synthetic_private_"), false);
+    } finally { f.close(); }
+  }
+});
+
+test("rejected Team recovery keeps conflict compatibility while exposing the precise safe recovery reason", async () => {
+  for (const reason of ["receipt_cleared", "run_ended", "deadline", "call_limit", "not_timed_out", "continue_required", "clarification_unavailable"]) {
+    const f = fixture(); try {
+      const run = f.start(f.plan, reason === "call_limit" ? 1 : 12), original = JSON.parse(f.teams.store.row(run.id).input_json);
+      await drive(f.teams, () => f.teams.store.row(run.id).calls_used === 1);
+      if (reason === "receipt_cleared") {
+        f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: "diagnostic-clear-stop" });
+        f.teams.forget(f.actor, f.session.id, run.id);
+      } else if (reason === "run_ended") {
+        f.complete(run.id); await drive(f.teams, () => f.teams.store.row(run.id).status === "completed");
+      } else {
+        f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "diagnostic-recovery-pause" });
+        if (reason === "continue_required") f.teams.store.settle(run.id, "paused", "agent_timeout");
+        if (reason === "clarification_unavailable") {
+          f.teams.store.settle(run.id, "paused", "agent_team_instruction_conflict");
+          f.db.sqlite.prepare("UPDATE agent_team_steps SET status='completed' WHERE run_id=?").run(run.id);
+        }
+        if (reason === "deadline") {
+          f.advance(30 * 60000); f.service.heartbeatRuntime(f.actor, f.lead.id); f.service.heartbeatRuntime(f.actor, f.worker.id);
+        }
+      }
+      const operation = () => reason === "receipt_cleared" ? f.teams.start(f.actor, f.session.id, original)
+        : f.teams.control(f.actor, f.session.id, run.id,
+          { action: reason === "not_timed_out" ? "continue" : "resume", idempotency_key: "diagnostic-recovery-rejected" });
+      assert.throws(operation, error => {
+        assert.ok(error instanceof ApiError); assert.equal(error.status, 409); assert.equal(error.code, "conflict");
+        assert.deepEqual(error.details, { issue_code: `agent_team_${reason}` }); return true;
+      });
+      assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_controls WHERE idempotency_key='diagnostic-recovery-rejected'").get()!.n, 0);
+    } finally { f.close(); }
+  }
+});
 function conflictAnswer(stepId: string, explanation = "The role and module instructions conflict; please clarify which permitted outcome is intended.") {
   return `${explanation}\n\n\`\`\`gatherthread-team\n${JSON.stringify({ version: 1, step_id: stepId, action: "clarify" })}\n\`\`\``;
 }
@@ -411,6 +562,50 @@ test("deadline fences queued and active native work even without an online conne
     assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id).status, "paused");
   } finally { f.close(); }
 });
+
+test("the native completion grant enforces the exact deadline before coordinator maintenance", async t => {
+  for (const offset of [59999, 60000, 60001]) await t.test(`${offset} milliseconds`, async () => {
+    const f = fixture(); try {
+      const plan = structuredClone(f.plan); plan.nodes = [plan.nodes[0]!]; plan.edges = [];
+      const run = f.teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "Exact deadline boundary",
+        max_calls: 1, max_duration_minutes: 1, content_revision: 0, idempotency_key: `exact-deadline-${offset}` }).run;
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      const step = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+      const claim = f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id);
+      f.advance(offset); f.service.heartbeatRuntime(f.actor, f.lead.id);
+      const finish = () => f.service.completeAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id,
+        `exact-deadline-reply-${offset}`, { text: "A verified final result" }, "fixture-gpt", "low", claim.attempt_count);
+      const head = f.db.requireSession(f.session.id).next_sequence;
+      if (offset < 60000) finish();
+      else { assert.throws(finish); assert.equal(f.db.requireSession(f.session.id).next_sequence, head); }
+      await f.teams.pump();
+      assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.status, offset < 60000 ? "completed" : "timed_out");
+      assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.calls_used, 1);
+    } finally { f.close(); }
+  });
+});
+
+test("explicit terminal-record cleanup restores account run capacity and keeps canonical results and consumed keys", async () => {
+  const f = fixture(); try {
+    const plan = structuredClone(f.plan); plan.nodes = [plan.nodes[0]!]; plan.edges = [];
+    const first = f.start(plan, 1), original = JSON.parse(f.teams.store.row(first.id).input_json);
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, first.id).run.calls_used === 1);
+    const request = f.teams.read(f.actor, f.session.id, first.id).run.steps[0]!.request_event_id!;
+    const response = f.complete(first.id, "complete", "worker", "Retained public result");
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, first.id).run.status === "completed");
+    for (let index = 0; index < 99; index++) {
+      const run = f.start(plan, 1); f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: `capacity-stop-${index}` });
+    }
+    assert.throws(() => f.start(plan, 1), { code: "agent_team_storage_full" });
+    const head = f.db.requireSession(f.session.id).next_sequence;
+    f.teams.forget(f.actor, f.session.id, first.id);
+    assert.equal(f.db.getEvent(f.session.id, request).type, "agent_request"); assert.equal(f.db.getEvent(f.session.id, response.id).type, "agent_response");
+    assert.equal(f.db.requireSession(f.session.id).next_sequence, head);
+    assert.throws(() => f.teams.start(f.actor, f.session.id, original), { code: "conflict" });
+    const replacement = f.start(plan, 1); assert.notEqual(replacement.id, first.id);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_runs").get()!.n, 100);
+  } finally { f.close(); }
+});
 test("a queued or claimed team loses its original device grant without revoking another device's ordinary work", async t => {
   for (const invalidation of ["revoked", "expired"] as const) for (const claimed of [false, true]) {
     await t.test(`${invalidation} authorizer / ${claimed ? "claimed" : "queued"} step`, async () => {
@@ -502,6 +697,17 @@ test("private plans use revisions; viewers, foreign runtimes and generic forged 
     assert.throws(() => f.start(malformed));
   } finally { f.close(); }
 });
+
+test("native Team acceptance checks effective heartbeat presence before allocating a private run", () => {
+  const f = fixture(); try {
+    f.advance(31000);
+    assert.equal(f.db.listSessionRuntimesForUser(f.session.id, f.actor.user_id).find(runtime => runtime.id === f.lead.id)!.status, "offline");
+    assert.throws(() => f.start(), { code: "agent_team_runtime_offline" });
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_runs").get()!.n, 0);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n, 0);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_request'").get()!.n, 0);
+  } finally { f.close(); }
+});
 test("fresh Team reservations require the exact originating start key while historical canonical requests remain readable", async () => {
   const f = fixture(); try {
     const run = f.start(), step = f.teams.store.pending(run.id), original = f.teams.store.row(run.id);
@@ -535,6 +741,428 @@ test("fresh Team reservations require the exact originating start key while hist
     assert.equal(f.db.teamRequestMayExecute(request.id), false);
   } finally { f.close(); }
 });
+test("two devices replaying interleaved Pause and Resume receipts cannot undo a later decision or duplicate a call", async () => {
+  const f = fixture(); try {
+    const second = { ...f.actor, device_id: f.db.createDevice(f.actor.user_id, "Synthetic second control device").device_id };
+    const peer = f.db.createIdentity({ display_name: "Synthetic other member", device_name: "Synthetic peer device", can_create_projects: true }).actor;
+    f.service.setMembership(f.actor, f.session.id, peer.user_id, "participant", "interleaved-controls-peer");
+    const run = f.start();
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const original = JSON.parse(f.teams.store.row(run.id).input_json);
+    const receipts: Array<{ action: "pause" | "resume"; idempotency_key: string }> = [];
+    for (let round = 0; round < 5; round++) {
+      const current = f.teams.read(second, f.session.id, run.id).run;
+      const request = current.steps.at(-1)!.request_event_id!;
+      const claim = f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id);
+      const pause = { action: "pause" as const, idempotency_key: `interleaved-pause-${round}` };
+      f.teams.control(round % 2 ? f.actor : second, f.session.id, run.id, pause);
+      receipts.push(pause);
+      for (const receipt of receipts) assert.equal(f.teams.control(second, f.session.id, run.id, receipt).run.status, "paused");
+      assert.equal(f.teams.start(second, f.session.id, original).replayed, true);
+      assert.throws(() => f.teams.control(peer, f.session.id, run.id, { action: "resume", idempotency_key: `peer-resume-${round}` }), { code: "not_found" });
+      assert.throws(() => f.service.appendAgentProgress(f.actor, f.session.id, request, f.lead.id,
+        `interrupted-progress-${round}`, { content: "A late result from the interrupted device" }, "fixture-gpt", "low", claim.attempt_count));
+      const resume = { action: "resume" as const, idempotency_key: `interleaved-resume-${round}` };
+      f.teams.control(round % 2 ? second : f.actor, f.session.id, run.id, resume);
+      receipts.push(resume);
+      for (const receipt of receipts) assert.equal(f.teams.control(f.actor, f.session.id, run.id, receipt).run.status, "running");
+      await drive(f.teams, () => f.teams.read(second, f.session.id, run.id).run.calls_used === round + 2);
+      assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id).status, "paused");
+      assert.throws(() => f.service.completeAgentRequest(f.actor, f.session.id, request, f.lead.id,
+        `interrupted-result-${round}`, { text: "Must not resume an old native execution" }, "fixture-gpt", "low", claim.attempt_count));
+    }
+    const stop = { action: "stop" as const, idempotency_key: "interleaved-final-stop" };
+    f.teams.control(second, f.session.id, run.id, stop);
+    for (const receipt of [...receipts, stop]) assert.equal(f.teams.control(f.actor, f.session.id, run.id, receipt).run.status, "stopped");
+    await f.teams.pump();
+    const ended = f.teams.read(second, f.session.id, run.id).run;
+    assert.equal(ended.calls_used, 6); assert.equal(ended.steps.length, 6);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_request'").get()!.n, 6);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_response'").get()!.n, 0);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_controls WHERE run_id=?").get(run.id)!.n, 11);
+  } finally { f.close(); }
+});
+
+test("lost Pause or Stop cleanup is retried by its receipt, and a paused restart repairs the durable cancellation signal", async t => {
+  for (const phase of ["pause", "stop", "paused-restart", "stopped-restart", "stopped-pump"] as const) await t.test(phase, async () => {
+    const f = fixture(); let restored: AgentTeams | undefined;
+    try {
+      const second = { ...f.actor, device_id: f.db.createDevice(f.actor.user_id, "Synthetic cleanup recovery device").device_id };
+      const run = f.start();
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      const first = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+      const claim = f.service.claimAgentRequest(f.actor, f.session.id, first.request_event_id!, f.lead.id);
+      const cancel = f.service.pauseTeamAgentRequest.bind(f.service);
+      f.service.pauseTeamAgentRequest = () => { throw new Error("Synthetic interrupted cancellation transaction"); };
+      const stopped = phase.startsWith("stop");
+      const control = { action: stopped ? "stop" as const : "pause" as const, idempotency_key: `cleanup-${phase}` };
+      assert.equal(f.teams.control(second, f.session.id, run.id, control).run.status, stopped ? "stopped" : "paused");
+      assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(first.request_event_id!)!.status, "claimed");
+      assert.throws(() => f.service.appendAgentProgress(f.actor, f.session.id, first.request_event_id!, f.lead.id,
+        `cleanup-${phase}-fenced-progress`, { content: "Still fenced before physical cleanup recovers" }, "fixture-gpt", "low", claim.attempt_count));
+      f.service.pauseTeamAgentRequest = cancel;
+      if (phase.endsWith("-restart")) {
+        f.teams.close(); restored = new AgentTeams(f.service, undefined, { clock: f.clock, autoStart: false });
+      } else if (phase === "stopped-pump") await f.teams.pump();
+      else f.teams.control(f.actor, f.session.id, run.id, control);
+      const teams = restored ?? f.teams;
+      assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(first.request_event_id!)!.status, "paused");
+      assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_progress' AND reply_to_event_id=?").get(first.request_event_id!)!.n, 1);
+      assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_controls WHERE run_id=?").get(run.id)!.n, 1);
+      teams.control(second, f.session.id, run.id, control);
+      assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_progress' AND reply_to_event_id=?").get(first.request_event_id!)!.n, 1);
+      assert.equal(teams.read(second, f.session.id, run.id).run.status, stopped ? "stopped" : "paused");
+      if (!stopped) {
+        teams.control(second, f.session.id, run.id, { action: "resume", idempotency_key: `cleanup-${phase}-resume` });
+        await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+        const next = teams.read(f.actor, f.session.id, run.id).run.steps.at(-1)!;
+        f.service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id);
+        assert.equal(teams.control(second, f.session.id, run.id, control).run.status, "running");
+        assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(next.request_event_id!)!.status, "claimed",
+          "a stale Pause receipt must not cancel the newer resumed execution");
+      }
+    } finally { restored?.close(); f.close(); }
+  });
+});
+
+test("a queued exact native request survives an offline interval without fallback or another accepted call", async () => {
+  const f = fixture(); try {
+    const plan = structuredClone(f.plan); plan.nodes = [plan.nodes[0]!]; plan.edges = [];
+    const run = f.start(plan, 1);
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const request = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!.request_event_id!;
+    f.advance(120000);
+    assert.throws(() => f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id));
+    await f.teams.pump();
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.status, "running");
+    f.service.heartbeatRuntime(f.actor, f.lead.id);
+    f.complete(run.id, "complete", "worker", "The exact reconnected device completed its queued task");
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+    const completed = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(completed.calls_used, 1); assert.equal(completed.steps.length, 1);
+    assert.equal(completed.steps[0]!.request_event_id, request);
+    assert.equal(f.db.sqlite.prepare("SELECT attempt_count FROM agent_request_claims WHERE request_event_id=?").get(request)!.attempt_count, 1);
+  } finally { f.close(); }
+});
+
+test("outstanding native cancellation retries are bounded, back off failures and eventually release every stopped runtime", async () => {
+  const f = fixture(); try {
+    const cancel = f.service.pauseTeamAgentRequest.bind(f.service); let attempts = 0;
+    f.service.pauseTeamAgentRequest = () => { attempts++; throw new Error("Synthetic cleanup service temporarily unavailable"); };
+    for (let index = 0; index < 33; index++) {
+      const runtime = f.service.registerRuntime(f.actor, { session_id: f.session.id, device_id: f.actor.device_id,
+        harness: "codex", provider: "openai", model: "fixture-gpt", context_deletion_version: 1,
+        execution_profiles: [{ provider: "openai", model: "fixture-gpt", reasoning_efforts: ["low"] }],
+        local_session_id: `synthetic-cleanup-runtime-${index}`, capture_fidelity: "harness_transcript" });
+      const plan = structuredClone(f.plan); plan.nodes = [plan.nodes[0]!]; plan.edges = [];
+      if (plan.nodes[0]!.target.kind !== "local") throw new Error("Expected the fixture's exact native target");
+      plan.nodes[0]!.target.runtime_id = runtime.id;
+      const run = f.start(plan, 1);
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      const step = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+      f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, runtime.id);
+      f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: `bounded-cleanup-stop-${index}` });
+    }
+    attempts = 0; f.advance(5000);
+    await f.teams.pump(); assert.equal(attempts, 32, "one tick attempts no more than 32 outstanding claims");
+    await f.teams.pump(); assert.equal(attempts, 33, "a failing first batch does not starve the remaining claim");
+    await f.teams.pump(); assert.equal(attempts, 33, "unavailable cleanup does not spin until its retry deadline");
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_request_claims WHERE status='claimed'").get()!.n, 33);
+    f.service.pauseTeamAgentRequest = cancel; f.advance(5000);
+    await f.teams.pump(); await f.teams.pump();
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_request_claims WHERE status='claimed'").get()!.n, 0);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_runs WHERE status='stopped' AND calls_used=1").get()!.n, 33);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_progress'").get()!.n, 33);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_response'").get()!.n, 0);
+  } finally { f.close(); }
+});
+
+test("a failed Pause followed immediately by Resume retries the historical claim without cancelling its newer current step", async () => {
+  const f = fixture(); try {
+    const run = f.start();
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const first = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+    f.service.claimAgentRequest(f.actor, f.session.id, first.request_event_id!, f.lead.id);
+    const cancel = f.service.pauseTeamAgentRequest.bind(f.service);
+    f.service.pauseTeamAgentRequest = () => { throw new Error("Synthetic cancellation lost across immediate Resume"); };
+    f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "history-cleanup-pause" });
+    f.teams.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "history-cleanup-resume" });
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    const next = f.teams.read(f.actor, f.session.id, run.id).run.steps.at(-1)!;
+    assert.throws(() => f.service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id), { code: "runtime_busy" });
+    f.service.pauseTeamAgentRequest = cancel; f.advance(5000); await f.teams.pump();
+    assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(first.request_event_id!)!.status, "paused");
+    assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id).status, "claimed");
+    await f.teams.pump();
+    assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(next.request_event_id!)!.status, "claimed");
+    const current = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(current.status, "running"); assert.equal(current.calls_used, 2); assert.equal(current.current_step_id, next.id);
+  } finally { f.close(); }
+});
+
+test("a stopped native claim releases its execution slot after the original authorizing device is revoked", async () => {
+  const f = fixture(); try {
+    const executor = { ...f.actor, device_id: f.db.createDevice(f.actor.user_id, "Synthetic independent executor").device_id };
+    const runtime = f.service.registerRuntime(executor, { session_id: f.session.id, device_id: executor.device_id, harness: "codex", provider: "openai",
+      model: "fixture-gpt", context_deletion_version: 1, execution_profiles: [{ provider: "openai", model: "fixture-gpt", reasoning_efforts: ["low"] }],
+      local_session_id: "synthetic-revoked-author-cleanup", capture_fidelity: "harness_transcript" });
+    const plan = structuredClone(f.plan); plan.nodes = [plan.nodes[0]!]; plan.edges = [];
+    if (plan.nodes[0]!.target.kind !== "local") throw new Error("Expected exact native target");
+    plan.nodes[0]!.target.runtime_id = runtime.id;
+    const run = f.start(plan, 1);
+    await drive(f.teams, () => f.teams.read(executor, f.session.id, run.id).run.calls_used === 1);
+    const request = f.teams.read(executor, f.session.id, run.id).run.steps[0]!.request_event_id!;
+    f.service.claimAgentRequest(executor, f.session.id, request, runtime.id);
+    const cancel = f.service.pauseTeamAgentRequest.bind(f.service);
+    f.service.pauseTeamAgentRequest = () => { throw new Error("Synthetic Stop cancellation failure before device revocation"); };
+    f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: "revoked-author-cleanup-stop" });
+    f.service.pauseTeamAgentRequest = cancel;
+    f.db.revokeDevice(executor, f.actor.device_id);
+    await f.teams.pump();
+    assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(request)!.status, "paused");
+    assert.equal(f.teams.read(executor, f.session.id, run.id).run.status, "stopped");
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_response' OR type='agent_progress'").get()!.n, 0,
+      "trusted cleanup must not publish new content using a revoked author's grant");
+    const ordinary = f.service.appendEvent(executor, f.session.id, { type: "agent_request", visibility: "session", idempotency_key: "after-revoked-author-cleanup",
+      payload: { content: "An independent human request", execution_profile: { harness: "codex", provider: "openai", model: "fixture-gpt", runtime_id: runtime.id } } });
+    assert.equal(f.service.claimAgentRequest(executor, f.session.id, ordinary.id, runtime.id).status, "claimed");
+  } finally { f.close(); }
+});
+
+test("Forget releases a failed Stop's native claim before deleting its last private cleanup identity", async () => {
+  const f = fixture(); try {
+    const run = f.start();
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const request = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!.request_event_id!;
+    f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id);
+    f.service.pauseTeamAgentRequest = () => { throw new Error("Synthetic Stop cancellation failure before Forget"); };
+    f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: "forget-cleanup-stop" });
+    f.teams.forget(f.actor, f.session.id, run.id);
+    assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(request)!.status, "paused");
+    assert.equal(f.db.teamRequestMayExecute(request), false);
+    assert.equal(f.db.getEvent(f.session.id, request).type, "agent_request");
+    const ordinary = f.service.appendEvent(f.actor, f.session.id, { type: "agent_request", visibility: "session", idempotency_key: "after-forget-cleanup",
+      payload: { content: "An independent human request", execution_profile: { harness: "codex", provider: "openai", model: "fixture-gpt", runtime_id: f.lead.id } } });
+    assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, ordinary.id, f.lead.id).status, "claimed");
+  } finally { f.close(); }
+});
+
+test("private-run pruning retires only its own residual native claims", async () => {
+  const f = fixture(); try {
+    const run = f.start();
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const request = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!.request_event_id!;
+    f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id);
+    f.service.pauseTeamAgentRequest = () => { throw new Error("Synthetic cancellation failure before pruning"); };
+    f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: "prune-cleanup-stop" });
+    const ordinary = f.service.appendEvent(f.actor, f.session.id, { type: "agent_request", visibility: "session", idempotency_key: "prune-unrelated-request",
+      payload: { content: "A separate active task", execution_profile: { harness: "deepseek-harness", provider: "deepseek", model: "fixture-deepseek", runtime_id: f.worker.id } } });
+    f.service.claimAgentRequest(f.actor, f.session.id, ordinary.id, f.worker.id);
+    f.db.sqlite.prepare("UPDATE agent_team_runs SET finished_at=? WHERE id=?").run(new Date(f.clock().getTime() - 31 * 86400000).toISOString(), run.id);
+    f.teams.store.prune();
+    assert.equal(f.db.sqlite.prepare("SELECT 1 FROM agent_team_runs WHERE id=?").get(run.id), undefined);
+    assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(request)!.status, "paused");
+    assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(ordinary.id)!.status, "claimed");
+    assert.equal(f.db.getEvent(f.session.id, request).deleted, undefined);
+  } finally { f.close(); }
+});
+
+test("storage-pressure probe reclamation and its native-claim retirement roll back together on rejected acceptance", async () => {
+  const f = fixture(); try {
+    const plan = structuredClone(f.plan); plan.nodes = [plan.nodes[0]!]; plan.edges = [];
+    const input = { plan, entry_node_id: "lead", content: "Synthetic obsolete connectivity probe", max_calls: 1, max_duration_minutes: 30,
+      content_revision: 0, idempotency_key: "reclamation-cleanup-probe" };
+    const probe = f.teams.start(f.actor, f.session.id, input, { purpose: "test" }).run;
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, probe.id).run.calls_used === 1);
+    const request = f.teams.read(f.actor, f.session.id, probe.id).run.steps[0]!.request_event_id!;
+    f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id);
+    f.service.pauseTeamAgentRequest = () => { throw new Error("Synthetic cancellation failure before probe reclamation"); };
+    f.teams.control(f.actor, f.session.id, probe.id, { action: "stop", idempotency_key: "reclamation-cleanup-stop" });
+    for (let index = 0; index < 15; index++) {
+      const run = f.teams.store.create(f.actor, f.session.id, { ...input, content: `Retained ordinary record ${index}`,
+        idempotency_key: `reclamation-retained-${index}` }).run;
+      f.teams.store.settle(run.id, "stopped", "user_stopped");
+    }
+    f.db.sqlite.prepare("UPDATE agent_team_runs SET bytes=524288").run();
+    const replacement = { ...input, content: "A new human task under storage pressure", idempotency_key: "reclamation-cleanup-replacement" };
+    assert.throws(() => f.teams.start(f.actor, f.session.id, replacement, { onCreated: () => { throw new Error("Synthetic admission refused after reclamation"); } }), /Synthetic admission refused/u);
+    assert.ok(f.db.sqlite.prepare("SELECT 1 FROM agent_team_runs WHERE id=?").get(probe.id));
+    assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(request)!.status, "claimed",
+      "a rolled-back private deletion must also roll back its claim cleanup");
+    f.teams.start(f.actor, f.session.id, replacement);
+    assert.equal(f.db.sqlite.prepare("SELECT 1 FROM agent_team_runs WHERE id=?").get(probe.id), undefined);
+    assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(request)!.status, "paused");
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_runs WHERE idempotency_key LIKE 'reclamation-retained-%'").get()!.n, 15);
+    assert.equal(f.db.getEvent(f.session.id, request).deleted, undefined);
+    assert.equal(f.db.teamRequestMayExecute(request), false);
+  } finally { f.close(); }
+});
+
+test("a legacy database adds independent step cancellation backoff and recreates its deletion fence idempotently", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-team-cleanup-migration-")), path = join(directory, "fixture.db"), f = fixture(path);
+  let originalClosed = false, db: CollaborationDatabase | undefined;
+  try {
+    const run = f.start();
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const request = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!.request_event_id!;
+    f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id);
+    f.service.pauseTeamAgentRequest = () => { throw new Error("Synthetic cancellation failure before migration"); };
+    f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: "migration-cleanup-stop" });
+    f.db.sqlite.exec("DROP TRIGGER agent_team_runs_native_claim_cleanup; ALTER TABLE agent_team_steps DROP COLUMN cancellation_retry_at");
+    f.close(); originalClosed = true;
+    for (let reopen = 0; reopen < 2; reopen++) {
+      db = new CollaborationDatabase(path, { clock: f.clock });
+      assert.equal(db.sqlite.prepare("PRAGMA table_info(agent_team_steps)").all().filter(column => column.name === "cancellation_retry_at").length, 1);
+      assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='trigger' AND name='agent_team_runs_native_claim_cleanup'").get()!.n, 1);
+      assert.equal(db.sqlite.prepare("SELECT calls_used FROM agent_team_runs WHERE id=?").get(run.id)!.calls_used, 1);
+      assert.equal(db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(request)!.status, "claimed");
+      db.close(); db = undefined;
+    }
+  } finally { db?.close(); if (!originalClosed) f.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("legacy claim-table rebuilds retain the Team deletion fence across two database reopens", async t => {
+  for (const phase of ["before-leases", "before-pause"] as const) await t.test(phase, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "gt-team-claim-migration-")), path = join(directory, "fixture.db"), f = fixture(path);
+    let originalClosed = false, db: CollaborationDatabase | undefined;
+    try {
+      const run = f.start();
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      const request = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!.request_event_id!;
+      f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id);
+      f.service.pauseTeamAgentRequest = () => { throw new Error("Synthetic cleanup failure before legacy claim migration"); };
+      f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: `legacy-claims-${phase}-stop` });
+      f.close(); originalClosed = true;
+      const legacy = new DatabaseSync(path);
+      try {
+        // Keep the new cross-table trigger while restoring a historical claims
+        // shape: production must remove that dependency within its rebuild.
+        legacy.exec(`PRAGMA foreign_keys=OFF; DROP TABLE agent_request_claims;
+          CREATE TABLE agent_request_claims (
+            request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+            runtime_id TEXT NOT NULL REFERENCES runtimes(id),claimed_at TEXT NOT NULL,completed_at TEXT,
+            status TEXT NOT NULL CHECK(status IN ('claimed','completed'${phase === "before-pause" ? ",'failed'" : ""}))
+            ${phase === "before-pause" ? ",attempt_count INTEGER NOT NULL DEFAULT 1,lease_expires_at TEXT" : ""}
+          ) STRICT;`);
+        legacy.prepare("INSERT INTO agent_request_claims(request_event_id,runtime_id,claimed_at,status) VALUES(?,?,?,'claimed')")
+          .run(request, f.lead.id, f.clock().toISOString());
+      } finally { legacy.close(); }
+      for (let reopen = 0; reopen < 2; reopen++) {
+        db = new CollaborationDatabase(path, { clock: f.clock });
+        assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='trigger' AND name='agent_team_runs_native_claim_cleanup'").get()!.n, 1);
+        assert.equal(db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(request)!.status, "claimed");
+        db.sqlite.exec("BEGIN IMMEDIATE");
+        db.sqlite.prepare("DELETE FROM agent_team_runs WHERE id=?").run(run.id);
+        assert.equal(db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(request)!.status, "paused");
+        db.sqlite.exec("ROLLBACK");
+        assert.equal(db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(request)!.status, "claimed");
+        assert.equal(db.sqlite.prepare("SELECT calls_used FROM agent_team_runs WHERE id=?").get(run.id)!.calls_used, 1);
+        assert.deepEqual(db.sqlite.prepare("PRAGMA foreign_key_check").all(), []);
+        db.close(); db = undefined;
+      }
+    } finally { db?.close(); if (!originalClosed) f.close(); rmSync(directory, { recursive: true, force: true }); }
+  });
+});
+
+test("disk reopen recovers lost acknowledgments at queued, claimed and completed boundaries without reviving the old execution", async t => {
+  for (const phase of ["queued", "claimed", "completed"] as const) await t.test(phase, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "gt-team-disk-recovery-"));
+    const path = join(directory, "fixture.db"), f = fixture(path);
+    let restored: AgentTeams | undefined, reopened: CollaborationDatabase | undefined, originalClosed = false;
+    try {
+      const second = { ...f.actor, device_id: f.db.createDevice(f.actor.user_id, "Synthetic restart recovery device").device_id };
+      const plan = structuredClone(f.plan); plan.nodes = [plan.nodes[0]!]; plan.edges = [];
+      const run = f.start(plan, 3);
+      const input = JSON.parse(f.teams.store.row(run.id).input_json);
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      const first = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+      if (phase === "claimed") f.service.claimAgentRequest(f.actor, f.session.id, first.request_event_id!, f.lead.id);
+      if (phase === "completed") f.complete(run.id, "complete", "worker", "Durable answer committed before the server disappeared");
+      // Close the actual SQLite handle, not merely the coordinator. The answer's
+      // queued wakeup has not settled the private run when this interruption hits.
+      f.close(); originalClosed = true;
+      reopened = new CollaborationDatabase(path, { clock: f.clock });
+      const service = new CollaborationService(reopened);
+      restored = new AgentTeams(service, undefined, { clock: f.clock, autoStart: false });
+      assert.equal(restored.start(second, f.session.id, input).replayed, true);
+      const recovered = restored.read(second, f.session.id, run.id).run;
+      assert.equal(recovered.status, "paused"); assert.equal(recovered.error_code, "server_restart"); assert.equal(recovered.calls_used, 1);
+      await restored.pump();
+      assert.equal(restored.read(second, f.session.id, run.id).run.calls_used, 1, "reconnect cannot execute without a new explicit Resume");
+      const resume = { action: "resume" as const, idempotency_key: `disk-${phase}-resume` };
+      restored.control(second, f.session.id, run.id, resume);
+      restored.control(f.actor, f.session.id, run.id, resume);
+      if (phase === "completed") {
+        await drive(restored, () => restored!.read(second, f.session.id, run.id).run.status === "completed");
+        assert.equal(restored.read(second, f.session.id, run.id).run.calls_used, 1);
+      } else {
+        await drive(restored, () => restored!.read(second, f.session.id, run.id).run.calls_used === 2);
+        assert.equal(service.claimAgentRequest(f.actor, f.session.id, first.request_event_id!, f.lead.id).status, "paused");
+        assert.throws(() => service.completeAgentRequest(f.actor, f.session.id, first.request_event_id!, f.lead.id,
+          `disk-${phase}-late-result`, { text: "Discard the old execution after restart" }, "fixture-gpt", "low", 1));
+        const next = restored.read(second, f.session.id, run.id).run.steps.at(-1)!;
+        const claim = service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id);
+        service.completeAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id,
+          `disk-${phase}-fresh-result`, { text: "The explicitly resumed task completed" }, "fixture-gpt", "low", claim.attempt_count);
+        await drive(restored, () => restored!.read(second, f.session.id, run.id).run.status === "completed");
+      }
+      const finished = restored.read(second, f.session.id, run.id).run;
+      assert.equal(finished.steps.length, phase === "completed" ? 1 : 2);
+      assert.equal(reopened.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_response'").get()!.n, 1);
+      assert.equal(reopened.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_controls WHERE run_id=?").get(run.id)!.n, 1);
+      assert.equal(restored.start(second, f.session.id, input).run.id, run.id);
+    } finally { restored?.close(); reopened?.close(); if (!originalClosed) f.close(); rmSync(directory, { recursive: true, force: true }); }
+  });
+});
+
+test("SIGKILL after a native claim leaves a durable paused grant and requires an explicit fresh counted Resume", { timeout: 10000 }, async t => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-team-killed-")), path = join(directory, "fixture.db"), f = fixture(path);
+  const run = f.start(); f.close();
+  const source = `
+    import { CollaborationDatabase } from ${JSON.stringify(new URL("../src/database.js", import.meta.url).href)};
+    import { CollaborationService } from ${JSON.stringify(new URL("../src/service.js", import.meta.url).href)};
+    import { AgentTeams } from ${JSON.stringify(new URL("../src/agent-teams.js", import.meta.url).href)};
+    const db = new CollaborationDatabase(process.argv[1]);
+    const service = new CollaborationService(db), teams = new AgentTeams(service, undefined, { autoStart: false });
+    const actor = ${JSON.stringify(f.actor)}, session = ${JSON.stringify(f.session.id)}, run = ${JSON.stringify(run.id)};
+    teams.control(actor, session, run, { action: "resume", idempotency_key: "before-SIGKILL-resume" });
+    await teams.pump();
+    const detail = teams.read(actor, session, run).run, step = detail.steps.at(-1);
+    service.claimAgentRequest(actor, session, step.request_event_id, ${JSON.stringify(f.lead.id)});
+    process.send({ request: step.request_event_id, calls: detail.calls_used });
+    setInterval(() => {}, 1000);
+  `;
+  const child = spawn(process.execPath, ["--input-type=module", "--eval", source, path], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
+  let childErrors = ""; child.stderr?.on("data", bytes => { childErrors += String(bytes).slice(0, 2048); });
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => child.once("exit", (code, signal) => resolve({ code, signal })));
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await exited; });
+  let db: CollaborationDatabase | undefined, restored: AgentTeams | undefined;
+  try {
+    const accepted = await new Promise<{ request: string; calls: number }>((resolve, reject) => {
+      child.once("message", value => resolve(value as { request: string; calls: number }));
+      child.once("error", reject);
+      child.once("exit", () => reject(new Error(`The synthetic coordinator exited before its durable claim: ${childErrors}`)));
+    });
+    assert.equal(accepted.calls, 1); child.kill("SIGKILL");
+    assert.equal((await exited).signal, "SIGKILL");
+    db = new CollaborationDatabase(path, { clock: f.clock }); const service = new CollaborationService(db);
+    restored = new AgentTeams(service, undefined, { clock: f.clock, autoStart: false });
+    const recovered = restored.read(f.actor, f.session.id, run.id).run;
+    assert.equal(recovered.status, "paused"); assert.equal(recovered.error_code, "server_restart"); assert.equal(recovered.calls_used, 1);
+    assert.equal(service.claimAgentRequest(f.actor, f.session.id, accepted.request, f.lead.id).status, "paused");
+    restored.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "before-SIGKILL-resume" });
+    assert.equal(restored.read(f.actor, f.session.id, run.id).run.status, "paused", "replaying a pre-crash Resume cannot create a new execution grant");
+    restored.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "after-SIGKILL-resume" });
+    await drive(restored, () => restored!.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    const resumed = restored.read(f.actor, f.session.id, run.id).run;
+    assert.equal(resumed.steps.length, 2); assert.notEqual(resumed.steps[1]!.request_event_id, accepted.request);
+    assert.throws(() => service.completeAgentRequest(f.actor, f.session.id, accepted.request, f.lead.id,
+      "SIGKILL-old-result", { text: "A result from the killed execution" }, "fixture-gpt", "low", 1));
+    assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_request'").get()!.n, 2);
+  } finally { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await exited;
+    restored?.close(); db?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("server restart pauses the bounded run and retains accepted-call accounting", async () => {
   const f = fixture(); try {
     const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
@@ -549,6 +1177,76 @@ test("server restart pauses the bounded run and retains accepted-call accounting
   } finally { f.close(); }
 });
 
+test("Resume may consume an already completed final allowed call after a lost wakeup without requiring another call allowance", async t => {
+  for (const interruption of ["pause", "restart", "pause-offline", "restart-offline"] as const) await t.test(interruption, async () => {
+    const f = fixture(); let restored: AgentTeams | undefined;
+    try {
+      const plan = structuredClone(f.plan); plan.nodes = [plan.nodes[0]!]; plan.edges = [];
+      const run = f.start(plan, 1);
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      f.complete(run.id, "complete", "worker", "Verified final answer before the interruption");
+      if (interruption.endsWith("-offline")) {
+        f.advance(31000);
+        assert.equal(f.db.listSessionRuntimesForUser(f.session.id, f.actor.user_id).find(runtime => runtime.id === f.lead.id)!.status, "offline");
+        // Explicit offline persistence exercises the existing preflight as well
+        // as the heartbeat-derived presence check used by normal discovery.
+        f.db.sqlite.prepare("UPDATE runtimes SET status='offline' WHERE id=?").run(f.lead.id);
+      }
+      if (interruption.startsWith("restart")) {
+        f.teams.close(); restored = new AgentTeams(f.service, undefined, { clock: f.clock, autoStart: false });
+      } else f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "final-answer-pause" });
+      const teams = restored ?? f.teams;
+      teams.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "final-answer-resume" });
+      await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+      const completed = teams.read(f.actor, f.session.id, run.id).run;
+      assert.equal(completed.calls_used, 1); assert.equal(completed.steps.length, 1);
+      assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_request'").get()!.n, 1);
+    } finally { restored?.close(); f.close(); }
+  });
+});
+
+test("consuming a retained answer at the call limit never grants an extra delegation or parent-return call", async t => {
+  for (const phase of ["delegate", "parent-return"] as const) await t.test(phase, async () => {
+    const f = fixture(); try {
+      const limit = phase === "delegate" ? 1 : 2, run = f.start(f.plan, limit);
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      f.complete(run.id, "delegate");
+      if (phase === "parent-return") {
+        await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2); f.complete(run.id);
+      }
+      f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "limited-delegation-pause" });
+      f.teams.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "limited-delegation-resume" });
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "call_limit");
+      assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.calls_used, limit);
+      assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE type='agent_request'").get()!.n, limit);
+    } finally { f.close(); }
+  });
+});
+
+test("unfinished, failed or clarification work cannot use retained-answer recovery to exceed the call limit", async t => {
+  for (const pending of ["unfinished", "failed", "clarify"] as const) await t.test(pending, async () => {
+    const f = fixture(); try {
+      const plan = structuredClone(f.plan); plan.nodes = [plan.nodes[0]!]; plan.edges = [];
+      const run = f.start(plan, 1); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      const step = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+      if (pending === "failed") {
+        const claim = f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id);
+        f.service.completeAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id, "limited-failed-response",
+          { content: "Synthetic failed execution", status: "failed", error: { code: "fixture_failure" } }, "fixture-gpt", "low", claim.attempt_count);
+      } else if (pending === "clarify") {
+        f.complete(run.id, "complete", "worker", conflictAnswer(step.id));
+        await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "paused");
+        f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "limited-human-clarification",
+          payload: { content: "Please perform the original role within its existing permissions." } });
+      }
+      if (pending !== "clarify") f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "limited-unfinished-pause" });
+      assert.throws(() => f.teams.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "limited-unfinished-resume" }), { code: "conflict" });
+      assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.calls_used, 1);
+      assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.steps.length, 1);
+    } finally { f.close(); }
+  });
+});
+
 const cloudOptions = (runContainer: NonNullable<HostedAgentOptions["runContainer"]>): HostedAgentOptions => ({ image: `example/hosted@sha256:${"a".repeat(64)}`,
   endpoints: [{ id: "fixture-endpoint", profileId: "fixture-cloud", label: "Fixture cloud", provider: "deepseek", model: "fixture-cloud-model",
     baseUrl: "https://api.deepseek.com/v1", apiToken: "fixture-only-never-production", quotaGroup: "fixture-account", dailyRuns: 100, maxConcurrent: 1 }],
@@ -559,6 +1257,67 @@ function cloudStep(args: string[]) {
   const prompt = readFileSync(join(directory, "prompt.txt"), "utf8");
   return { prompt, step: /"step_id":"(step-[a-f0-9-]+)"/u.exec(prompt)![1]! };
 }
+for (const code of ["provider_auth_failed", "provider_rate_limited", "provider_unavailable", "container_output_too_large",
+  "provider_timeout", "container_timeout", "agent_timeout", "unknown_cloud_private_detail"]) {
+  test(`cloud Team diagnostics preserve a safe provider category and timeout continuation: ${code}`, { skip: process.platform === "win32" }, async () => {
+    const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-diagnostic-"));
+    const hosted = new HostedAgent(f.service, new CodeRepository(f.db, directory), cloudOptions(async () => { throw new Error(code); }));
+    f.teams.close(); const teams = new AgentTeams(f.service, hosted, { clock: f.clock, autoStart: false });
+    try {
+      const plan = structuredClone(f.plan); plan.nodes = [{ ...plan.nodes[0]!, target: { kind: "cloud", profile_id: "fixture-cloud",
+        provider: "deepseek", model: "fixture-cloud-model", include_code: false } }]; plan.edges = [];
+      const run = teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "Synthetic diagnostic task",
+        max_calls: 2, max_duration_minutes: 30, idempotency_key: `cloud-diagnostic-${code}` }).run;
+      const timeout = ["provider_timeout", "container_timeout", "agent_timeout"].includes(code);
+      await drive(teams, () => teams.store.row(run.id).status === (timeout ? "paused" : "failed"));
+      const detail = teams.read(f.actor, f.session.id, run.id).run;
+      const safe = code === "unknown_cloud_private_detail" ? "model_unavailable" : code;
+      assert.equal(detail.error_code, timeout ? "agent_timeout" : safe);
+      assert.deepEqual(detail.issue, { code: safe, node_id: "lead", node_label: "Director", target_kind: "cloud", retry_at: null });
+      assert.deepEqual(teams.list(f.actor, f.session.id).runs[0]!.issue, detail.issue);
+      assert.equal(detail.calls_used, 1); assert.equal(detail.steps.length, 1);
+      assert.equal(JSON.stringify(detail).includes("unknown_cloud_private_detail"), false);
+      if (timeout) assert.throws(() => teams.control(f.actor, f.session.id, run.id,
+        { action: "resume", idempotency_key: "diagnostic-resume-not-continue" }), { code: "conflict" });
+    } finally { teams.close(); hosted.close(); f.db.close(); rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test("cloud capacity and minimum-interval waits report bounded automatic retry without charging a failed reservation", { skip: process.platform === "win32" }, async () => {
+  for (const reason of ["busy", "rate_limit"]) {
+    const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-wait-"));
+    let release!: () => void, calls = 0;
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    const hosted = new HostedAgent(f.service, new CodeRepository(f.db, directory), cloudOptions(async () => {
+      if (++calls === 1 && reason === "busy") await hold;
+      return JSON.stringify({ answer: "Synthetic completed answer", files: [] });
+    }));
+    f.teams.close(); const teams = new AgentTeams(f.service, hosted, { clock: f.clock, autoStart: false });
+    try {
+      const plan = structuredClone(f.plan); plan.nodes = [{ ...plan.nodes[0]!, target: { kind: "cloud", profile_id: "fixture-cloud",
+        provider: "deepseek", model: "fixture-cloud-model", include_code: false } }]; plan.edges = [];
+      const start = (key: string) => teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "Synthetic queued task",
+        max_calls: 2, max_duration_minutes: 30, idempotency_key: key }).run;
+      const first = start(`wait-first-${reason}`);
+      await drive(teams, () => reason === "busy" ? calls === 1 : teams.store.row(first.id).status === "completed");
+      const second = start(`wait-second-${reason}`); await teams.pump();
+      const detail = teams.read(f.actor, f.session.id, second.id).run;
+      const expected = reason === "busy" ? "hosted_agent_busy" : "hosted_user_rate_limit";
+      assert.equal(detail.status, "running"); assert.equal(detail.error_code, null); assert.equal(detail.calls_used, 0);
+      assert.equal(detail.issue?.code, expected); assert.equal(detail.issue?.node_label, "Director");
+      assert.equal(detail.issue?.target_kind, "cloud"); assert.ok(Date.parse(detail.issue!.retry_at!) > f.clock().getTime());
+      assert.equal(teams.store.row(second.id).wait_reason, expected);
+      assert.deepEqual(teams.list(f.actor, f.session.id).runs.find(run => run.id === second.id)!.issue, detail.issue);
+      if (reason === "busy") release();
+      await drive(teams, () => teams.store.row(first.id).status === "completed");
+      f.advance(5001);
+      await drive(teams, () => teams.store.row(second.id).status === "completed");
+      assert.equal(teams.read(f.actor, f.session.id, second.id).run.issue, undefined);
+      assert.equal(teams.store.row(second.id).wait_reason, null); assert.equal(calls, 2);
+      assert.equal(teams.store.row(second.id).calls_used, 1);
+    } finally { release(); teams.close(); hosted.close(); f.db.close(); rmSync(directory, { recursive: true, force: true }); }
+  }
+});
 test("a server-contained cloud leaf completes from its plain final answer without inventing native provenance", { skip: process.platform === "win32" }, async () => {
   const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-cloud-leaf-")); let calls = 0;
   const hosted = new HostedAgent(f.service, new CodeRepository(f.db, directory), cloudOptions(async () => {
@@ -576,6 +1335,42 @@ test("a server-contained cloud leaf completes from its plain final answer withou
     const reply = f.db.getEvent(f.session.id, completed.steps[0]!.response_event_id!);
     assert.equal((reply.payload as { content: string }).content, "6 × 7 = 42");
     assert.equal(reply.runtime_provenance?.harness, "opencode"); assert.equal(reply.runtime_provenance?.runtime_id, undefined);
+  } finally { teams.close(); await hosted.close(); f.db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("human Pause aborts an active cloud step and Resume executes exactly one fresh counted round", {
+  skip: process.platform === "win32", timeout: 10000,
+}, async () => {
+  const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-cloud-pause-")); let calls = 0;
+  const hosted = new HostedAgent(f.service, new CodeRepository(f.db, directory), cloudOptions(async (_args, _timeout, signal) => {
+    assert.ok(signal, "Hosted Team executions always supply their bounded cancellation signal");
+    calls++;
+    if (calls === 1) return await new Promise<string>(resolve => {
+      const stopped = () => resolve(JSON.stringify({ answer: "Discard this interrupted late cloud answer", files: [] }));
+      if (signal.aborted) stopped(); else signal.addEventListener("abort", stopped, { once: true });
+    });
+    return JSON.stringify({ answer: "Resumed cloud result", files: [] });
+  }));
+  f.teams.close(); const teams = new AgentTeams(f.service, hosted, { clock: f.clock, autoStart: false });
+  try {
+    const plan = structuredClone(f.plan); plan.nodes = [{ ...plan.nodes[0]!, target: { kind: "cloud", profile_id: "fixture-cloud",
+      provider: "deepseek", model: "fixture-cloud-model", include_code: false } }]; plan.edges = [];
+    const run = teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "Cloud pause test", max_calls: 3,
+      max_duration_minutes: 30, idempotency_key: "cloud-human-pause-start" }).run;
+    await drive(teams, () => calls === 1);
+    const first = teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+    teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "cloud-human-pause" });
+    await drive(teams, () => Number(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM hosted_agent_active_runs").get()!.n) === 0);
+    assert.equal(teams.read(f.actor, f.session.id, run.id).run.status, "paused");
+    assert.equal(f.db.sqlite.prepare("SELECT 1 FROM events WHERE reply_to_event_id=? AND type='agent_response'").get(first.request_event_id!), undefined);
+    f.advance(2000);
+    const resume = { action: "resume" as const, idempotency_key: "cloud-human-resume" };
+    teams.control(f.actor, f.session.id, run.id, resume); teams.control(f.actor, f.session.id, run.id, resume);
+    await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+    const completed = teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(calls, 2); assert.equal(completed.calls_used, 2); assert.equal(completed.steps.length, 2);
+    assert.equal(completed.steps[0]!.status, "paused");
+    assert.equal((f.db.getEvent(f.session.id, completed.steps[1]!.response_event_id!).payload as { content: string }).content, "Resumed cloud result");
   } finally { teams.close(); await hosted.close(); f.db.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -758,10 +1553,14 @@ test("message erasure scrubs private team copies, fences late work and rejects s
     const source = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session",
       idempotency_key: "team-erasure-source", payload: { content: "Disposable source" } });
     const run = f.start();
+    const originalStart = JSON.parse(f.teams.store.row(run.id).input_json);
     await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
     const step = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
     f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id);
     f.db.deleteMessage(f.actor, f.session.id, source.id, "team-source-erasure");
+    assert.ok(f.teams.store.startReceipt(f.actor, f.session.id, originalStart.idempotency_key), "Author erasure removes task copies but preserves content-free consumed keys");
+    assert.throws(() => f.teams.start(f.actor, f.session.id, originalStart), { code: "context_changed" });
+    assert.throws(() => f.teams.start(f.actor, f.session.id, { ...originalStart, content_revision: 1 }), { code: "idempotency_conflict" });
     assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_runs WHERE session_id=?").get(f.session.id)!.count, 0);
     assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_steps").get()!.count, 0);
     assert.equal(f.db.teamRequestMayExecute(step.request_event_id!), false);
@@ -802,7 +1601,7 @@ test("personal cloud team continuation retains its exact configuration revision 
     const updated = hosted.putPersonalApi(f.actor, config.id, { ...metadata, label: "Updated fixture label", expected_revision: config.revision });
     assert.notEqual(updated.revision, config.revision);
     assert.throws(() => teams.control(f.actor, f.session.id, run.id, { action: "continue", idempotency_key: "team-personal-continue" }),
-      error => error instanceof ApiError && error.code === "agent_team_target_unavailable");
+      error => error instanceof ApiError && error.code === "agent_team_model_unavailable");
     assert.equal(teams.read(f.actor, f.session.id, run.id).run.status, "paused");
     assert.equal(teams.read(f.actor, f.session.id, run.id).run.calls_used, 1);
     assert.equal(calls, 1);
@@ -986,6 +1785,27 @@ test("terminal private records expire through reads or maintenance without creat
   }
 });
 
+test("durable consumed-key capacity fails closed for new starts without holding Stop or Forget hostage", () => {
+  const f = fixture(); try {
+    const run = f.start(), insert = f.db.sqlite.prepare(`INSERT INTO agent_team_start_receipts
+      (session_id,user_id,key_digest,run_id,input_digest,purpose,created_at) VALUES(?,?,?,?,?,'task',?)`);
+    const original = JSON.parse(f.teams.store.row(run.id).input_json);
+    f.teams.store.transaction(() => {
+      for (let index = 1; index < 10000; index++) insert.run(f.session.id, f.actor.user_id,
+        teamStartDigest(`synthetic-full-${index}`), `synthetic-old-run-${index}`, teamStartDigest("synthetic-input-digest"), f.clock().toISOString());
+    });
+    assert.throws(() => f.start(), { code: "agent_team_storage_full" });
+    assert.equal(f.teams.start(f.actor, f.session.id, original).replayed, true);
+    f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: "synthetic-full-stop" });
+    f.teams.forget(f.actor, f.session.id, run.id);
+    assert.throws(() => f.teams.start(f.actor, f.session.id, original), { code: "conflict" });
+    assert.throws(() => f.teams.start(f.actor, f.session.id, { ...original, content: "Changed task" }), { code: "idempotency_conflict" });
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_runs").get()!.n, 0);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n, 10000);
+    assert.equal(f.service.replay(f.actor, f.session.id, 0, 100).events.some(event => event.type === "agent_request"), false);
+  } finally { f.close(); }
+});
+
 test("Forget cannot turn a canonical timed-out team request into an executable ordinary continuation", { skip: process.platform === "win32" }, async () => {
   const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-forgotten-")); let calls = 0;
   const hosted = new HostedAgent(f.service, new CodeRepository(f.db, directory), cloudOptions(async () => {
@@ -995,8 +1815,9 @@ test("Forget cannot turn a canonical timed-out team request into an executable o
   try {
     const plan = structuredClone(f.plan); plan.nodes = [{ ...plan.nodes[0]!, target: { kind: "cloud", profile_id: "fixture-cloud",
       provider: "deepseek", model: "fixture-cloud-model", include_code: false } }]; plan.edges = [];
-    const run = teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "One bounded cloud task",
-      max_calls: 1, max_duration_minutes: 30, idempotency_key: "forgotten-cloud-team" }).run;
+    const input = { plan, entry_node_id: "lead", content: "One bounded cloud task",
+      max_calls: 1, max_duration_minutes: 30, idempotency_key: "forgotten-cloud-team" };
+    const run = teams.start(f.actor, f.session.id, input).run;
     await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status === "paused");
     const original = f.db.getEvent(f.session.id, teams.read(f.actor, f.session.id, run.id).run.steps[0]!.request_event_id!);
     const continuation = { profile_id: "fixture-cloud", include_code: false, content: String((original.payload as { content: string }).content),
@@ -1006,6 +1827,10 @@ test("Forget cannot turn a canonical timed-out team request into an executable o
     teams.forget(f.actor, f.session.id, run.id); f.advance(1000);
     assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_steps").get()!.count, 0);
     const head = f.db.requireSession(f.session.id).next_sequence;
+    assert.throws(() => teams.start(f.actor, f.session.id, input), { code: "conflict" });
+    assert.throws(() => teams.start(f.actor, f.session.id, { ...input, content: "Changed paid cloud task" }), { code: "idempotency_conflict" });
+    await teams.pump();
+    assert.equal(hosted.status(f.actor).user_used_runs, 1, "A consumed start key cannot reserve a second provider allowance");
     await assert.rejects(hosted.start(f.actor, f.session.id, { ...continuation, idempotency_key: "ordinary-after-forget" }), /bounded team/);
     assert.equal(calls, 1); assert.equal(f.db.requireSession(f.session.id).next_sequence, head);
     assert.equal(f.db.teamRequestMayExecute(original.id), false);

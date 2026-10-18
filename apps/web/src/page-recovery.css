@@ -1,0 +1,88 @@
+/* Uses product tokens with readable fallbacks if the main stylesheet fails. */
+.boot-screen { flex-direction: column; box-sizing: border-box; padding: 24px; text-align: center; }
+.boot-brand { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.boot-recovery-hint { width: min(100%, 580px); color: var(--ink-soft, #425c58); font-size: 14px; line-height: 1.65; }
+.boot-recovery-hint p { margin: 8px 0; }
+.page-recovery-help-row { display: flex; flex: 0 0 100%; justify-content: flex-end; width: 100%; margin-top: 8px; }
+.page-recovery-help {
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--line, #d8e0de);
+  border-radius: 10px;
+  background: var(--paper-raised, #fff);
+  color: var(--ink-soft, #425c58);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.page-recovery-help:focus-visible { outline: 3px solid var(--teal, #147d70); outline-offset: 2px; }
+#page-recovery-help { position: fixed; right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); z-index: 1000; box-shadow: var(--shadow-card, 0 2px 10px rgb(0 0 0 / 10%)); }
+.page-recovery-dialog {
+  box-sizing: border-box;
+  width: min(94vw, 520px);
+  max-width: 520px;
+  max-height: min(88vh, 760px);
+  max-height: min(88dvh, 760px);
+  overflow: auto;
+  margin: auto;
+  padding: 28px;
+  color: var(--ink, #192a2b);
+  background: var(--paper-raised, #fff);
+  border: 1px solid var(--line-strong, #becdca);
+  border-radius: 22px;
+  box-shadow: var(--shadow, 0 20px 70px rgb(0 0 0 / 22%));
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.page-recovery-dialog::backdrop { background: rgb(18 30 30 / 58%); }
+.page-recovery-dialog h2 { margin: 0 0 14px; font-size: 21px; line-height: 1.4; font-weight: 650; }
+.page-recovery-dialog p { margin: 0 0 14px; color: inherit; }
+.page-recovery-dialog .page-recovery-instructions {
+  padding: 12px 14px;
+  border: 1px solid var(--line, #d8e0de);
+  border-radius: 12px;
+  background: var(--teal-wash, #eef7f5);
+}
+.page-recovery-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.page-recovery-actions button {
+  flex: 1 1 170px;
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid var(--line-strong, #becdca);
+  border-radius: 12px;
+  background: var(--paper, #f7faf9);
+  color: var(--ink, #192a2b);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.page-recovery-actions .page-recovery-reload {
+  background: var(--teal, #147d70);
+  border-color: var(--teal, #147d70);
+  color: var(--paper-raised, #fff);
+}
+.page-recovery-actions button:focus-visible { outline: 3px solid var(--ink, #192a2b); outline-offset: 3px; }
+@media (max-width: 480px) {
+  .page-recovery-dialog { padding: 22px 18px; border-radius: 18px; font-size: 14px; }
+  .page-recovery-actions { gap: 8px; margin-top: 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-recovery-dialog, .page-recovery-dialog * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .page-recovery-dialog::backdrop { background: #334443; }
+}
+@media (forced-colors: active) {
+  .page-recovery-help { color: ButtonText; background: ButtonFace; border-color: ButtonText; box-shadow: none; }
+  .page-recovery-help:focus-visible { outline-color: Highlight; }
+  .page-recovery-dialog { color: CanvasText; background: Canvas; border: 2px solid CanvasText; box-shadow: none; }
+  .page-recovery-dialog .page-recovery-instructions { color: CanvasText; background: Canvas; border-color: CanvasText; }
+  .page-recovery-actions button, .page-recovery-actions .page-recovery-reload { color: ButtonText; background: ButtonFace; border: 1px solid ButtonText; }
+  .page-recovery-actions button:focus-visible { outline-color: Highlight; }
+}

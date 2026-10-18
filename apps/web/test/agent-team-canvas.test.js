@@ -64,7 +64,7 @@ class Element {
   }
 }
 
-function fixture() {
+function fixture({ t = text => text } = {}) {
   const document = { captured: new Map(), pointElement: null, activeElement: null,
     createElement(tag) { return new Element(this, tag); },
     createElementNS(namespace, tag) { return new Element(this, tag, namespace); },
@@ -76,7 +76,7 @@ function fixture() {
   ], edges: [{ id: "existing", source: "a", target: "b", direction: "one_way" }] };
   let changes = 0, nextId = 0; const selections = [];
   const canvas = mountTeamCanvas({ document, host, getDraft: () => draft, onChange: () => changes++,
-    onSelection: (selection, pinned) => selections.push({ selection, pinned }), t: text => text, makeId: prefix => `${prefix}-${++nextId}` });
+    onSelection: (selection, pinned) => selections.push({ selection, pinned }), t, makeId: prefix => `${prefix}-${++nextId}` });
   canvas.render();
   const card = id => host.querySelector(`[data-node-id="${id}"]`);
   const title = id => card(id).querySelector(".team-node-drag");
@@ -234,4 +234,32 @@ test("zoom keeps the viewport center stable, clamps its range and leaves ordinar
   assert.equal(ordinary.prevented, false); assert.equal(reset.textContent, "100%");
   const pinch = f.viewport.dispatch("wheel", { ctrlKey: true, deltaY: -10 });
   assert.equal(pinch.prevented, true); assert.equal(reset.textContent, "108%");
+});
+
+
+test("a pending wire cannot introduce an endpoint deleted before connection completes", () => {
+  const f = fixture();
+  // Use keyboard-compatible port selection, then remove its source externally.
+  f.port("b", "out").dispatch("click"); f.draft.nodes = f.draft.nodes.filter(node => node.id !== "b"); f.draft.edges = [];
+  f.canvas.render(); f.port("a", "in").dispatch("click");
+  assert.deepEqual(f.draft.edges, []); assert.equal(f.changes(), 0);
+});
+
+test("clearing the fixed selection cancels wiring and a captured drag", () => {
+  const f = fixture(); f.port("b", "out").dispatch("click"); f.canvas.select(null);
+  assert.equal(f.viewport.dataset.linking, "false");
+  f.port("a", "in").dispatch("click"); assert.equal(f.draft.edges.length, 1);
+  f.title("a").dispatch("pointerdown", { clientX: 50, clientY: 60 }); f.canvas.select(null);
+  f.viewport.dispatch("pointermove", { clientX: 200, clientY: 250 }); f.viewport.dispatch("pointerup", { clientX: 200, clientY: 250 });
+  assert.equal(f.draft.nodes[0].x, 40); assert.equal(f.draft.nodes[0].y, 60); assert.equal(f.changes(), 0);
+});
+
+
+test("changing language refreshes persistent canvas and zoom accessible names", () => {
+  let chinese = false;
+  const labels = { "Team workflow canvas": "团队流程画布", "Zoom out": "缩小", "Zoom in": "放大", "Reset zoom": "重置缩放" };
+  const f = fixture({ t: text => chinese ? labels[text] ?? text : text });
+  chinese = true; f.canvas.render();
+  assert.equal(f.viewport.attributes["aria-label"], "团队流程画布");
+  assert.deepEqual(f.hud.children.map(node => node.attributes["aria-label"]), ["缩小", "重置缩放", "放大"]);
 });

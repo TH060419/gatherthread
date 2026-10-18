@@ -26,6 +26,7 @@ Prerelease status never permits silent reinterpretation of persisted data, ident
 | DSH native plugin RPC and persisted state | Public prerelease package / internal versioned state | `packages/dsh-host/src/native-plugin.ts`, `connector.ts`, `state-store.ts`, `types.ts` | DSH Host and bundled settings client |
 | Browser entry routes and legacy deep-link forwarding | Public prerelease | `site/index.html`, `site/boot.js`, `apps/web/scripts/build.mjs`, `apps/server/src/server.ts` | Browsers, invitations, DSH pairing, shared project/session links |
 | Stable Web control IDs and accessible names | Internal versioned | `apps/web/index.html`, `apps/web/test/static-accessibility.test.js` | Web event bindings, accessibility, browser tests |
+| Independent page recovery and startup readiness | Internal versioned | `apps/web/src/page-recovery.js`, `apps/web/src/bootstrap.js`, `apps/web/test/page-recovery.test.js`, `apps/web/test/bootstrap.test.js` | Browser shell, HTTP acknowledgment deadlines, isolated example |
 | Codex Launcher URI (Windows/macOS) | Internal versioned | `apps/web/src/domain.js`, `prototypes/codex-launcher/launcher.py`, `prototypes/codex-launcher/macos/Launcher.swift`, shared `contract-vectors.json` | GatherThread Web, per-user Windows and macOS URL Scheme handlers |
 | Opt-in code repository snapshots, review and merge | Public prerelease, Beta 2 | `packages/protocol/src/code-sync.ts`, `apps/server/src/code-repository.ts` | Web, shared local code-sync module, Codex, DSH |
 | Shared manual history summaries and derived context | Public prerelease, Beta 2 | `packages/protocol/src/history-summary.ts`, `apps/server/src/database.ts` | Web, bridge, MCP, Codex, DSH |
@@ -57,6 +58,20 @@ The same-origin API is rooted at `/v1`.
 - Connectors use an HTTP bearer credential kept in the connector process. Credentials never belong in URLs, WebSocket query strings, page storage, MCP arguments, logs, or canonical events.
 - Cookie-authenticated writes require an allowed `Origin`. Bearer-authenticated connectors remain device- and role-scoped.
 - Retryable mutations carry a stable `idempotency_key`. An exact same-actor retry returns the original result; a changed actor, operation, target, or canonical payload conflicts.
+
+The Web API client bounds one HTTP acknowledgment, including response-body JSON
+decoding, to 45 seconds while retaining shorter explicit caller deadlines. It
+aborts the transport and rejects with client-side `ApiError` status `0`, code
+`request_timeout`, even if that transport does not honor abort. A timeout is an
+unknown receipt, not a server failure or execution cancellation; no mutation is
+automatically retried. Caller abort reasons propagate without a timeout notice.
+All timers and caller-signal listeners are released after settlement. The
+independent recovery layer receives only the fixed `request_timeout` category,
+never a route, request body or exception. Stable recovery controls use
+`page-recovery-help`, `page-recovery-dialog`, `page-recovery-dismiss` and
+`page-recovery-reload`; modal-local help uses `data-page-recovery-help` without
+duplicate IDs. Startup readiness follows `data-boot-state` through asynchronous
+session restoration and back/forward cache restoration, not module import alone.
 
 ### Message quotes and mentions
 
@@ -457,8 +472,8 @@ Origin/admission/JSON gates. All JSON fields use snake_case and the existing
 | `POST /v1/sessions/:session/agent-teams/:team/test` | Saved owner/current session writer; `{expected_revision,content_revision,solo_transfer_ack?,idempotency_key}`. 202 `{run,replayed}` with `purpose:test`. |
 | `POST /v1/sessions/:session/agent-teams/:team/control` | Saved owner; `{enabled,expected_revision?,idempotency_key}` returns `{team,replayed}`. Enable requires exact passed revision plus current writable session and exact available targets. Disable may omit revision and does not require a new execution authorization. |
 | `POST /v1/sessions/:session/agent-teams/:team/start` | Saved owner/current session writer; test input plus nonblank `content` (at most 3,000 characters), optional `reply_to_event_id` (ID or null) and `mentions`. 202 `{run,replayed}`. The server supplies the saved plan and limits; client plans cannot override them. |
-| `GET /v1/sessions/:session/agent-team-runs` / `GET .../:run` | Authenticated requester with current session access; bounded own-run summaries or `{run}` detail. Another member's private run is not exposed. |
-| `POST /v1/sessions/:session/agent-team-runs/:run/control` | Original requester with current write access; `{action:pause\|resume\|stop\|continue,idempotency_key}` returns `{run}`. Resume/continue additionally recheck the frozen original device, remaining calls and original deadline. |
+| `GET /v1/sessions/:session/agent-team-runs` / `GET .../:run` | Authenticated requester with current session access; at most 50 own-run summaries, active runs first, ordinary tasks before hidden connectivity probes within each group, then newest first, or `{run}` detail. Another member's private run is not exposed. |
+| `POST /v1/sessions/:session/agent-team-runs/:run/control` | Original requester with current write access; `{action:pause\|resume\|stop\|continue,idempotency_key}` returns `{run}`. Resume/continue recheck the frozen original device and original deadline; any new execution also requires remaining calls and an available exact target. |
 | `DELETE /v1/sessions/:session/agent-team-runs/:run` | Original requester/current writer; strict `{}` forgets only a terminal private record and returns 204. Canonical events remain. |
 
 A draft contains `name,team_prompt,entry_node_id?,nodes,edges`, at most 16 modules,
@@ -480,17 +495,79 @@ Definition output adds `id,revision,enabled,tested_revision,test_run_id,
 test_session_id,test_status,updated_at` to the saved draft/limits. Test status is
 `not_tested|running|passed|failed`; enabling/disabling advances the revision and
 preserves a valid test stamp only while configuration is unchanged. A saved edit
-invalidates the stamp and disables future starts. A favorite inserted into a
+invalidates the stamp and disables future starts. Revisions are opaque positive
+integers allocated by a durable account clock, not consecutive per-Team counters.
+Deleting and recreating an ID cannot reuse an older revision or accept another
+device's stale save, enable or start. Migration reserves the new revision namespace
+at or above `2^40`; surviving legacy definitions keep their existing revisions
+until changed, while recreations cannot recycle the earlier preview's counters
+even when every old definition was already deleted. Test completion persists its successful
+stamp on the server without requiring a library read; forgetting or pruning the
+private test record does not erase that stamp. Replacing or deleting a definition
+atomically fences its old connectivity test before acknowledging the library
+mutation; exact receipt recovery can retry physical cleanup. Accepted task runs
+remain independent. A favorite inserted into a
 graph receives a new node identity and position. At the atomic five-item limit,
 new entries return 409 `agent_team_limit` or `agent_team_favorite_limit`; unbound
 or disconnected test/start inputs return 422 `agent_team_incomplete` or
 `agent_team_disconnected`. Stale revisions and changed idempotent retries conflict.
 
+Before reporting private run-storage exhaustion, start admission may reclaim
+the same account's terminal connectivity caches no longer referenced by a saved
+definition. Current probes, task records and consumed-key receipts are excluded;
+the reclamation rolls back if replacement admission fails. Web run records expose
+the existing terminal-only DELETE route. After a lost 204, an authenticated
+`not_found` for that exact private record is treated as already cleared only
+after the current session list remains readable and does not contain it;
+membership-hidden 404s, revoked authority and active-run conflicts remain failures.
+
+Run acknowledgments are acceptance receipts, not versioned status updates. A
+client must not replace a later observed run status with a delayed Start or
+control response; it still settles the original intent and refreshes current
+state. A confirmed removal also fences outstanding run/favorite creation
+responses so reconnect cannot restore an already cleared private record or
+deleted favorite. A new exact-key recovery attempt can read the current receipt.
+Pause/Stop fence execution before acknowledging. If native cancellation fails
+after that durable transition, same-state receipt recovery, startup and bounded
+coordinator retries repair the outstanding claim; they do not reopen the run,
+consume another call or let an old Pause receipt cancel resumed work.
+
+Run summaries may add a strict `issue` object containing `code`, nullable
+`node_id`, `node_label`, `target_kind:local|shared|cloud` and `retry_at` (ISO
+timestamp or null). Current clients can still read older summaries without it;
+earlier preview Web builds using a strict schema do not accept the new field and
+must be refreshed together with the server update. Module
+identity comes from the immutable run plan, not a later library edit. Global
+authorization, context and total-budget issues have no blamed module. Diagnostic
+codes are allowlisted; raw provider messages, native exceptions, headers and
+tool output are never diagnostic fields. Unknown retained error codes are
+returned as a generic safe category. Existing `error_code:agent_timeout`
+continues to control explicit Continue; `issue.code` may explain the more
+specific trusted timeout cause.
+
+Cloud cooldowns expose a running issue and earliest retry time without accepting
+another call. Accepted native work may expose queued, offline or expired-claim
+observations while its result is pending; these observations do not themselves
+authorize a retry or declare the work failed. A nullable private `wait_reason`
+column migrates in place and clears on acceptance or state transition. Rejected
+Team controls may preserve `error.code:conflict` while adding an allowlisted
+`error.details.issue_code` so clients can distinguish expired budgets, ended
+runs, cleared receipts and an inappropriate recovery action. Preflight errors
+may include the owning configuration's bounded module label and target kind.
+
 Test/start acceptance binds its exact input digest, definition ID/revision,
-session content revision and caller's stable key. An exact retry recovers its
-original accepted run without reserving another task, including after the saved
-definition changes, is disabled or is deleted; current caller/session authority
-still applies. A different action/body with that key conflicts. Browser requests
+session content revision and caller's stable key. While the private run exists,
+an exact retry recovers that original accepted run without reserving another task,
+including after the saved definition changes, is disabled or is deleted; current
+caller/session authority still applies. A different action/body with that key
+conflicts. A content-free consumed-key receipt is committed in the same
+transaction as acceptance and survives private-run Forget, expiry pruning and
+author-erasure cache cleanup. Once the private run is gone, the old key returns
+409 `conflict`, or `idempotency_conflict` for a known changed input; it cannot
+start another task, publish another canonical request or consume another call,
+provider allowance or shared reservation. This also applies when the original
+run stopped before publishing its first canonical step. The receipt does not
+restore cleared run details. Browser requests
 must bound response headers and bodies, preserve unknown acceptance and retain
 an independent Stop/recovery path. Saved-plan edits never rewrite a frozen run.
 While a start acknowledgment is unknown, composer recovery and Stop bind only
@@ -499,6 +576,15 @@ and its verified run identity. Equal task text is not an identity match and
 cannot authorize stopping another device's run. Before a matching canonical
 request confirms that binding, recovery repeats the exact original body/key
 rather than guessing a run from conversation content.
+
+A paused run may consume its already completed canonical result without another
+call or an online executor; this does not permit a new delegation or parent
+return past its call limit. A human-paused shared step's verified broker
+cancellation retires that interrupted attempt on Resume, which creates a new
+counted step subject to shared cleanup and concurrency fences. Native online
+preflight uses effective heartbeat presence, not a stale persisted online flag.
+The saved-Team action routes accept at most 64 KiB of JSON so valid multilingual
+tasks and mention ranges fit; task text remains bounded to 3,000 UTF-16 units.
 
 Saved-Team and internal formal-run start schemas accept the existing in-session
 quote and mention shapes. `mentions` uses `MessageMentionsSchema` (at most 32
@@ -593,11 +679,21 @@ For cloud/shared test dispatch, the server supplies metadata-only context with
 force `include_code:false`. Task dispatch retains its ordinary context/code contract.
 
 Persistence is additive: account definitions/favorites/metadata receipts plus
-private session runs/steps/controls and migration columns for purpose and library
-binding. Existing ordinary/shared requests retain their current contracts.
+private session runs/steps/controls, consumed-key receipts and migration columns
+for purpose and library binding. Existing private runs seed consumed-key receipts
+on database open. Earlier canonical Team requests with a start key also fence
+reuse after their private run was already removed; when their original input
+digest is unavailable, every retry fails closed rather than replaying cleared
+content. A previously removed pre-upgrade run that published no canonical step
+has no recoverable key record. Existing ordinary/shared requests retain their
+current contracts.
 Earlier unreleased session-plan schemas remain internal compatibility data;
 there is no public raw-plan save/start route or automatic enabled-Team migration.
-Older clients may ignore additive output but cannot start a saved Team through
-ordinary request/continuation paths. No new user-facing MCP execution authority,
+Startup retires legacy connectivity runs that have lost their current saved
+definition/test binding; accepted task snapshots are not invalidated by deletion
+of their definition.
+The server and Web preview must be updated together; older strict-schema pages
+require a reload rather than silently ignoring new response fields. No client
+can start a saved Team through ordinary request/continuation paths. No new user-facing MCP execution authority,
 package version, publication or deployment is introduced by this preview. See
 [ADR-0058](adr/0058-account-private-saved-agent-teams.md) for the durable boundary.

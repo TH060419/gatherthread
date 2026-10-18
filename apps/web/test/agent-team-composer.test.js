@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { TEAM_ZH_CN } from "../src/agent-team-i18n.js";
+import { describeTeamActionError } from "../src/agent-team-diagnostics.js";
 
 const source = (await readFile(new URL("../src/main.js", import.meta.url), "utf8")).replace(/\r\n?/gu, "\n");
 const functionSource = name => {
@@ -29,7 +31,7 @@ function fixture(start) {
       appendAgentRequest() { throw new Error("A Team request must not bypass the Team service"); } },
     element: id => { if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id); },
     messageActions: { metadata: () => structuredClone(metadata), sent: () => { sent++; metadata = { replyTo: null, mentions: [] }; } },
-    teamsUi: { t: text => text, startTask: async (content, options) => {
+    teamsUi: { t: text => text, describeError: (error, action) => describeTeamActionError(error, action), startTask: async (content, options) => {
       calls.push({ content, options }); return start ? start(content, options) : { run: { id: "run-a" }, replayed: false };
     } },
   });
@@ -84,9 +86,45 @@ test("an unknown Team acknowledgement preserves the draft, quote and mentions fo
   assert.match(f.app.sendError.textContent, /Check the previous action/u);
 });
 
+test("Team composer errors show fixed safe guidance rather than a private exception message", async () => {
+  const f = fixture(async () => { throw Object.assign(new Error("SYNTHETIC_PRIVATE_PROVIDER_BODY_MUST_NOT_APPEAR"), {
+    status: 429, code: "agent_share_daily_limit" }); });
+  await f.app.sendMessage("agent_request");
+  assert.match(f.app.sendError.textContent, /allowance/u);
+  assert.doesNotMatch(f.app.sendError.textContent, /SYNTHETIC_PRIVATE/u);
+  assert.equal(f.app.messageInput.value, f.raw);
+});
+
 test("an old-session Team acknowledgement cannot clear an identical draft and quote in the new session", async () => {
   const pending = deferred(), f = fixture(() => pending.promise), before = f.metadata();
   const sending = f.app.sendMessage("agent_request"); f.app.selectedSessionGeneration++; f.app.state.session = { id: "session-b", mode: "multi" };
   const receipt = { run: { id: "run-a" }, replayed: false }; f.calls[0].options.onAccepted(receipt); pending.resolve(receipt); await sending;
   assert.equal(f.app.messageInput.value, f.raw); assert.deepEqual(f.metadata(), before); assert.equal(f.sent(), 0);
+});
+
+
+test("the Team composer localizes both disabled accessible names across English and Chinese switches", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  let locale = "en";
+  const selects = new Map([
+    ["team-agent-model-select", { label: "Model", accessible: "Team model", chinese: "团队模型" }],
+    ["team-agent-effort-select", { label: "Reasoning effort", accessible: "Team reasoning effort", chinese: "团队推理强度" }],
+  ].map(([id, expected]) => {
+    assert.match(html, new RegExp(`<select id="${id}"[^>]*disabled[^>]*aria-label="${expected.accessible}"`), "stable IDs must identify the real disabled Team controls");
+    return [id, { ...expected, disabled: true, attributes: { "aria-label": expected.accessible }, parentElement: { firstChild: { nodeType: 3, textContent: expected.label } },
+      setAttribute(name, value) { this.attributes[name] = value; } }];
+  }));
+  const hint = { textContent: "" }, app = vm.createContext({
+    element: id => id === "team-agent-profile-fields" ? { querySelector: () => hint } : selects.get(id),
+    teamsUi: { t: text => locale === "zh-CN" ? TEAM_ZH_CN[text] ?? text : text },
+  });
+  vm.runInContext(functionSource("renderTeamProfileLabels"), app);
+  for (const next of ["en", "zh-CN", "en"]) {
+    locale = next; app.renderTeamProfileLabels();
+    for (const select of selects.values()) {
+      assert.equal(select.attributes["aria-label"], locale === "zh-CN" ? select.chinese : select.accessible);
+      assert.equal(select.parentElement.firstChild.textContent, locale === "zh-CN" ? TEAM_ZH_CN[select.label] : select.label);
+      assert.equal(select.disabled, true, "localization must retain module-owned model and effort configuration");
+    }
+  }
 });

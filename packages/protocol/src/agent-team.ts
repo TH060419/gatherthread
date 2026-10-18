@@ -56,12 +56,24 @@ export const StartAgentTeamRunInputSchema = z.object({ plan: AgentTeamPlanSchema
   .refine(input => input.plan.nodes.some(node => node.id === input.entry_node_id), { path: ["entry_node_id"], message: "Select a node in this team" });
 export type StartAgentTeamRunInput = z.infer<typeof StartAgentTeamRunInputSchema>;
 export const AgentTeamRunStatuses = ["running", "paused", "completed", "failed", "stopped", "timed_out", "call_limit"] as const;
+// Public diagnostics contain only a stable category and the requester's own
+// frozen module label. Provider messages, credentials and raw errors stay out.
+export const AgentTeamRunIssueSchema = z.object({
+  code: z.string().regex(/^[a-z][a-z0-9_]{0,79}$/u), node_id: id.nullable(), node_label: line(120).nullable(),
+  target_kind: z.enum(["local", "shared", "cloud"]).nullable(), retry_at: z.string().datetime().nullable(),
+}).strict();
+export type AgentTeamRunIssue = z.infer<typeof AgentTeamRunIssueSchema>;
+export const AgentTeamActionIssueDetailsSchema = z.object({
+  issue_code: z.string().regex(/^[a-z][a-z0-9_]{0,79}$/u).optional(), node_id: id.optional(),
+  node_label: line(120).optional(), target_kind: z.enum(["local", "shared", "cloud"]).optional(),
+  retry_after_seconds: z.number().finite().min(0).max(86400).optional(),
+}).strict();
 export const AgentTeamRunSummarySchema = z.object({ id, session_id: id, status: z.enum(AgentTeamRunStatuses),
   purpose: z.enum(["task", "test"]).optional(), definition_id: id.nullable().optional(),
   created_at: z.string().datetime(), deadline_at: z.string().datetime(), finished_at: z.string().datetime().nullable(),
   calls_used: z.number().int().min(0).max(48), max_calls: z.number().int().min(1).max(48),
   max_duration_minutes: z.number().int().min(1).max(120), current_node_id: id.nullable(), current_step_id: id.nullable(),
-  error_code: z.string().regex(/^[a-z][a-z0-9_]{0,79}$/u).nullable() }).strict().refine(value => value.calls_used <= value.max_calls, "Accepted calls cannot exceed the run limit");
+  error_code: z.string().regex(/^[a-z][a-z0-9_]{0,79}$/u).nullable(), issue: AgentTeamRunIssueSchema.optional() }).strict().refine(value => value.calls_used <= value.max_calls, "Accepted calls cannot exceed the run limit");
 export const AgentTeamStepSchema = z.object({ id, node_id: id, node_label: line(120),
   status: z.enum(["pending", "running", "completed", "failed", "paused", "timed_out"]),
   request_event_id: id.nullable(), response_event_id: id.nullable(), created_at: z.string().datetime(),

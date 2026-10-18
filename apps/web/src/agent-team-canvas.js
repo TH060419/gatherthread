@@ -21,13 +21,21 @@ export function mountTeamCanvas({ document: doc, host, getDraft, onChange, onSel
     for (const path of svg.querySelectorAll("[data-edge-id]")) path.dataset.highlighted = String(selected?.kind === "edge" && selected.id === path.dataset.edgeId);
   }
   function select(value, fixed = true) {
-    if (fixed) { pinned = value; hovered = null; } else if (!pinned) hovered = value; else return;
+    if (fixed) {
+      pinned = value; hovered = null;
+      if (!value) {
+        const pointerId = drag?.pointerId ?? wire?.pointerId;
+        if (pointerId !== undefined && viewport.hasPointerCapture?.(pointerId)) viewport.releasePointerCapture?.(pointerId);
+        drag = null; wire = null; handledPointerClick = false; viewport.dataset.linking = "false";
+      }
+    } else if (!pinned) hovered = value; else return;
     highlight(); onSelection(current(), Boolean(pinned));
   }
   function hover(value) { if (!pinned) select(value, false); }
   function addWire(from, to) {
     const draft = getDraft();
-    if (!draft || draft.edges.length >= 32 || !teamEdgeAllowed(draft.edges, from, to, "one_way")) return false;
+    if (!draft || draft.edges.length >= 32 || !draft.nodes.some(node => node.id === from) || !draft.nodes.some(node => node.id === to)
+      || !teamEdgeAllowed(draft.edges, from, to, "one_way")) return false;
     const edge = { id: makeId("edge"), source: from, target: to, direction: "one_way" };
     draft.edges.push(edge); wire = null; onChange(); select({ kind: "edge", id: edge.id }); render(); return true;
   }
@@ -53,6 +61,8 @@ export function mountTeamCanvas({ document: doc, host, getDraft, onChange, onSel
     highlight();
   }
   function render() {
+    viewport.setAttribute("aria-label", t("Team workflow canvas"));
+    for (const [control, label] of [[minus, "Zoom out"], [reset, "Reset zoom"], [plus, "Zoom in"]]) control.setAttribute("aria-label", t(label));
     const draft = getDraft(); nodes.replaceChildren();
     empty.hidden = Boolean(draft?.nodes.length); empty.textContent = t("Add a blank or favorite module to start.");
     const width = Math.max(1500, ...(draft?.nodes ?? []).map(node => node.x + TEAM_NODE_WIDTH + 120));
@@ -130,7 +140,11 @@ export function mountTeamCanvas({ document: doc, host, getDraft, onChange, onSel
   }
   minus.addEventListener("click", () => setZoom(zoom - .1)); plus.addEventListener("click", () => setZoom(zoom + .1)); reset.addEventListener("click", () => setZoom(1));
   viewport.addEventListener("wheel", event => { if (event.ctrlKey || event.metaKey) { event.preventDefault(); setZoom(zoom + (event.deltaY < 0 ? .08 : -.08)); } }, { passive: false });
-  return { render, select, selection: () => current(), pinned: () => pinned, reveal(id) {
+  return { render, select, selection: () => current(), pinned: () => pinned, resetView(id) {
+    zoom = 1; viewport.scrollLeft = 0; viewport.scrollTop = 0; render();
+    const draft = getDraft(), node = draft?.nodes.find(item => item.id === id) ?? draft?.nodes[0];
+    if (node) { viewport.scrollLeft = Math.max(0, node.x - 80); viewport.scrollTop = Math.max(0, node.y - 80); }
+  }, reveal(id) {
     render(); const node = getDraft()?.nodes.find(item => item.id === id); if (node) { viewport.scrollLeft = Math.max(0, node.x * zoom - 80); viewport.scrollTop = Math.max(0, node.y * zoom - 80); }
   } };
 }

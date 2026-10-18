@@ -15,11 +15,20 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20261012-content-1" />
+    <script async src="./src/page-recovery.js?v=20261018-recovery-1"></script>
+    <link rel="stylesheet" href="./src/styles.css?v=20261012-content-1" data-page-required-style />
+    <link rel="stylesheet" href="./src/page-recovery.css?v=20261018-recovery-1" data-page-required-style />
   </head>
   <body>
-    <div id="boot-screen" class="boot-screen" role="status" aria-live="polite"><img src="./favicon-32x32.png" alt="" width="32" height="32"><span>GatherThread</span></div>
-    <noscript>Please enable JavaScript to use GatherThread.</noscript>
+    <div id="boot-screen" class="boot-screen" role="status" aria-live="polite">
+      <div class="boot-brand"><img src="./favicon-32x32.png" alt="" width="32" height="32"><span>GatherThread</span></div>
+      <div class="boot-recovery-hint" data-i18n-skip>
+        <p lang="zh-CN">正在打开工作区。若一直没有变化，请检查网络，再使用浏览器的重新加载。页面重新加载不会代替你取消已提交的 Agent 任务；恢复后请先检查记录，避免重复提交。</p>
+        <p lang="en">Opening your workspace. If nothing changes, check your connection, then use your browser's Reload. Reloading does not cancel submitted Agent tasks; check their records before submitting again.</p>
+      </div>
+      <noscript>请开启浏览器的 JavaScript 后重新加载。Please enable JavaScript in your browser, then reload GatherThread.</noscript>
+    </div>
+    <button id="page-recovery-help" class="page-recovery-help" type="button" data-page-recovery-help data-i18n-skip>页面无响应？ / Page stuck?</button>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
     <a class="skip-link" href="#main-content">Skip to conversation</a>
 
@@ -499,6 +508,10 @@
                 aria-describedby="composer-permission send-chat-help send-agent-help"
               ></textarea>
               </div>
+              <aside id="team-task-notice" class="team-task-notice" role="status" aria-live="polite" aria-atomic="true" data-i18n-skip hidden>
+                <div><p id="team-task-notice-message"></p><p id="team-task-notice-advice"></p></div>
+                <button id="team-task-notice-open" class="text-button" type="button">View run records</button>
+              </aside>
               <p id="composer-permission" class="permission-note"></p>
               <fieldset id="agent-request-profile" class="agent-request-profile">
                 <legend>Agent request settings</legend>
@@ -528,8 +541,8 @@
                 </div>
                 <div id="shared-agent-profile-fields" class="agent-profile-fields" hidden></div>
                 <div id="team-agent-profile-fields" class="agent-profile-fields team-composer-fields" hidden>
-                  <label>Model<select disabled aria-label="Team model"></select></label>
-                  <label>Reasoning effort<select disabled aria-label="Team reasoning effort"></select></label>
+                  <label>Model<select id="team-agent-model-select" disabled aria-label="Team model"></select></label>
+                  <label>Reasoning effort<select id="team-agent-effort-select" disabled aria-label="Team reasoning effort"></select></label>
                   <p class="field-help">Models and reasoning effort are configured in Team modules.</p>
                 </div>
               </fieldset>

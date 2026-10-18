@@ -64,7 +64,7 @@ import { redactJson } from "./redaction.js";
 import { hostedFailureCode, hostedFailureContent, hostedFailureOutcome } from "./hosted-agent-errors.js";
 import { AGENT_SHARING_SCHEMA } from "./agent-sharing-schema.js";
 import { SharedExecutionCapabilitySchema, SharedAgentMetadataSchema, type SharedExecutionCapability } from "@gatherthread/protocol";
-import { AGENT_TEAM_SCHEMA } from "./agent-team-schema.js";
+import { AGENT_TEAM_SCHEMA, migrateAgentTeamStartReceipts } from "./agent-team-schema.js";
 import { AgentTeamRequestMetadataSchema, type AgentTeamRequestMetadata, type StartAgentTeamRunInput } from "@gatherthread/protocol";
 
 export interface Actor {
@@ -1089,6 +1089,7 @@ export class CollaborationDatabase {
     if (!(this.sqlite.prepare("PRAGMA table_info(agent_team_controls)").all() as Array<{ name: string }>).some(row => row.name === "reserved")) {
       this.sqlite.exec("ALTER TABLE agent_team_controls ADD COLUMN reserved INTEGER NOT NULL DEFAULT 0 CHECK(reserved IN (0,1))");
     }
+    migrateAgentTeamStartReceipts(this.sqlite);
     this.initializeEventStorageUsage();
     this.sqlite.exec(REGISTRATION_SCHEMA);
     this.registration = new RegistrationStore(this.sqlite, (value) => this.tokenDigest(value), this.clock);
@@ -5631,10 +5632,13 @@ export class CollaborationDatabase {
     const table = this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_request_claims'")
       .get() as { sql?: string } | undefined;
     if (table?.sql === undefined || table.sql.includes("lease_expires_at")) return;
+    // The Team deletion fence references this table. Drop it only inside an
+    // actual legacy rebuild; the constructor reinstalls it after both migrations.
     this.sqlite.exec("PRAGMA foreign_keys = OFF");
     try {
       this.sqlite.exec(`
         BEGIN IMMEDIATE;
+        DROP TRIGGER IF EXISTS agent_team_runs_native_claim_cleanup;
         CREATE TABLE agent_request_claims_next (
           request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
           runtime_id TEXT NOT NULL REFERENCES runtimes(id),
@@ -5672,10 +5676,12 @@ export class CollaborationDatabase {
     const table = this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_request_claims'")
       .get() as { sql?: string } | undefined;
     if (table?.sql === undefined || table.sql.includes("'paused'")) return;
+    // Constructor initialization reinstalls this owned cross-table trigger.
     this.sqlite.exec("PRAGMA foreign_keys = OFF");
     try {
       this.sqlite.exec(`
         BEGIN IMMEDIATE;
+        DROP TRIGGER IF EXISTS agent_team_runs_native_claim_cleanup;
         CREATE TABLE agent_request_claims_next (
           request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
           runtime_id TEXT NOT NULL REFERENCES runtimes(id),

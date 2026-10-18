@@ -9,7 +9,8 @@ import { AgentTeamLibrary } from "../src/agent-team-library.js";
 import { ApiError } from "../src/errors.js";
 
 function fixture() {
-  const database = new CollaborationDatabase(":memory:");
+  let time = Date.now(); const clock = () => new Date(time);
+  const database = new CollaborationDatabase(":memory:", { clock });
   const service = new CollaborationService(database);
   const actor = database.bootstrapIdentity({ display_name: "Library fixture", device_name: "Fixture desktop" }).actor;
   const peer = database.createIdentity({ display_name: "Other library fixture", device_name: "Other desktop", can_create_projects: true }).actor;
@@ -21,7 +22,7 @@ function fixture() {
     { id: "lead", label: "Lead", role: "Director", prompt: "Review public results", x: 30, y: 40, target },
     { id: "worker", label: "Worker", role: "Implementer", x: 350, y: 40, target },
   ], edges: [{ id: "route", source: "lead", target: "worker", direction: "one_way" }] };
-  const teams = new AgentTeams(service, undefined, { autoStart: false });
+  const teams = new AgentTeams(service, undefined, { clock, autoStart: false });
   const library = new AgentTeamLibrary(teams);
   const key = () => `fixture-${randomUUID()}`;
   const save = (id = "saved", custom = draft, revision: number | null = null, maxCalls = 12) => library.save(actor, id, {
@@ -47,9 +48,163 @@ function fixture() {
     expected_revision: revision, content_revision: 0, idempotency_key: key(),
   });
   const close = () => { teams.close(); database.close(); };
-  return { database, service, actor, peer, session, runtime, draft, target, teams, library, key, save, readRun, finishProbe, probe, close };
+  return { database, service, actor, peer, session, runtime, draft, target, teams, library, key, save, readRun, finishProbe, probe,
+    advance: (ms: number) => { time += ms; }, close };
 }
 const code = (expected: string) => (error: unknown) => error instanceof ApiError && error.code === expected;
+
+test("repeated edit/test cycles reclaim obsolete probe caches at capacity without reusing accepted keys or erasing task history", async () => {
+  const f = fixture(); try {
+    let saved = f.save();
+    const firstInput = { expected_revision: saved.revision, content_revision: 0, idempotency_key: f.key() };
+    const first = f.library.test(f.actor, saved.id, f.session.id, firstInput); await f.finishProbe(first.run.id);
+    const firstRequestId = f.readRun(first.run.id).steps[0]!.request_event_id!; assert.ok(firstRequestId);
+    f.service.setMembership(f.actor, f.session.id, f.peer.user_id, "participant", f.key());
+    const peerRuntime = f.service.registerRuntime(f.peer, { session_id: f.session.id, device_id: f.peer.device_id,
+      harness: "codex", provider: "openai", model: "fixture-model", context_deletion_version: 1,
+      capture_fidelity: "harness_transcript", local_session_id: "peer-cache-owner" });
+    const peerPlan = structuredClone(f.draft) as AgentTeamPlan;
+    peerPlan.nodes = [{ ...peerPlan.nodes[0]!, target: { ...f.target, runtime_id: peerRuntime.id } }]; peerPlan.edges = [];
+    const peerProbe = f.teams.start(f.peer, f.session.id, { plan: peerPlan, entry_node_id: "lead", content: "Other owner's cache",
+      max_calls: 1, max_duration_minutes: 30, content_revision: 0, idempotency_key: f.key() }, { purpose: "test" }).run;
+    f.teams.control(f.peer, f.session.id, peerProbe.id, { action: "stop", idempotency_key: f.key() });
+    const task = f.teams.start(f.actor, f.session.id, { plan: f.draft as AgentTeamPlan, entry_node_id: "lead",
+      content: "Retained human task", max_calls: 1, max_duration_minutes: 30, content_revision: 0, idempotency_key: f.key() }).run;
+    f.teams.control(f.actor, f.session.id, task.id, { action: "stop", idempotency_key: f.key() });
+    for (let index = 1; index <= 105; index++) {
+      saved = f.save(saved.id, { ...f.draft, name: `Probe iteration ${index}` }, saved.revision);
+      const probe = f.probe(saved.id, saved.revision); assert.equal((await f.finishProbe(probe.run.id)).status, "completed");
+    }
+    assert.ok(Number(f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_runs WHERE purpose='test'").get()!.n) < 20,
+      "obsolete connectivity caches must not exhaust the 100-run account capacity");
+    assert.equal(f.readRun(task.id).content, "Retained human task", "ordinary task records remain explicitly clearable, never evicted for room");
+    assert.equal(f.teams.read(f.peer, f.session.id, peerProbe.id).run.content, "Other owner's cache");
+    assert.equal(f.library.read(f.actor, saved.id).test_status, "passed");
+    const receipts = Number(f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n);
+    assert.throws(() => f.library.test(f.actor, saved.id, f.session.id, firstInput), code("conflict"));
+    assert.equal(Number(f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n), receipts);
+    assert.equal(f.database.teamRequestMayExecute(firstRequestId), false);
+    assert.equal(f.database.getEvent(f.session.id, firstRequestId).type, "agent_request", "cache reclamation leaves canonical messages in place");
+  } finally { f.close(); }
+});
+
+test("probe-cache reclamation rolls back if retained task records still exhaust storage", async () => {
+  const f = fixture(); try {
+    let saved = f.save(); const old = f.probe(saved.id, saved.revision); await f.finishProbe(old.run.id);
+    saved = f.save(saved.id, { ...f.draft, name: "Replacement configuration" }, saved.revision);
+    for (let index = 0; index < 16; index++) {
+      const task = f.teams.start(f.actor, f.session.id, { plan: f.draft as AgentTeamPlan, entry_node_id: "lead",
+        content: "Retained terminal task", max_calls: 1, max_duration_minutes: 30, content_revision: 0, idempotency_key: f.key() }).run;
+      f.teams.control(f.actor, f.session.id, task.id, { action: "stop", idempotency_key: f.key() });
+    }
+    // Model valid, fully consumed per-run control budgets without publishing
+    // thousands of unrelated messages. The account is now at its 8-MiB cap.
+    f.database.sqlite.prepare("UPDATE agent_team_runs SET bytes=524288 WHERE purpose='task'").run();
+    const before = f.database.sqlite.prepare("SELECT id,bytes FROM agent_team_runs ORDER BY id").all();
+    const receipts = Number(f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n);
+    assert.throws(() => f.probe(saved.id, saved.revision), code("agent_team_storage_full"));
+    assert.deepEqual(f.database.sqlite.prepare("SELECT id,bytes FROM agent_team_runs ORDER BY id").all(), before);
+    assert.equal(Number(f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n), receipts);
+    assert.ok(f.database.sqlite.prepare("SELECT 1 FROM agent_team_runs WHERE id=?").get(old.run.id));
+  } finally { f.close(); }
+});
+
+test("recent terminal records cannot hide the older paused task that still needs Stop or Resume", () => {
+  const f = fixture(); try {
+    const start = () => f.teams.start(f.actor, f.session.id, { plan: f.draft as AgentTeamPlan,
+      entry_node_id: "lead", content: "Synthetic bounded task", max_calls: 1, max_duration_minutes: 30,
+      content_revision: 0, idempotency_key: f.key() }).run;
+    const paused = start(); f.teams.control(f.actor, f.session.id, paused.id, { action: "pause", idempotency_key: f.key() });
+    let latest: ReturnType<typeof start> | undefined;
+    for (let index = 0; index < 50; index++) {
+      f.advance(10); latest = start();
+      f.teams.control(f.actor, f.session.id, latest.id, { action: "stop", idempotency_key: f.key() });
+    }
+    const listed = f.teams.list(f.actor, f.session.id).runs;
+    assert.equal(listed.length, 50); assert.equal(listed[0]!.id, paused.id);
+    assert.equal(listed[0]!.status, "paused"); assert.equal(listed[1]!.id, latest!.id);
+    assert.equal(f.teams.control(f.actor, f.session.id, listed[0]!.id, { action: "stop", idempotency_key: f.key() }).run.status, "stopped");
+  } finally { f.close(); }
+});
+
+test("hidden connectivity history cannot push ordinary ended tasks out of the bounded run list", () => {
+  const f = fixture(); try {
+    const input = () => ({ plan: f.draft as AgentTeamPlan, entry_node_id: "lead", content: "A retained bounded run",
+      max_calls: 1, max_duration_minutes: 30, content_revision: 0, idempotency_key: f.key() });
+    const task = f.teams.start(f.actor, f.session.id, input()).run;
+    f.teams.control(f.actor, f.session.id, task.id, { action: "stop", idempotency_key: f.key() });
+    for (let index = 0; index < 51; index++) {
+      f.advance(1); const probe = f.teams.start(f.actor, f.session.id, input(), { purpose: "test" }).run;
+      f.teams.control(f.actor, f.session.id, probe.id, { action: "stop", idempotency_key: f.key() });
+    }
+    const rows = f.teams.list(f.actor, f.session.id).runs;
+    assert.equal(rows.length, 50); assert.ok(rows.some(run => run.id === task.id), "Web hides probes, so tasks must be prioritized before the list bound");
+  } finally { f.close(); }
+});
+
+test("clearing or expiring a stopped/completed saved Team cannot turn an accepted key into a second execution", async t => {
+  for (const end of ["stop-before-dispatch", "stop-after-dispatch", "complete"] as const) for (const cleanup of ["forget", "prune"] as const) {
+    await t.test(`${end} then ${cleanup}`, async () => {
+      const f = fixture(); try {
+        const saved = f.save(), probe = f.probe(saved.id, saved.revision);
+        assert.equal((await f.finishProbe(probe.run.id)).status, "completed");
+        const enabled = f.library.control(f.actor, saved.id, f.session.id, { enabled: true,
+          expected_revision: saved.revision, idempotency_key: f.key() }).team;
+        const input = { content: "SYNTHETIC_PRIVATE_TASK_NOT_IN_RECEIPT", content_revision: 0,
+          expected_revision: enabled.revision, idempotency_key: f.key() };
+        const accepted = f.library.start(f.actor, saved.id, f.session.id, input);
+        if (end !== "stop-before-dispatch") {
+          await f.teams.pump(); const dispatched = f.readRun(accepted.run.id);
+          assert.equal(dispatched.calls_used, 1);
+          if (end === "complete") {
+            const step = dispatched.steps[0]!, claim = f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, f.runtime.id);
+            f.service.completeAgentRequest(f.actor, f.session.id, step.request_event_id!, f.runtime.id, f.key(), { content:
+              `Public synthetic result.\n\n\`\`\`gatherthread-team\n${JSON.stringify({ version: 1, step_id: step.id, action: "complete" })}\n\`\`\`` },
+              f.target.model, undefined, claim.attempt_count);
+            await f.teams.pump(); assert.equal(f.readRun(accepted.run.id).status, "completed");
+          }
+        }
+        if (end !== "complete") f.teams.control(f.actor, f.session.id, accepted.run.id, { action: "stop", idempotency_key: f.key() });
+        if (end === "stop-before-dispatch") assert.equal(f.readRun(accepted.run.id).calls_used, 0);
+        if (cleanup === "forget") f.teams.forget(f.actor, f.session.id, accepted.run.id);
+        else { f.advance(31 * 86400000); f.teams.store.prune(); }
+        assert.equal(f.database.sqlite.prepare("SELECT 1 FROM agent_team_runs WHERE id=?").get(accepted.run.id), undefined);
+        const receipt = f.teams.store.startReceipt(f.actor, f.session.id, input.idempotency_key)!;
+        assert.equal(receipt.run_id, accepted.run.id); assert.equal(receipt.definition_id, saved.id);
+        for (const forbidden of [input.content, input.idempotency_key, "Review public results", "Coordinate accurately"]) {
+          assert.equal(JSON.stringify(receipt).includes(forbidden), false, "Consumed-key receipts contain no task, prompt, plan or raw key");
+        }
+        const before = {
+          head: f.database.requireSession(f.session.id).next_sequence,
+          runs: f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_runs").get()!.n,
+          receipts: f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n,
+          calls: f.database.sqlite.prepare("SELECT COALESCE(SUM(calls_used),0) AS n FROM agent_team_runs").get()!.n,
+        };
+        assert.throws(() => f.library.start(f.actor, saved.id, f.session.id, input), code("conflict"));
+        for (const changed of [{ ...input, content: "Changed task" }, { ...input, mentions: [] },
+          { ...input, expected_revision: input.expected_revision + 1 }]) {
+          assert.throws(() => f.library.start(f.actor, saved.id, f.session.id, changed), code("idempotency_conflict"));
+        }
+        assert.throws(() => f.library.start(f.actor, "different-definition", f.session.id, input), code("idempotency_conflict"));
+        assert.throws(() => f.library.test(f.actor, saved.id, f.session.id, { expected_revision: input.expected_revision,
+          content_revision: 0, idempotency_key: input.idempotency_key }), code("idempotency_conflict"));
+        // Current authority remains mandatory, and deleting/disabling a saved
+        // definition cannot make its consumed start key available again.
+        f.library.delete(f.actor, "team", saved.id, f.key());
+        assert.throws(() => f.library.start(f.actor, saved.id, f.session.id, input), code("conflict"));
+        await f.teams.pump(); await Promise.resolve();
+        assert.equal(f.database.requireSession(f.session.id).next_sequence, before.head);
+        assert.equal(f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_runs").get()!.n, before.runs);
+        assert.equal(f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n, before.receipts);
+        assert.equal(f.database.sqlite.prepare("SELECT COALESCE(SUM(calls_used),0) AS n FROM agent_team_runs").get()!.n, before.calls);
+        assert.equal(f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM hosted_agent_daily_usage").get()!.n, 0);
+        assert.equal(f.database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_share_jobs").get()!.n, 0);
+        f.database.revokeDevice(f.actor, f.actor.device_id);
+        assert.throws(() => f.library.start(f.actor, saved.id, f.session.id, input), code("unauthorized"));
+      } finally { f.close(); }
+    });
+  }
+});
 
 test("saved Team starts bind exact quote and mention inputs to both lost-ack recovery and the original canonical request", async () => {
   const f = fixture(); try {
@@ -172,6 +327,24 @@ test("edits invalidate successful tests, disable a team and fence late enable re
       { enabled: true, expected_revision: edited.revision, idempotency_key: f.key() }), code("conflict"));
     assert.throws(() => f.save(saved.id, f.draft, enabled.revision), code("conflict"));
   } finally { f.close(); }
+});
+
+test("successful connectivity remains tested after its private run is forgotten or pruned without a library poll", async t => {
+  for (const cleanup of ["forget", "prune"] as const) await t.test(cleanup, async () => {
+    const f = fixture(); try {
+      const saved = f.save(), accepted = f.probe(saved.id, saved.revision);
+      assert.equal((await f.finishProbe(accepted.run.id)).status, "completed");
+      // A browser can disconnect immediately after starting a test. No library
+      // read may be required to durably accept its verified successful result.
+      if (cleanup === "forget") f.teams.forget(f.actor, f.session.id, accepted.run.id);
+      else { f.advance(31 * 86400000); f.teams.store.prune(); }
+      const recovered = f.library.read(f.actor, saved.id);
+      assert.equal(recovered.test_status, "passed"); assert.equal(recovered.tested_revision, recovered.revision);
+      assert.equal(f.database.sqlite.prepare("SELECT 1 FROM agent_team_runs WHERE id=?").get(accepted.run.id), undefined);
+      if (cleanup === "forget") assert.equal(f.library.control(f.actor, saved.id, f.session.id,
+        { enabled: true, expected_revision: recovered.revision, idempotency_key: f.key() }).team.enabled, true);
+    } finally { f.close(); }
+  });
 });
 
 test("a stale or malformed probe cannot enable a team; editing cancels its pending native request", async () => {

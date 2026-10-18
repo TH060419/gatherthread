@@ -183,7 +183,7 @@ function sendFixture({ mode = "solo", approve = true, apiOverride } = {}) {
     element: el, canAppend: () => ({ allowed: true }), currentCodexResolution: () => ({ runtime: null }),
     DSH_HARNESS: "deepseek-harness", CLOUD_AGENT_ENTRY_ENABLED: true,
     codeSyncUi: { updateContext() {} }, cloudCodeConsent: { updateContext() {} }, cloudGithubUi: { updateContext() {} },
-    historySummaryUi: { updateContext() {} }, renderAgentProfileControls() {},
+    historySummaryUi: { updateContext() {} }, renderAgentProfileControls() {}, teamRunNotice: { update() {} },
     teamsUi: { updateContext() {}, selected: () => null, pendingStart: () => false, activeRun: () => null, t: value => value },
     currentCloudProfile: () => null, agentContextUpdateReason: () => "",
     messageActions: { metadata: () => metadata, sent() {} },

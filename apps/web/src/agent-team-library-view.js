@@ -1,9 +1,21 @@
 import { TEAM_ZH_CN } from "./agent-team-i18n.js";
+import { describeTeamActionError, formatTeamRunIssue, isTeamActionUncertain } from "./agent-team-diagnostics.js";
 import { mountTeamCanvas } from "./agent-team-canvas.js";
 import { teamConnectionChoices, teamConnectionKey, teamModelKey, teamTargetForModel, moduleSnapshot,
   sameTeamSnapshot, removeTeamNode, teamEdgeAllowed } from "./agent-team-graph.js";
 const terminal = run => !["running", "paused"].includes(run.status);
-const clarificationHelp = "Send a chat message in this session explaining how to proceed, then select Continue after clarification. To change identities, prompts or data flows, stop this task, edit and retest the Team, then start a new task.";
+// Compare configuration content, independent of object key order or optional
+// empty prompts. Metadata/control revisions are not edits to the configuration.
+const configurationKey = (draft, limits) => JSON.stringify({ draft: { ...draft,
+  team_prompt: draft.team_prompt ?? "", entry_node_id: draft.entry_node_id ?? draft.nodes[0]?.id,
+  nodes: draft.nodes.map(node => ({ ...node, prompt: node.prompt ?? "" })) }, ...limits },
+(_key, value) => value && typeof value === "object" && !Array.isArray(value)
+  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+// Match the server's normalization of editable fields. Team rules preserve their
+// whitespace; module names, identities and prompts are trimmed by their schemas.
+const acceptedConfigurationKey = (draft, limits) => configurationKey({ ...draft, name: draft.name.trim(),
+  nodes: draft.nodes.map(node => ({ ...node, label: node.label.trim(), role: (node.role ?? "").trim(), prompt: node.prompt?.trim() })) },
+{ max_calls: limits.max_calls, max_duration_minutes: limits.max_duration_minutes });
 
 export function mountAgentTeams({ document: doc, api, hostButton, getContext, onChange = () => {},
   refreshSources = async () => {},
@@ -13,10 +25,10 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   const el = (tag, className = "", text = "") => { const node = doc.createElement(tag); node.className = className;
     node.setAttribute("data-i18n-skip", ""); node.textContent = text; return node; };
   const button = (text, action, className = "team-glass") => { const node = el("button", className, t(text));
-    if (text) translations.push(() => { node.textContent = t(text); });
+    if (text) node.dataset.teamI18n = text;
     node.type = "button"; if (action) node.addEventListener("click", action); return node; };
   const field = (text, input) => { const wrapper = el("label", "team-field"), label = el("span", "", t(text));
-    translations.push(() => { label.textContent = t(text); }); wrapper.append(label, input); return wrapper; };
+    label.dataset.teamI18n = text; wrapper.append(label, input); return wrapper; };
   const input = (name, maxLength) => { const node = el("input"); node.id = `team-${name}`; if (maxLength) node.maxLength = maxLength; return node; };
   const dialog = el("dialog", "create-dialog agent-team-dialog"); dialog.id = "agent-team-dialog";
   dialog.setAttribute("aria-labelledby", "agent-team-title");
@@ -74,9 +86,11 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   secondaryTitle.id = "team-secondary-title"; secondary.setAttribute("aria-labelledby", secondaryTitle.id);
   const secondaryHeader = el("header", "team-heading"); secondaryHeader.append(secondaryTitle, button("Close", () => secondary.close(), "text-button")); secondary.append(secondaryHeader, secondaryBody); doc.body.append(secondary);
 
-  let scope = "", generation = 0, epoch = 0, readBusy = false, refreshTimer, teams = [], favorites = [], runs = [],
-    editId = null, draft = null, budgets = null, baseRevision = null, dirty = false, draftVersion = 0, selectedKey = "", returnFocus, catalogSignature = "";
+  let scope = "", generation = 0, epoch = 0, readBusy = false, refreshTimer, teams = [], favorites = [], runs = [], testRuns = [], runRefreshFailed = false, hadTaskActivity = false,
+    editId = null, draft = null, budgets = null, baseRevision = null, baseline = null, dirty = false, draftVersion = 0, selectedKey = "", returnFocus, catalogSignature = "", writableState, secondaryMode = "", refreshFavoriteControl = null;
   const intents = new Map();
+  const actionKinds = new WeakMap(), testReads = new Map();
+  let displayedProblem = null;
   const canvas = mountTeamCanvas({ document: doc, host: graphHost, t, makeId: makeKey, getDraft: () => draft,
     onChange: changed, onSelection: () => renderInspector() });
   const context = () => getContext() ?? {};
@@ -85,23 +99,57 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   const pendingFor = id => [...intents.values()].filter(intent => intent.id === id);
   const pendingEnable = id => pendingFor(id).some(intent => intent.kind === "control" && intent.input.enabled);
   const canEnable = team => team?.test_status === "passed" && team.tested_revision === team.revision;
-  function showError(problem) {
-    const messages = { conflict: "The configuration changed elsewhere. Your unsaved edits are kept. Reopen the Team to load the latest version.",
-      agent_team_incomplete: "Choose an Agent, model and reasoning effort for every module.", agent_team_disconnected: "Connect every module to the start module.",
-      agent_team_limit: "Team limit reached (5). Delete one to add another.", agent_team_favorite_limit: "Favorite limit reached (5). Remove one to add another.",
-      agent_team_target_unavailable: "This saved connection is unavailable. Choose an exact Agent and model again.",
-      agent_team_clarification_required: clarificationHelp,
-      validation_error: "Review the Team configuration and try again." };
-    error.textContent = t(messages[problem?.code] ?? "Unable to complete this Team action.");
+  function supersedeDefinitionActions(id) {
+    for (const [slot, intent] of intents) if (intent.id === id && ["save", "control", "test"].includes(intent.kind)) {
+      intent.superseded = true;
+      if (!intent.busy) intents.delete(slot);
+    }
   }
-  function mergeTeam(team, own = false) {
+  function supersedeFavoriteCreation(id) {
+    for (const [slot, intent] of intents) if (intent.kind === "favorite" && intent.id === id && intent.input.module) {
+      intent.superseded = true;
+      if (!intent.busy) intents.delete(slot);
+    }
+  }
+  function fenceClearedRun(id) {
+    // Remember the fence only on currently pending replies, not in an
+    // ever-growing tab-wide tombstone list. Accepted tasks still acknowledge
+    // their original composer intent without restoring the cleared run cache.
+    for (const intent of intents.values()) if (intent.kind === "start" || intent.kind === "run" && intent.id === id) {
+      (intent.clearedRunIds ??= new Set()).add(id);
+    }
+  }
+  function observeRuns(ids, acceptedIntent) {
+    // Run summaries have no ordering revision. A delayed acceptance ACK must
+    // not roll a subsequently observed status back, including Pause/Resume on
+    // another device. Keep this fence only on outstanding replies; accepting
+    // their receipts/composer callbacks remains independent of cache updates.
+    for (const intent of intents.values()) if (intent !== acceptedIntent && ["start", "run"].includes(intent.kind)) {
+      for (const id of ids) if (intent.kind === "start" || intent.id === id) (intent.observedRunIds ??= new Set()).add(id);
+    }
+  }
+  function pendingCanonicalRunId(pending, ctx) {
+    if (!pending) return undefined;
+    return ctx.events?.find(item => item.type === "agent_request" && item.actor?.id === ctx.userId
+      && (item.sessionId ?? item.session_id) === ctx.sessionId && !item.deleted && !item.contentUnavailable
+      && !pending.previousEvents?.has(item.id) && item.payload?.agent_team?.purpose !== "test"
+      && item.payload?.agent_team?.start_idempotency_key === pending.input.idempotency_key
+      && item.payload?.agent_team?.task_content === pending.input.content)?.payload.agent_team.run_id;
+  }
+  function showError(problem) {
+    displayedProblem = problem;
+    error.textContent = describeTeamActionError(problem, actionKinds.get(problem), t);
+  }
+  function mergeTeam(team) {
     const index = teams.findIndex(item => item.id === team.id);
     if (index >= 0 && teams[index].revision > team.revision) return;
     if (index < 0) teams.push(team); else teams[index] = team;
-    if (editId === team.id && (!dirty || own)) baseRevision = team.revision;
+    if (editId === team.id && baseline === configurationKey(team.draft,
+      { max_calls: team.max_calls, max_duration_minutes: team.max_duration_minutes })) baseRevision = team.revision;
   }
   function updateContext() {
     const next = context(); hostButton.disabled = !next.userId || !next.projectId || !next.sessionId || !next.writable || !api.saveAgentTeam;
+    const permissionChanged = writableState !== next.writable; writableState = next.writable;
     hostButton.textContent = t("Agent teams");
     const signature = JSON.stringify(teamConnectionChoices(next, t));
     if (scope === next.scope) {
@@ -112,31 +160,60 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
         if (replacement) { replacement.focus({ preventScroll: true });
           if (typeof start === "number") replacement.setSelectionRange?.(start, end); }
       }
+      if (permissionChanged) render();
       return;
     }
     catalogSignature = signature;
-    scope = next.scope; generation++; epoch++; teams = []; favorites = []; runs = []; intents.clear(); selectedKey = "";
-    editId = null; dirty = false; draft = null; clearTimeout(refreshTimer); readBusy = false;
+    scope = next.scope; generation++; epoch++; teams = []; favorites = []; runs = []; testRuns = []; testReads.clear(); intents.clear(); selectedKey = "";
+    runRefreshFailed = false; hadTaskActivity = false; displayedProblem = null;
+    editId = null; dirty = false; draft = null; baseline = null; clearTimeout(refreshTimer); readBusy = false;
     if (secondary.open) secondary.close(); if (dialog.open) dialog.close();
+    refreshFavoriteControl = null; secondaryMode = ""; secondaryTitle.textContent = ""; secondaryBody.replaceChildren();
+    nameInput.value = ""; calls.value = ""; minutes.value = ""; rulesInput.value = ""; inspector.replaceChildren();
+    overview.hidden = false; editor.hidden = true; title.textContent = t("My Agent teams"); error.textContent = ""; status.textContent = "";
+    canvas.select(null); canvas.render(); render();
     if (next.userId && next.sessionId) queueMicrotask(() => void refresh());
   }
   async function refresh() {
     updateContext(); const ctx = context(), gen = generation, before = epoch;
     if (!ctx.userId || !ctx.sessionId || readBusy) return; readBusy = true;
+    // Only a marker already visible before this GET proves that its missing
+    // private run has ended/been cleared. A marker arriving while an older GET
+    // is in flight must wait for the next read, or a new start could be fenced.
+    const pendingRunId = pendingCanonicalRunId(intents.get("start-task"), ctx);
     try {
       const results = await Promise.allSettled([api.listAgentTeams(), api.listTeamRuns(ctx.sessionId)]);
       if (!current(gen) || before !== epoch) return;
       if (results[0].status === "fulfilled") {
+        for (const old of teams) if (!results[0].value.teams.some(team => team.id === old.id)) supersedeDefinitionActions(old.id);
+        for (const old of favorites) if (!results[0].value.modules.some(item => item.id === old.id)) supersedeFavoriteCreation(old.id);
         teams = results[0].value.teams; favorites = results[0].value.modules;
+        for (const id of testReads.keys()) if (!teams.some(team => team.test_run_id === id)) testReads.delete(id);
         const fresh = saved();
         if (!dirty && fresh && fresh.revision !== baseRevision) {
           baseRevision = fresh.revision; draft = structuredClone(fresh.draft);
           budgets = { max_calls: fresh.max_calls, max_duration_minutes: fresh.max_duration_minutes };
+          baseline = configurationKey(draft, budgets);
           nameInput.value = draft.name; calls.value = String(budgets.max_calls); minutes.value = String(budgets.max_duration_minutes);
           rulesInput.value = draft.team_prompt; canvas.render(); renderInspector();
         }
       } else if (dialog.open) error.textContent = t("Unable to refresh Teams.");
-      if (results[1].status === "fulfilled") runs = results[1].value.runs.filter(run => run.purpose !== "test");
+      if (results[1].status === "fulfilled") {
+        runRefreshFailed = false;
+        const fresh = results[1].value.runs.filter(run => run.purpose !== "test");
+        if (fresh.length) hadTaskActivity = true;
+        const currentTests = results[1].value.runs.filter(run => run.purpose === "test");
+        testRuns = [...currentTests, ...testRuns.filter(run => !currentTests.some(item => item.id === run.id)
+          && teams.some(team => team.test_run_id === run.id))];
+        for (const old of runs) if (!fresh.some(run => run.id === old.id)) fenceClearedRun(old.id);
+        if (pendingRunId && !fresh.some(run => run.id === pendingRunId)) fenceClearedRun(pendingRunId);
+        observeRuns(fresh.map(run => run.id));
+        runs = fresh;
+      } else {
+        runRefreshFailed = true;
+        if ([401, 403, 404].includes(results[1].reason?.status)) { runs = []; testRuns = []; }
+      }
+      if (saved()?.test_status === "failed") void loadTestFailure(saved());
       render(); onChange();
     } finally {
       if (current(gen)) { readBusy = false; clearTimeout(refreshTimer);
@@ -146,23 +223,31 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   async function attempt(intent) {
     if (intent.generation !== generation || intent.scope !== scope || context().scope !== scope) return;
     if (intent.busy) return intent.promise;
-    const gen = generation; intent.busy = true; epoch++; render(); error.textContent = "";
+    // An exact-key retry returns the server's current state. Only observations
+    // arriving during this transport attempt can supersede that new receipt.
+    const gen = generation; intent.busy = true; delete intent.observedRunIds; epoch++; render(); error.textContent = "";
     intent.promise = (async () => {
       try {
         const result = await intent.call();
         if (!current(gen)) return;
-        if (result.team) mergeTeam(result.team, true);
-        if (result.favorite && !favorites.some(item => item.id === result.favorite.id)) favorites.push(result.favorite);
-        if (result.run) { if (result.run.purpose !== "test") {
+        if (intent.kind === "delete") supersedeDefinitionActions(intent.id);
+        if (result.team && !intent.superseded) mergeTeam(result.team);
+        if (result.favorite && !intent.superseded && !favorites.some(item => item.id === result.favorite.id)) favorites.push(result.favorite);
+        if (result.run?.purpose === "test") testRuns = [result.run, ...testRuns.filter(run => run.id !== result.run.id)];
+        if (result.run && !intent.clearedRunIds?.has(result.run.id) && !intent.observedRunIds?.has(result.run.id)) { if (result.run.purpose !== "test") {
           const index = runs.findIndex(item => item.id === result.run.id);
           if (index < 0) runs.unshift(result.run); else if (!terminal(runs[index]) || terminal(result.run)) runs[index] = result.run;
+          observeRuns([result.run.id], intent);
         } }
-        intent.accept?.(result); intents.delete(intent.slot); status.textContent = t("Connection recovered.");
-        return result;
+        if (!intent.superseded) intent.accept?.(result);
+        intents.delete(intent.slot); status.textContent = t("Connection recovered.");
+        return intent.superseded ? undefined : result;
       } catch (problem) {
-        if (!current(gen)) throw problem;
-        if (problem.status >= 400 && problem.status < 500) intents.delete(intent.slot);
+        if (!current(gen)) return;
+        if (intent.superseded) { intents.delete(intent.slot); return; }
+        if (!isTeamActionUncertain(problem)) intents.delete(intent.slot);
         else intent.uncertain = true;
+        if (problem && typeof problem === "object") actionKinds.set(problem, intent.kind);
         showError(problem); throw problem;
       } finally { if (current(gen)) { intent.busy = false; epoch++; render(); onChange(); void refresh(); } }
     })(); return intent.promise;
@@ -170,7 +255,7 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   function mutate(slot, kind, id, value, call, accept) {
     const previous = intents.get(slot); if (previous) return attempt(previous);
     const intent = { slot, kind, id, generation, scope, input: structuredClone(value), call: () => call(intent.input), accept, busy: false };
-    intents.set(slot, intent); return attempt(intent);
+    intents.set(slot, intent); if (kind === "start") hadTaskActivity = true; return attempt(intent);
   }
   async function recoverActions() {
     const gen = generation;
@@ -178,22 +263,47 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       if (!intent.busy) { try { await attempt(intent); } catch { /* The original action remains reviewable. */ } } }
   }
   function changed() {
-    if (!draft) return; dirty = true; draftVersion++; error.textContent = "";
-    if (saved()?.enabled || pendingEnable(editId)) void control(saved(), false).catch(() => {});
+    if (!draft) return; updateDirty(); draftVersion++; error.textContent = ""; displayedProblem = null;
+    if (dirty && (saved()?.enabled || pendingEnable(editId))) void control(saved(), false).catch(() => {});
     renderButtons();
   }
+  function updateDirty() {
+    const stored = saved(), key = configurationKey(draft, budgets);
+    // A remote edit must not lend its successful test to an older visible draft.
+    // Keep the editor's original CAS revision until that configuration is loaded.
+    dirty = key !== baseline || Boolean(stored && key !== configurationKey(stored.draft,
+      { max_calls: stored.max_calls, max_duration_minutes: stored.max_duration_minutes }));
+  }
   async function saveCurrent() {
-    if (!draft || !editId) throw new Error(t("Connect and sign in before configuring Teams."));
+    if (!draft || !editId) throw Object.assign(new Error("Team editor unavailable"), { code: "unauthorized", status: 401 });
     const id = editId, gen = generation;
-    const assertEditor = () => { if (!current(gen) || editId !== id || !draft) throw new Error(t("Unable to complete this Team action.")); };
-    const stop = intents.get(`disable:${id}`); if (stop) { await attempt(stop); assertEditor(); }
-    const previous = intents.get(`save:${id}`); if (previous) { await attempt(previous); assertEditor(); if (!dirty) return saved(); }
+    const sameEditor = () => current(gen) && editId === id && draft;
+    const stop = intents.get(`disable:${id}`); if (stop) { await attempt(stop); if (!sameEditor()) return; }
+    const previous = intents.get(`save:${id}`); if (previous) { await attempt(previous); if (!sameEditor()) return; if (!dirty) return saved(); }
     if (!dirty && saved()) return saved();
-    if (!nameInput.reportValidity() || !calls.reportValidity() || !minutes.reportValidity() || !draft.name.trim()) throw new Error(t("Review the Team configuration and try again."));
+    if (!nameInput.reportValidity() || !calls.reportValidity() || !minutes.reportValidity() || !draft.name.trim()) throw Object.assign(new Error("Invalid Team configuration"), { code: "validation_error", status: 422 });
     const version = draftVersion;
     const payload = { draft: structuredClone(draft), ...budgets, expected_revision: baseRevision, idempotency_key: makeKey("team-save") };
     const response = await mutate(`save:${id}`, "save", id, payload, value => api.saveAgentTeam(id, value), result => {
-      if (editId === id && draftVersion === version) { dirty = false; draft = structuredClone(result.team.draft); }
+      if (editId === id) {
+        // Library receipts identify the accepted mutation but can return a
+        // newer current definition. Do not lend its revision to a newer local
+        // draft that was never based on those unseen remote changes.
+        if (draftVersion !== version && acceptedConfigurationKey(payload.draft, payload)
+          !== acceptedConfigurationKey(result.team.draft, result.team)) {
+          updateDirty();
+          throw Object.assign(new Error("Team configuration changed during Save recovery"), { status: 409, code: "conflict" });
+        }
+        baseline = configurationKey(result.team.draft, { max_calls: result.team.max_calls, max_duration_minutes: result.team.max_duration_minutes });
+        baseRevision = result.team.revision;
+        if (draftVersion === version) {
+          draft = structuredClone(result.team.draft);
+          budgets = { max_calls: result.team.max_calls, max_duration_minutes: result.team.max_duration_minutes };
+          nameInput.value = draft.name; calls.value = String(budgets.max_calls); minutes.value = String(budgets.max_duration_minutes);
+          rulesInput.value = draft.team_prompt; canvas.render(); renderInspector();
+        }
+        updateDirty();
+      }
     });
     return response?.team;
   }
@@ -220,7 +330,7 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     return mutate(`test:${id}`, "test", id, { expected_revision: team.revision, content_revision: ctx.contentRevision ?? 0,
       solo_transfer_ack: ctx.sessionMode === "solo", idempotency_key: makeKey("team-test") }, value => api.executeAgentTeam(ctx.sessionId, id, value, true), result => {
         const stored = teams.find(item => item.id === id);
-        if (stored) Object.assign(stored, { enabled: false, tested_revision: null, test_run_id: result.run.id, test_session_id: ctx.sessionId,
+        if (stored?.revision === team.revision) Object.assign(stored, { enabled: false, tested_revision: null, test_run_id: result.run.id, test_session_id: ctx.sessionId,
           test_status: ["completed", "running"].includes(result.run.status) ? "running" : "failed" });
       });
   }
@@ -230,8 +340,20 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     editId = team?.id ?? makeKey("team"); baseRevision = team?.revision ?? null;
     draft = team ? structuredClone(team.draft) : { name: t("New Agent Team"), team_prompt: "", nodes: [], edges: [] };
     budgets = { max_calls: team?.max_calls ?? 12, max_duration_minutes: team?.max_duration_minutes ?? 30 };
+    baseline = team ? configurationKey(draft, budgets) : null;
     dirty = !team; draftVersion++; nameInput.value = draft.name; calls.value = String(budgets.max_calls); minutes.value = String(budgets.max_duration_minutes); rulesInput.value = draft.team_prompt;
-    overview.hidden = true; editor.hidden = false; title.textContent = t("Edit my Agent team"); canvas.select(null); canvas.render(); renderInspector(); renderButtons(); nameInput.focus();
+    overview.hidden = true; editor.hidden = false; title.textContent = t("Edit my Agent team"); canvas.select(null); canvas.resetView(draft.entry_node_id); renderInspector(); renderButtons(); nameInput.focus();
+    if (team?.test_status === "failed") void loadTestFailure(team);
+  }
+  async function loadTestFailure(team) {
+    if (!team?.test_run_id || !team.test_session_id || !api.getTeamRun || testRuns.some(run => run.id === team.test_run_id)
+      || testReads.has(team.test_run_id) && Date.now() - testReads.get(team.test_run_id) < 12000) return;
+    const gen = generation, id = team.test_run_id; testReads.set(id, Date.now());
+    try {
+      const result = await api.getTeamRun(team.test_session_id, id);
+      if (!current(gen) || result.run?.purpose !== "test" || result.run.id !== id || !teams.some(item => item.test_run_id === id)) return;
+      testRuns = [result.run, ...testRuns.filter(run => run.id !== id)]; renderButtons(); onChange();
+    } catch { /* A removed record or changed access cannot expose an old private failure. */ }
   }
   function insertModule(snapshot) {
     if (!draft || draft.nodes.length >= 16) { error.textContent = t("Maximum 16 modules and 32 data flows."); return; }
@@ -240,26 +362,51 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       && Math.abs(node.y - (70 + Math.floor(slot / 4) * 180)) < 130)) slot++;
     draft.nodes.push({ ...(snapshot ? structuredClone(snapshot) : { label: `${t("Module")} ${index + 1}`, role: "", target: null }),
       id, x: 60 + slot % 4 * 290, y: 70 + Math.floor(slot / 4) * 180 });
-    if (!draft.entry_node_id) draft.entry_node_id = id; changed(); canvas.select({ kind: "node", id }); canvas.reveal(id); renderInspector();
+    if (!draft.entry_node_id) draft.entry_node_id = draft.nodes[0].id; changed(); canvas.select({ kind: "node", id }); canvas.reveal(id); renderInspector();
   }
   function closeDialog() {
     if (dirty && !confirm(t("Discard unsaved changes?"))) return;
     dirty = false; editId = null; draft = null;
-    if (secondary.open) secondary.close(); dialog.close(); returnFocus?.focus();
+    if (secondary.open) secondary.close(); dialog.close(); restoreFocus();
   }
+  function restoreFocus() {
+    if (dialog.open || doc.querySelector?.("dialog[open]")) return;
+    for (const candidate of [returnFocus, hostButton, doc.getElementById("mobile-tools-button"), doc.getElementById("mobile-compose-tools-button")]) {
+      if (!candidate || candidate === doc.body || candidate === doc.documentElement || candidate.isConnected === false
+        || candidate.disabled || candidate.closest?.("[hidden], [inert], dialog:not([open])") || !candidate.getClientRects?.().length) continue;
+      const visibility = doc.defaultView?.getComputedStyle(candidate).visibility;
+      if (visibility === "hidden" || visibility === "collapse") continue;
+      candidate.focus({ preventScroll: true });
+      if (doc.activeElement === candidate) return;
+    }
+  }
+  // WebKit can restore BODY when the opener lives in a now-closed mobile
+  // tools dialog. Run again after the native close focus steps have completed.
+  dialog.addEventListener("close", restoreFocus);
   dialog.addEventListener("cancel", event => { event.preventDefault(); closeDialog(); });
   hostButton.addEventListener("click", () => { updateContext(); if (hostButton.disabled) return; returnFocus = doc.activeElement;
     overview.hidden = false; editor.hidden = true; title.textContent = t("My Agent teams"); dialog.showModal(); render(); void refresh();
     const gen = generation; void refreshSources().then(() => { if (current(gen)) updateContext(); }).catch(() => {}); });
   function selectField(text, choices, value, change, disabled = false) {
-    const select = el("select"); select.setAttribute("aria-label", t(text));
+    const select = el("select"); select.id = `team-selection-${text.toLowerCase().replaceAll(" ", "-")}`; select.setAttribute("aria-label", t(text));
     for (const item of choices) { const option = el("option", "", item.label); option.value = item.key; option.disabled = item.available === false; select.append(option); }
     select.value = value ?? ""; if (!choices.some(item => item.key === value)) select.selectedIndex = -1;
     select.disabled = disabled || !choices.length;
     select.addEventListener("change", () => change(select.value)); return field(text, select);
   }
+  function restoreReplacedFocus(previous, replacement) {
+    if (!previous || previous.isConnected !== false || !dialog.open || secondary.open
+      || ![previous, doc.body].includes(doc.activeElement) || !replacement || replacement.disabled || !replacement.getClientRects?.().length) return;
+    replacement.focus({ preventScroll: true });
+    if (typeof previous.selectionStart === "number") replacement.setSelectionRange?.(previous.selectionStart, previous.selectionEnd);
+  }
   function renderInspector() {
-    inspector.replaceChildren(); if (!draft) return;
+    const previous = doc.activeElement?.closest(".team-inspector") === inspector ? doc.activeElement : null;
+    renderInspectorFields();
+    if (previous?.id) restoreReplacedFocus(previous, doc.getElementById(previous.id));
+  }
+  function renderInspectorFields() {
+    refreshFavoriteControl = null; inspector.replaceChildren(); if (!draft) return;
     const selected = canvas.selection();
     if (!selected) { inspector.append(el("p", "field-help", t("Select a module or data flow to edit it."))); return; }
     if (selected.kind === "node") {
@@ -283,21 +430,22 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
         const next = teamTargetForModel(model, value); if (!next) return; node.target = next; changed();
       }, !efforts.length)); inspector.append(profileFields);
       if (!efforts.length) inspector.append(el("p", "field-help", t("No reasoning choices advertised.")));
-      if (node.target && (!connection || !connection.available || !model || (node.target.reasoning_effort && !efforts.includes(node.target.reasoning_effort)))) {
+      if (node.target && (!connection || !connection.available || !model || model.available === false || (node.target.reasoning_effort && !efforts.includes(node.target.reasoning_effort)))) {
         inspector.append(el("p", "team-notice", t("This saved connection is unavailable. Choose an exact Agent and model again.")));
       }
       const role = input(`identity-${node.id}`, 1000); role.value = node.role;
       role.placeholder = t("Responsibilities and boundaries of this role.");
       role.addEventListener("input", () => { node.role = role.value; changed(); canvas.render(); refreshFavoriteState(); });
-      const prompt = el("textarea"); prompt.maxLength = 2000; prompt.rows = 3; prompt.value = node.prompt ?? "";
+      const prompt = el("textarea"); prompt.id = `team-prompt-${node.id}`; prompt.maxLength = 2000; prompt.rows = 3; prompt.value = node.prompt ?? "";
       prompt.placeholder = t("How to work within this role and format the response.");
       prompt.addEventListener("input", () => { node.prompt = prompt.value; changed(); refreshFavoriteState(); }); inspector.append(field("Identity", role), field("Prompt", prompt));
       const nodeActions = el("div", "team-inspector-actions"); let matched = favorites.find(item => sameTeamSnapshot(item.module, moduleSnapshot(node)));
       const favoriteButton = button(matched ? "Unfavorite" : "Favorite", () => {
         favoriteButton.disabled = true;
         if (matched) {
-          void mutate(`favorite:${matched.id}`, "favorite", matched.id, { idempotency_key: makeKey("team-unfavorite") },
-            value => api.deleteTeamItem("module", matched.id, value), () => { favorites = favorites.filter(item => item.id !== matched.id); renderInspector(); }).catch(showError);
+          const id = matched.id;
+          void mutate(`favorite:${id}`, "favorite", id, { idempotency_key: makeKey("team-unfavorite") },
+            value => api.deleteTeamItem("module", id, value), () => { supersedeFavoriteCreation(id); favorites = favorites.filter(item => item.id !== id); renderInspector(); }).catch(showError);
         } else {
           if (favorites.length >= 5) { error.textContent = t("Favorite limit reached (5). Remove one to add another."); return; }
           const id = makeKey("favorite");
@@ -308,9 +456,10 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       function refreshFavoriteState() {
         matched = favorites.find(item => sameTeamSnapshot(item.module, moduleSnapshot(node)));
         favoriteButton.textContent = t(matched ? "Unfavorite" : "Favorite");
-        favoriteButton.disabled = !node.label.trim() || (!matched && favorites.length >= 5) || intents.has(`favorite-node:${node.id}`);
+        favoriteButton.disabled = !node.label.trim() || (!matched && favorites.length >= 5) || intents.has(`favorite-node:${node.id}`)
+          || Boolean(matched && intents.has(`favorite:${matched.id}`));
       }
-      refreshFavoriteState();
+      favoriteButton.id = "team-module-favorite"; refreshFavoriteControl = refreshFavoriteState; refreshFavoriteState();
       const entry = button("Start from this module", () => { draft.entry_node_id = node.id; changed(); canvas.render(); renderInspector(); }, "text-button");
       entry.disabled = (draft.entry_node_id ?? draft.nodes[0]?.id) === node.id;
       const remove = button("Delete module", () => { draft = removeTeamNode(draft, node.id); canvas.select(null); changed(); canvas.render(); renderInspector(); }, "text-button team-danger");
@@ -335,17 +484,17 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     }
   }
   function showRelationships() {
-    secondaryTitle.textContent = t("Configuration relationships"); secondaryBody.replaceChildren();
+    secondaryMode = "relationships"; secondaryTitle.textContent = t("Configuration relationships"); secondaryBody.replaceChildren();
     const relationships = el("ol", "team-relationships");
     for (const edge of draft?.edges ?? []) {
       const from = draft.nodes.find(node => node.id === edge.source), to = draft.nodes.find(node => node.id === edge.target);
       relationships.append(el("li", "", `${from?.label ?? edge.source} ${edge.direction === "bidirectional" ? "↔" : "→"} ${to?.label ?? edge.target}`));
     }
     if (relationships.children.length) secondaryBody.append(relationships); else secondaryBody.append(el("p", "field-help", t("No data flows yet.")));
-    secondary.showModal();
+    if (!secondary.open) secondary.showModal();
   }
   function showFavorites() {
-    secondaryTitle.textContent = `${t("Favorite modules")} (${favorites.length}/5)`; secondaryBody.replaceChildren();
+    secondaryMode = "favorites"; secondaryTitle.textContent = `${t("Favorite modules")} (${favorites.length}/5)`; secondaryBody.replaceChildren();
     if (!favorites.length) secondaryBody.append(el("p", "field-help", t("No favorite modules yet.")));
     const favoriteList = el("ul", "team-library-list");
     for (const favorite of favorites) {
@@ -353,13 +502,13 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       choose.textContent = favorite.module.label;
       const remove = button("Delete", () => { void mutate(`favorite:${favorite.id}`, "favorite", favorite.id,
         { idempotency_key: makeKey("team-unfavorite") }, value => api.deleteTeamItem("module", favorite.id, value), () => {
-          favorites = favorites.filter(item => item.id !== favorite.id); showFavoritesContent(); renderInspector();
+          supersedeFavoriteCreation(favorite.id); favorites = favorites.filter(item => item.id !== favorite.id); showFavoritesContent(); renderInspector();
         }).catch(showError); }, "text-button team-danger");
       remove.setAttribute("aria-label", `${t("Delete")}: ${favorite.module.label}`); row.append(choose, remove); favoriteList.append(row);
     }
     secondaryBody.append(favoriteList); if (!secondary.open) secondary.showModal();
   }
-  const showFavoritesContent = () => { if (secondary.open) secondary.close(); showFavorites(); };
+  const showFavoritesContent = () => { if (dialog.open && secondary.open && secondaryMode === "favorites") showFavorites(); };
   function renderButtons() {
     const team = saved(), pending = pendingFor(editId), stopping = intents.get(`disable:${editId}`), enabling = pendingEnable(editId);
     const saving = pending.some(intent => intent.kind === "save");
@@ -368,20 +517,26 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     addFavorite.disabled = !favorites.length || draft?.nodes.length >= 16;
     const testing = team?.test_status === "running" || pending.some(intent => intent.kind === "test");
     testButton.textContent = t(testing ? "Test running…" : !dirty && canEnable(team) ? "Successfully connected" : "Test");
-    testButton.disabled = saving || testing || !draft?.nodes.length || (!dirty && canEnable(team));
+    testButton.disabled = !context().writable || saving || testing || !draft?.nodes.length || (!dirty && canEnable(team));
     const active = team?.enabled || enabling;
     enableButton.textContent = t(stopping?.busy ? "Stopping…" : active ? "Disable" : "Enable");
     enableButton.className = `team-glass ${active ? "team-danger" : "team-enable"}`;
     // A pending enable does not block independent disable, even before its acknowledgement.
-    enableButton.disabled = active ? Boolean(stopping?.busy) : dirty || !canEnable(team) || saving || testing;
+    enableButton.disabled = active ? Boolean(stopping?.busy) : !context().writable || dirty || !canEnable(team) || saving || testing;
     testState.textContent = t(dirty ? "Changes require a new test." : testing ? "Test running…" : team?.test_status === "failed"
       ? "Test failed. Review the modules and try again." : canEnable(team) ? "Successfully connected" : "Not tested");
+    if (!dirty && ["running", "failed"].includes(team?.test_status) && !pending.some(intent => intent.kind === "test")) {
+      const diagnostic = formatTeamRunIssue(testRuns.find(run => run.id === team.test_run_id), t);
+      if (diagnostic) testState.textContent = `${diagnostic.text} ${diagnostic.advice}`;
+      else if (team.test_status === "failed") testState.textContent = t("Test failed. The detailed record is unavailable; check the connections and retest. Test calls use provider and sharing allowances.");
+    }
     recover.hidden = ![...intents.values()].some(intent => intent.uncertain && !intent.busy);
     status.textContent = [...intents.values()].some(intent => intent.uncertain) ? t("The last action is unconfirmed. Check it before repeating it.") : "";
   }
   function renderRuns() {
     runList.replaceChildren();
-    if (!runs.length) runList.append(el("p", "field-help", t("No Team tasks in this session yet.")));
+    if (runRefreshFailed) { const notice = runNotice(); if (notice) runList.append(el("p", "field-help team-run-refresh-error", `${notice.text} ${notice.advice}`)); }
+    if (!runs.length) runList.append(el("p", "field-help", t("No private run records in this session.")));
     for (const run of runs.slice(0, 12)) {
       const row = el("article", "team-run-row"), summary = el("p");
       const needsClarification = run.status === "paused" && run.error_code === "agent_team_instruction_conflict";
@@ -391,33 +546,55 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
         ? [[run.error_code === "agent_timeout" ? "continue" : "resume", needsClarification ? "Continue after clarification" : run.error_code === "agent_timeout" ? "Continue" : "Resume"], ["stop", "Stop"]] : [];
       for (const [action, label] of available) {
         const controlButton = button(label, () => void controlRun(run, action).catch(showError), action === "stop" ? "team-glass team-danger" : "team-glass");
+        controlButton.dataset.teamControl = `run:${run.id}:${action}`;
         controlButton.disabled = !context().writable || Boolean(intents.get(`run-${action}:${run.id}`)?.busy); actions.append(controlButton);
       }
+      if (terminal(run) && api.forgetTeamRun) {
+        const slot = `forget:${run.id}`, clear = button("Clear private record", () => {
+          if (!confirm(t("Clear this private run record? Conversation messages will stay."))) return;
+          const ctx = context();
+          void mutate(slot, "forget", run.id, {}, () => api.forgetTeamRun(ctx.sessionId, run.id), () => {
+            fenceClearedRun(run.id); runs = runs.filter(item => item.id !== run.id);
+          }).catch(showError);
+        }, "text-button team-danger");
+        clear.dataset.teamControl = `run:${run.id}:forget`; clear.disabled = !context().writable || Boolean(intents.get(slot)?.busy); actions.append(clear);
+      }
       row.append(summary);
-      if (needsClarification) row.append(el("p", "field-help", t(clarificationHelp)));
+      const diagnostic = formatTeamRunIssue(run, t);
+      if (diagnostic) {
+        row.append(el("p", "field-help team-run-reason", diagnostic.text));
+        row.append(el("p", "field-help team-run-advice", diagnostic.advice));
+      }
       row.append(actions); runList.append(row);
     }
   }
   function render() {
+    const previous = doc.activeElement, focusKey = previous?.dataset?.teamControl;
     list.replaceChildren(); count.textContent = `${teams.length}/5`;
     if (!teams.length) list.append(el("li", "field-help", t("No Teams saved yet. Start by adding one.")));
     for (const team of teams) {
       const row = el("li", "team-library-row"), edit = button("", () => openEditor(team), "team-row-edit"), label = el("strong", "", team.draft.name),
         detail = el("small", "", `${team.draft.nodes.length} ${t("Module")} · ${t(team.enabled ? "Enabled" : team.test_status === "passed" ? "Disabled" : team.test_status === "running" ? "Test running…" : "Not tested")}`);
-      edit.append(label, detail);
+      edit.dataset.teamControl = `team:${team.id}:edit`; edit.append(label, detail);
       const active = team.enabled || pendingEnable(team.id), stop = intents.get(`disable:${team.id}`), toggle = button(active ? "Disable" : "Enable", () => {
         void control(team, !active).catch(showError);
       }, `team-glass team-toggle ${active ? "team-danger" : "team-enable"}`);
-      toggle.disabled = active ? Boolean(stop?.busy) : !canEnable(team); toggle.setAttribute("aria-label", `${t(active ? "Disable" : "Enable")}: ${team.draft.name}`);
+      toggle.dataset.teamControl = `team:${team.id}:toggle`;
+      toggle.disabled = active ? Boolean(stop?.busy) : !context().writable || !canEnable(team); toggle.setAttribute("aria-label", `${t(active ? "Disable" : "Enable")}: ${team.draft.name}`);
       const remove = button("Delete", () => { if (!confirm(t("Delete this saved Team? Accepted tasks keep their original configuration."))) return;
         void mutate(`delete:${team.id}`, "delete", team.id, { idempotency_key: makeKey("team-delete") }, value => api.deleteTeamItem("team", team.id, value), () => {
           teams = teams.filter(item => item.id !== team.id); if (editId === team.id) { editId = null; dirty = false; overview.hidden = false; editor.hidden = true; }
         }).catch(showError);
-      }, "text-button team-delete"); remove.setAttribute("aria-label", `${t("Delete")}: ${team.draft.name}`);
+      }, "text-button team-delete"); remove.dataset.teamControl = `team:${team.id}:delete`; remove.setAttribute("aria-label", `${t("Delete")}: ${team.draft.name}`);
       row.append(edit, toggle, remove); list.append(row);
     }
     add.disabled = teams.length >= 5; add.title = add.disabled ? t("Team limit reached (5). Delete one to add another.") : "";
-    renderButtons(); renderRuns();
+    renderButtons(); renderRuns(); refreshFavoriteControl?.();
+    if (focusKey) {
+      const replacement = [...dialog.querySelectorAll("[data-team-control]")].find(node => node.dataset.teamControl === focusKey);
+      const fallback = focusKey.startsWith("run:") ? recordTitle : add.disabled ? close : add;
+      restoreReplacedFocus(previous, replacement && !replacement.disabled ? replacement : fallback);
+    }
   }
   async function controlRun(run, action) {
     const ctx = context();
@@ -427,22 +604,31 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   const activeRun = () => {
     const pending = intents.get("start-task"), ctx = context();
     if (!pending) return runs.find(run => ["running", "paused"].includes(run.status));
-    const event = ctx.events?.find(item => item.type === "agent_request" && item.actor?.id === ctx.userId
-      && (item.sessionId ?? item.session_id) === ctx.sessionId && !item.deleted && !item.contentUnavailable
-      && !pending.previousEvents?.has(item.id) && item.payload?.agent_team?.purpose !== "test"
-      && item.payload?.agent_team?.start_idempotency_key === pending.input.idempotency_key
-      && item.payload?.agent_team?.task_content === pending.input.content);
-    const marker = event?.payload?.agent_team;
-    if (!marker?.run_id) return undefined;
-    const known = runs.find(run => run.id === marker.run_id);
+    const runId = pendingCanonicalRunId(pending, ctx);
+    if (!runId || pending.clearedRunIds?.has(runId)) return undefined;
+    const known = runs.find(run => run.id === runId);
     if (known) return terminal(known) ? undefined : known;
-    return { id: marker.run_id, session_id: ctx.sessionId, status: "running", purpose: "task" };
+    return { id: runId, session_id: ctx.sessionId, status: "running", purpose: "task" };
   };
+  function runNotice() {
+    if (runRefreshFailed && (hadTaskActivity || intents.has("start-task"))) return { runId: null, code: "unconfirmed", moduleLabel: null,
+      text: t("Unable to confirm the latest Team status."),
+      advice: t("The connection or your access may have changed. Status will refresh automatically after reconnection; do not submit the same task again. Open run records to check.") };
+    // Two devices can have two accepted tasks. A healthy newer task must not
+    // hide another still-active task that needs clarification or recovery.
+    const run = runs.find(item => item.status === "paused")
+      ?? runs.find(item => item.status === "running" && formatTeamRunIssue(item, t)) ?? runs[0];
+    const diagnostic = formatTeamRunIssue(run, t);
+    return diagnostic ? { runId: run.id, ...diagnostic } : null;
+  }
   async function startTask(content, options = {}) {
-    const team = teams.find(item => `team:${item.id}` === selectedKey), ctx = context();
-    if (!team?.enabled || !canEnable(team)) throw new Error(t("Choose an enabled Team."));
+    updateContext();
+    // Recover a frozen accepted intent before consulting the current picker or
+    // library. Disabling/deleting its definition does not cancel that task.
     const previous = intents.get("start-task"); if (previous) return attempt(previous);
-    if (activeRun()) throw new Error(t("A Team task is already active. Stop or finish it before starting another."));
+    const team = teams.find(item => `team:${item.id}` === selectedKey), ctx = context();
+    if (!team?.enabled || !canEnable(team)) throw Object.assign(new Error("Team is not enabled"), { code: "agent_team_not_enabled", status: 409 });
+    if (activeRun()) throw Object.assign(new Error("Team task already active"), { code: "agent_team_busy", status: 429 });
     if (!acknowledgeShared(team.draft)) return null;
     const previousEvents = new Set((ctx.events ?? []).map(event => event.id));
     const pending = mutate("start-task", "start", team.id, { content,
@@ -456,12 +642,20 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     return pending;
   }
   return { updateContext, refresh, open: () => hostButton.click(),
-    refreshLanguage() { translations.forEach(update => update()); hostButton.textContent = t("Agent teams");
+    refreshLanguage() { translations.forEach(update => update());
+      for (const surface of [dialog, secondary]) for (const node of surface.querySelectorAll("[data-team-i18n]")) node.textContent = t(node.dataset.teamI18n);
+      hostButton.textContent = t("Agent teams");
       title.textContent = t(editor.hidden ? "My Agent teams" : "Edit my Agent team");
-      if (draft) { canvas.render(); renderInspector(); } render(); },
+      rulesInput.setAttribute("aria-label", t("Team rules"));
+      if (draft) { canvas.render(); renderInspector(); }
+      if (secondary.open) { if (secondaryMode === "favorites") showFavorites(); else if (secondaryMode === "relationships") showRelationships(); }
+      render(); if (displayedProblem) showError(displayedProblem); },
     t, choices: () => teams.filter(team => team.enabled && canEnable(team)).map(team => ({ key: `team:${team.id}`, label: team.draft.name, team })),
     selected: () => teams.find(team => `team:${team.id}` === selectedKey), select(key) { selectedKey = key; }, selectionKey: () => selectedKey,
-    startTask, pendingStart: () => intents.has("start-task"), activeRun, recover: recoverActions,
+    startTask, pendingStart: () => intents.has("start-task"), activeRun, recover: recoverActions, runNotice,
+    describeError: (problem, action) => describeTeamActionError(problem, actionKinds.get(problem) ?? action, t),
+    openRunRecords() { if (!dialog.open) { returnFocus = doc.activeElement; dialog.showModal(); }
+      records.open = true; renderRuns(); recordTitle.focus({ preventScroll: true }); void refresh(); },
     controlRun, stopActive: () => { const run = activeRun(); return run ? controlRun(run, "stop") : Promise.resolve(); },
     stopping: () => { const run = activeRun(); return Boolean(run && intents.get(`run-stop:${run.id}`)?.busy); },
   };

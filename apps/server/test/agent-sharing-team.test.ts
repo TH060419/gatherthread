@@ -103,12 +103,76 @@ test("team Stop cancels accepted shared work and late native completion cannot a
     assert.equal(f.teams.read(f.b, f.solo.id, run.id).run.status, "stopped");
   } finally { f.close(); }
 });
+test("a human-paused shared Team resumes in a fresh counted step instead of consuming its own cancellation as a failure", async t => {
+  for (const claimed of [false, true]) await t.test(claimed ? "claimed" : "queued", async () => {
+    const f = setup(); try {
+      const plan = { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] }, run = f.start(true, plan);
+      await drive(f, run.id, value => value.calls_used === 1);
+      const first = f.sharing.listJobs(f.a, f.source.project_id).jobs[0]!;
+      const claim = claimed ? f.sharing.claim(f.a, first.id, { idempotency_key: "shared-human-pause-claim" }) : null;
+      f.teams.control(f.b, f.solo.id, run.id, { action: "pause", idempotency_key: "shared-human-pause" });
+      assert.equal(f.sharing.store.job(first.id).status, "cancelled");
+      assert.equal(f.teams.read(f.b, f.solo.id, run.id).run.status, "paused");
+      const resume = { action: "resume" as const, idempotency_key: "shared-human-resume" };
+      f.teams.control(f.b, f.solo.id, run.id, resume); f.teams.control(f.b, f.solo.id, run.id, resume);
+      await drive(f, run.id, value => value.calls_used === 2 || value.status === "failed");
+      const resumed = f.teams.read(f.b, f.solo.id, run.id).run;
+      assert.equal(resumed.status, "running"); assert.equal(resumed.calls_used, 2);
+      assert.equal(resumed.steps.length, 2); assert.notEqual(resumed.current_step_id, run.current_step_id);
+      if (claim) {
+        const next = f.sharing.listJobs(f.a, f.source.project_id).jobs.find(item => item.status === "queued")!;
+        assert.throws(() => f.sharing.claim(f.a, next.id, { idempotency_key: "shared-resume-before-cleanup" }), { code: "agent_share_busy" });
+        f.sharing.abortAck(f.a, first.id, { claim_attempt: claim.capsule.claim_attempt,
+          executor_stopped: true, idempotency_key: "shared-human-pause-cleanup" });
+      }
+      f.completeShared(); await drive(f, run.id, value => value.status === "completed");
+      assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 2);
+    } finally { f.close(); }
+  });
+});
+test("pausing after a shared Agent already answered preserves that completed result on Resume without another charged call", async () => {
+  const f = setup(); try {
+    const plan = { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] }, run = f.start(true, plan);
+    await drive(f, run.id, value => value.calls_used === 1); f.completeShared();
+    f.teams.control(f.b, f.solo.id, run.id, { action: "pause", idempotency_key: "shared-completed-pause" });
+    f.teams.control(f.b, f.solo.id, run.id, { action: "resume", idempotency_key: "shared-completed-resume" });
+    await drive(f, run.id, value => value.status === "completed");
+    const result = f.teams.read(f.b, f.solo.id, run.id).run;
+    assert.equal(result.calls_used, 1); assert.equal(result.steps.length, 1);
+    assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 1);
+  } finally { f.close(); }
+});
+test("forgotten and expired shared Team start keys cannot create a second broker job or consume another allowance", async t => {
+  for (const cleanup of ["forget", "prune"] as const) await t.test(cleanup, async () => {
+    const f = setup(); try {
+      const plan = { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] }, run = f.start(true, plan);
+      const input = JSON.parse(f.teams.store.row(run.id).input_json);
+      await drive(f, run.id, value => value.calls_used === 1);
+      f.teams.control(f.b, f.solo.id, run.id, { action: "stop", idempotency_key: "shared-consumed-stop" });
+      if (cleanup === "forget") f.teams.forget(f.b, f.solo.id, run.id);
+      else { f.advance(31 * 86400000); f.teams.store.prune(); }
+      const snapshot = () => ({ head: f.db.requireSession(f.solo.id).next_sequence,
+        jobs: f.db.sqlite.prepare("SELECT * FROM agent_share_jobs ORDER BY id").all(),
+        usage: f.db.sqlite.prepare("SELECT * FROM agent_share_daily_usage ORDER BY member_user_id").all(),
+        calls: f.db.sqlite.prepare("SELECT COALESCE(SUM(calls_used),0) AS n FROM agent_team_runs").get()!.n });
+      const before = snapshot();
+      assert.throws(() => f.teams.start(f.b, f.solo.id, input), { code: "conflict" });
+      assert.throws(() => f.teams.start(f.b, f.solo.id, { ...input, content: "Changed shared task" }), { code: "idempotency_conflict" });
+      await f.teams.pump(); assert.deepEqual(snapshot(), before);
+      assert.equal(before.jobs.length, 1); assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_runs").get()!.n, 0);
+    } finally { f.close(); }
+  });
+});
 test("shared timeout offers a counted explicit team continuation", async () => {
   const f = setup(); try {
     const plan = { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] }, run = f.start(true, plan);
     await drive(f, run.id, value => value.calls_used === 1); f.completeShared("timed_out");
     await drive(f, run.id, value => value.status === "paused");
-    assert.equal(f.teams.read(f.b, f.solo.id, run.id).run.error_code, "agent_timeout");
+    const timedOut = f.teams.read(f.b, f.solo.id, run.id).run;
+    assert.equal(timedOut.error_code, "agent_timeout");
+    assert.deepEqual(timedOut.issue, { code: "agent_share_timeout", node_id: "worker", node_label: "A shared worker",
+      target_kind: "shared", retry_at: null });
+    assert.deepEqual(f.teams.list(f.b, f.solo.id).runs.find(item => item.id === run.id)?.issue, timedOut.issue);
     f.teams.control(f.b, f.solo.id, run.id, { action: "continue", idempotency_key: "continue-shared-team" });
     await drive(f, run.id, value => value.calls_used === 2); f.completeShared();
     await drive(f, run.id, value => value.status === "completed");
@@ -254,6 +318,8 @@ test("minimal connectivity probes use the ordinary shared allowance and cannot r
     for (let spin = 0; spin < 20; spin++) { await f.teams.pump(); await new Promise(resolve => setImmediate(resolve)); }
     const failed = f.teams.read(f.b, f.source.id, task.run.id).run;
     assert.equal(failed.status, "failed"); assert.equal(failed.error_code, "agent_share_daily_limit"); assert.equal(failed.calls_used, 0);
+    assert.deepEqual(failed.issue, { code: "agent_share_daily_limit", node_id: "director", node_label: "B director",
+      target_kind: "shared", retry_at: null });
     assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 3);
     assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_share_jobs").get()!.n, 3);
   } finally { f.close(); }
@@ -449,11 +515,79 @@ test("the owner's shared switch and source disconnection fence Team queues and e
           observed_model: f.sharedTarget.model, observed_reasoning_effort: "high", outcome: "completed", executor_stopped: true,
           payload: { content: "Discard this late result", status: "completed" } }));
         await drive(f, run.id, value => value.status === "failed");
-        assert.equal(f.teams.read(f.b, f.solo.id, run.id).run.calls_used, 1);
+        const ended = f.teams.read(f.b, f.solo.id, run.id).run;
+        assert.equal(ended.calls_used, 1);
+        assert.deepEqual(ended.issue, { code: reason === "disable" ? "agent_share_revoked" : "agent_share_offline",
+          node_id: "worker", node_label: "A shared worker", target_kind: "shared", retry_at: null });
+        assert.deepEqual(f.teams.list(f.b, f.solo.id).runs.find(item => item.id === run.id)?.issue, ended.issue);
         assert.equal(f.sharing.store.row(f.share.id).enabled, 0);
         f.sharing.sourceAvailability(f.a, { project_id: f.source.project_id, source_runtime_id: f.aRuntime.id,
           state: "ready", idempotency_key: "shared-team-owner-ready-after-off" });
         assert.equal(f.sharing.store.row(f.share.id).enabled, 0, "Native readiness cannot restore a manual or automatic stop");
       } finally { f.close(); }
     });
+});
+
+test("shared Team diagnostics distinguish waiting for the owner from executing and retain the frozen module label", async () => {
+  const f = setup(); try {
+    const plan = { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] }, run = f.start(true, plan);
+    await drive(f, run.id, value => value.calls_used === 1);
+    const queued = f.teams.read(f.b, f.solo.id, run.id).run;
+    assert.equal(queued.status, "running"); assert.equal(queued.error_code, null);
+    assert.deepEqual(queued.issue, { code: "agent_share_queued", node_id: "worker", node_label: "A shared worker",
+      target_kind: "shared", retry_at: null });
+    plan.nodes[0]!.label = "New draft label must not rename accepted work";
+    const job = f.sharing.listJobs(f.a, f.source.project_id).jobs[0]!;
+    f.sharing.claim(f.a, job.id, { idempotency_key: "diagnostic-shared-started" });
+    assert.equal(f.teams.read(f.b, f.solo.id, run.id).run.issue, undefined);
+    f.sharing.control(f.a, f.source.project_id, f.share.id, { action: "disable", idempotency_key: "diagnostic-shared-disable" });
+    await drive(f, run.id, value => value.status === "failed");
+    const ended = f.teams.read(f.b, f.solo.id, run.id).run;
+    assert.deepEqual(ended.issue, { code: "agent_share_revoked", node_id: "worker", node_label: "A shared worker",
+      target_kind: "shared", retry_at: null });
+    assert.throws(() => f.teams.control(f.b, f.solo.id, run.id,
+      { action: "resume", idempotency_key: "diagnostic-no-resume-failed" }), { code: "conflict" });
+  } finally { f.close(); }
+});
+
+test("an expired shared execution lease is reported separately from a model timeout or a Team deadline", async () => {
+  const f = setup(); try {
+    const run = f.start(true, { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] });
+    await drive(f, run.id, value => value.calls_used === 1);
+    const job = f.sharing.listJobs(f.a, f.source.project_id).jobs[0]!;
+    f.sharing.claim(f.a, job.id, { idempotency_key: "diagnostic-expired-lease-claim" });
+    f.advance(16000); f.service.heartbeatRuntime(f.a, f.aRuntime.id); f.sharing.pump();
+    await drive(f, run.id, value => value.status === "failed");
+    const ended = f.teams.read(f.b, f.solo.id, run.id).run;
+    assert.equal(ended.error_code, "agent_share_lease_expired");
+    assert.deepEqual(ended.issue, { code: "agent_share_lease_expired", node_id: "worker", node_label: "A shared worker",
+      target_kind: "shared", retry_at: null });
+    assert.equal(ended.calls_used, 1); assert.equal(f.sharing.store.job(job.id).status, "cancelled");
+    assert.ok(Date.parse(ended.deadline_at) > Date.parse(f.teams.store.now()));
+    assert.throws(() => f.teams.control(f.b, f.solo.id, run.id,
+      { action: "continue", idempotency_key: "diagnostic-no-continue-lease" }), { code: "conflict" });
+  } finally { f.close(); }
+});
+
+test("a shared executor's private error payload cannot replace the safe Team diagnostic category", async () => {
+  const f = setup(); try {
+    const run = f.start(true, { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] });
+    await drive(f, run.id, value => value.calls_used === 1);
+    const job = f.sharing.listJobs(f.a, f.source.project_id).jobs[0]!;
+    const claimed = f.sharing.claim(f.a, job.id, { idempotency_key: "diagnostic-private-error-claim" });
+    const privateMessage = "PRIVATE_PROVIDER_DIAGNOSTIC must remain outside public Team diagnostics";
+    f.sharing.complete(f.a, job.id, { claim_attempt: claimed.capsule.claim_attempt, idempotency_key: "diagnostic-private-error-finish",
+      observed_model: f.sharedTarget.model, observed_reasoning_effort: "high", outcome: "failed", executor_stopped: true,
+      payload: { content: privateMessage, error: { code: "provider_auth_failed", message: privateMessage } } });
+    await drive(f, run.id, value => value.status === "failed");
+    const ended = f.teams.read(f.b, f.solo.id, run.id).run;
+    assert.equal(ended.error_code, "agent_share_execution_failed");
+    assert.deepEqual(ended.issue, { code: "agent_share_execution_failed", node_id: "worker", node_label: "A shared worker",
+      target_kind: "shared", retry_at: null });
+    const summary = f.teams.list(f.b, f.solo.id).runs.find(item => item.id === run.id)!;
+    assert.equal(JSON.stringify(summary).includes(privateMessage), false);
+    assert.equal(JSON.stringify(summary).includes("provider_auth_failed"), false);
+    const response = f.db.getEvent(f.solo.id, f.sharing.store.job(job.id).response_event_id!);
+    assert.equal(JSON.stringify(response.payload).includes(privateMessage), false);
+  } finally { f.close(); }
 });

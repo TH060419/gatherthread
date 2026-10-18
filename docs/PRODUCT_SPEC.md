@@ -45,6 +45,39 @@ The Solo creator is the only member allowed to write or submit agent requests wh
 
 Project owners and participants can append human chat and agent requests. A human chat event is shared and included in future context hydration but does not trigger a local agent. An agent request is assigned to the initiating user's registered local runtime. The resulting response is appended to the same canonical history. Viewers remain read only.
 
+## Browser page recovery
+
+An independent, same-origin recovery script loads separately from the workspace module.
+Uncaught page errors, unhandled Promise rejections and failed script or stylesheet
+loads open a bilingual recovery dialog. Startup that has not completed after
+45 seconds of visible page time also explains the delay; background suspension
+does not itself imply a fault. Asynchronous authentication restoration remains
+authoritative: recovery never reveals a workspace or login form ahead of it.
+The static startup screen retains bilingual network/browser-reload guidance even
+when application scripts do not load. The script loads asynchronously so its own
+network load cannot block parsing that screen or wait for a stalled stylesheet.
+Before the main application can apply its language, the recovery layer reads only
+the existing public `gt-lang` preference, with a browser-language fallback;
+unavailable storage never blocks recovery.
+
+"Page stuck?" is an independent manual entry, including inside open modal
+dialogs, for buttons that do nothing without raising an observable error.
+Recovery preserves the current view until the user chooses otherwise, explains
+how to return and manually copy unsent drafts or unsaved configuration, and
+requires confirmation before reloading. It never promises those inputs will
+survive a reload. It also warns that accepted Agent work may continue and must
+be checked before resubmission; reload neither cancels nor restarts a task.
+Repeated automatic errors are deduplicated, while manual help remains available.
+
+Browser API acknowledgments have a 45-second deadline covering response headers
+and JSON body decoding. Existing shorter sharing/Team and avatar deadlines stay
+in effect. An acknowledgment timeout releases the caller's pending state and
+shows an unconfirmed result, without automatically resending a mutation. This
+deadline does not shorten server-side Agent execution. Browser process crashes,
+disabled JavaScript and a completely blocked main thread still require the
+browser's own reload/close controls; page code cannot guarantee an in-page notice
+while it cannot execute.
+
 ## Mobile workspace
 
 The browser suggests the mobile interface when platform, touch/pointer and viewport signals indicate a phone or tablet, but asks before switching. Login and Settings → General offer Auto, Mobile and Desktop; the explicit choice is saved only in that browser. Switching never reloads the application or changes authentication, drafts, selections or request targets. Mobile stays selected across rotation and resizing; its tablet layout centers the reading area. Choosing Desktop on a phone retains desktop navigation, with horizontal panning if needed.
@@ -295,6 +328,33 @@ saved but cannot be tested or enabled. The zoomable canvas separates modules
 from their selected execution Agent: each module has its own name, Agent, model,
 reasoning effort, identity and prompt. Agent/model/effort choices use the same
 exact advertised profiles as the composer, with no selectable hint option.
+When one connection advertises multiple providers, model labels include the
+provider so identical model names remain distinguishable. An unavailable selected
+model stays selected and is marked unavailable rather than replaced.
+
+Run records expose Pause/Resume/Continue/Stop for active tasks and explicit
+Clear private record for ended tasks. Clearing frees private run/step/control
+storage, keeps canonical conversation messages, and cannot restart the old task.
+The Web client confirms this distinction and can recover a lost clear acknowledgment.
+
+An interrupted or waiting Team explains the affected module, observed cause and
+next action in its run records and a requester-private workspace notice. Failed
+connectivity tests expose the same safe diagnosis. Shared allowances, withdrawn
+sharing, unavailable exact models, executor disconnects, provider failures,
+invalid Team instructions, authorization/context changes and exhausted Team
+budgets have distinct bilingual guidance. Global failures do not blame a module.
+Unknown failures explain that the task did not complete and require reviewing
+existing work before retrying. Browser transport or receipt uncertainty is
+labelled unconfirmed, never inferred to be an execution failure.
+
+Single-call timeout permits explicit Continue only within the original remaining
+call/time budget. Failed, stopped, total-time-expired and call-limit runs require
+a new task rather than a misleading Resume action. A shared daily allowance
+resets at UTC 00:00; changing the grant can require rebinding and retesting the
+saved module. Cloud capacity/rate cooldowns explain automatic waiting. Pending
+native calls identify waiting for their exact executor or interrupted presence
+without silently switching routes or repeating execution. Scope/access changes
+remove cached private diagnostic labels; stale replies cannot restore them.
 
 Adding a module selects it. A module or connection highlights on hover only
 while no selection is fixed; clicking fixes the selection, and clicking blank

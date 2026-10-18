@@ -2,10 +2,38 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { AgentTeamPlanSchema, AgentTeamPlanResponseSchema, AgentTeamRequestMetadataSchema,
   StartAgentTeamRunInputSchema, StartSavedAgentTeamSchema, TestAgentTeamDefinitionSchema,
-  ControlAgentTeamRunInputSchema, AgentTeamDirectiveSchema } from "../src/index.js";
+  ControlAgentTeamRunInputSchema, AgentTeamDirectiveSchema, AgentTeamRunIssueSchema, AgentTeamRunSummarySchema,
+  AgentTeamActionIssueDetailsSchema } from "../src/index.js";
 const node = { id: "lead", label: "Lead", role: "Direct the task", x: 0, y: 0,
   target: { kind: "local", harness: "codex", runtime_id: "runtime-1", provider: "openai", model: "fixture-model" } };
 const plan = { name: "Fixture", team_prompt: "Be concise", nodes: [node], edges: [] };
+test("Team issue contracts are additive, bounded and exclude raw execution errors", () => {
+  const run = { id: "run", session_id: "session", status: "failed", created_at: "2026-10-18T00:00:00.000Z",
+    deadline_at: "2026-10-18T00:30:00.000Z", finished_at: "2026-10-18T00:01:00.000Z", calls_used: 1,
+    max_calls: 12, max_duration_minutes: 30, current_node_id: "lead", current_step_id: "step",
+    error_code: "agent_share_daily_limit" };
+  assert.equal(AgentTeamRunSummarySchema.safeParse(run).success, true, "Earlier preview summaries without issue remain readable");
+  const issue = { code: "agent_share_daily_limit", node_id: "lead", node_label: "执行模块", target_kind: "shared", retry_at: null };
+  assert.deepEqual(AgentTeamRunSummarySchema.parse({ ...run, issue }).issue, issue);
+  assert.equal(AgentTeamRunIssueSchema.safeParse({ ...issue, node_id: null, node_label: null, target_kind: null,
+    retry_at: "2026-10-18T00:02:00.000Z" }).success, true);
+  for (const extra of [{ raw_error: "private provider error" }, { message: "unreviewed diagnostic" }, { headers: {} }, { device_token: "fictional" }]) {
+    assert.equal(AgentTeamRunIssueSchema.safeParse({ ...issue, ...extra }).success, false);
+  }
+  for (const invalid of [{ code: "invalid error text" }, { code: "a".repeat(81) }, { node_label: "x".repeat(121) },
+    { node_id: "" }, { target_kind: "arbitrary" }, { retry_at: "tomorrow" }]) {
+    assert.equal(AgentTeamRunIssueSchema.safeParse({ ...issue, ...invalid }).success, false);
+  }
+});
+
+test("Team action issue details are strict bounded metadata rather than upstream exception payloads", () => {
+  const details = { issue_code: "agent_team_call_limit", node_id: "worker", node_label: "执行", target_kind: "local", retry_after_seconds: 5 };
+  assert.deepEqual(AgentTeamActionIssueDetailsSchema.parse(details), details);
+  for (const invalid of [{ ...details, message: "private exception" }, { ...details, node_label: "two\nlines" },
+    { ...details, issue_code: "error text" }, { ...details, retry_after_seconds: -1 }, { ...details, retry_after_seconds: Infinity }]) {
+    assert.equal(AgentTeamActionIssueDetailsSchema.safeParse(invalid).success, false);
+  }
+});
 test("team contracts are strict, bounded, exact and default to twelve calls and thirty minutes", () => {
   const parsed = StartAgentTeamRunInputSchema.parse({ plan, entry_node_id: "lead", content: "Review this task", idempotency_key: "team-contract-start" });
   assert.equal(parsed.max_calls, 12); assert.equal(parsed.max_duration_minutes, 30);

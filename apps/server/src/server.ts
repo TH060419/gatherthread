@@ -1344,7 +1344,9 @@ export async function startCollaborationServer(
       const sessionId = parts[0] === "v1" && parts[1] === "sessions" ? parts[2] : undefined;
       if (sessionId && parts[3] === "agent-teams" && parts[4] && parts.length === 6 && request.method === "POST") {
         if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Configure and start teams in the signed-in browser");
-        const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/u).parse(parts[4]), input = await readAuthenticatedJson(8192);
+        // The 3,000-character task plus member references can exceed 8 KiB in
+        // UTF-8, particularly in Chinese. Schema limits still bound every field.
+        const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/u).parse(parts[4]), input = await readAuthenticatedJson(65536);
         if (parts[5] === "test") { sendJson(response, 202, { data: AgentTeamRunAcceptedSchema.parse(agentTeamLibrary.test(actor, id, sessionId, input)) }); return; }
         if (parts[5] === "start") { sendJson(response, 202, { data: AgentTeamRunAcceptedSchema.parse(agentTeamLibrary.start(actor, id, sessionId, input)) }); return; }
         if (parts[5] === "control") { sendJson(response, 200, { data: AgentTeamDefinitionResponseSchema.parse(agentTeamLibrary.control(actor, id, sessionId, input)) }); return; }

@@ -59,6 +59,7 @@ The beginner example has a separate opaque-origin sandbox, fresh mock API state 
 - Snapshot jobs are private requester-scoped control-plane records, not canonical conversation events. Every job is charged a conservative 1 KiB metadata allowance, one completion/failure result is limited to 8 KiB UTF-8 JSON, and cumulative storage defaults to 4 MiB per user, 8 MiB per session, and 64 MiB per deployment. Unfinished jobs are additionally capped at 64 per user, 256 per session, and 4096 per deployment.
 - Immutable snapshot jobs require read access; Desktop-visible import jobs additionally require current write access. An import refuses pending or unuploaded local turns, verifies the new native task before switching, updates the private Hook allowlist without exposing credentials, and treats its generated empty-session marker and compact summary as local-only data. It never deletes or archives the previous native task.
 - Events become visible only after the database transaction commits. The durable log, not WebSocket delivery, is authoritative.
+- Browser page recovery uses only fixed local error categories. It never reads or transmits error messages, stacks, source URLs, form values, drafts, cookies or private task content, and writes no diagnostic storage or telemetry. Reload is explicit and confirmed; recovery never clears credentials or storage, retries a mutation, cancels an accepted Agent task or grants access. HTTP acknowledgment deadlines retain existing request identity and authorization; a missing receipt is not evidence that a write did not execute.
 - A message deletion is browser-only and author-only under current device, Origin/admission, write and Solo checks; a project owner cannot override another author. It preserves canonical order while scrubbing live payload/provenance, excluding erased and recursively dependent context on every read, and invalidating old active executions. Claim, progress, completion, import, native upload, code checkpoint, private GitHub cache/continuation/publication and model egress check the pinned history revision independently of all existing device/profile/repository/private-API fences. Legacy connectors fail closed after a deletion until adapted; clean verified GT-owned native replacement prevents old compacted memory, Hooks or outboxes from resurfacing a body. See [ADR-0050](adr/0050-author-message-erasure-and-context-revisions.md).
 - Live SQL erasure is not a claim of instantaneous physical destruction. Ordinary SQLite tables use `secure_delete=ON`; startup and one-minute maintenance attempt transaction-free, non-waiting WAL truncation for durable pending deletion generations. A blocked cleanup is not acknowledged and emits a fixed private warning if it reaches 14 days, requiring operator resolution within the retention policy. Do not log target IDs, bodies or private task contents. Routine backups and unreachable cloud Git objects remain subject to at most 14 days, logs with user identifiers to at most 30 days, and restore must reapply current erasure records before admitting traffic. Filesystem/SSD copies, manually copied text, already sent provider requests and published GitHub content are outside the live deletion mechanism; no online VACUUM or unknown-backup deletion is implied.
 - A manual history summary is a derived public version requested only by a current session writer using their exact local execution runtime or selected cloud profile. Its source IDs must name authorized public completed conversation messages in the same session. The server builds the bounded prompt and source digest and reserves its metadata from generic writes; only a completed server-linked response activates the version. A viewer may inspect summaries and originals but cannot generate one. The per-user project context policy does not grant write or execution authority.
@@ -313,6 +314,12 @@ drafts may persist without permitting execution. Recognizable credentials are
 rejected in names, rules, identities, prompts and targets before persistence.
 No new credential, arbitrary endpoint or local path is accepted by Team schemas.
 
+Team diagnostics copy only allowlisted failure categories and the requester's
+own frozen module label. They never render upstream exception text, provider
+bodies, headers, tool data or arbitrary producer error codes. Global failures
+omit module attribution. Polling failures and unknown acknowledgments remain
+unconfirmed states, so a presentation hint cannot authorize another paid call.
+
 Only a human-started saved and tested revision may create a new task. Its
 immutable run pins the initiating authorizing device separately from the chosen
 executor device. Current actor/device, project/session write permission,
@@ -395,9 +402,27 @@ Saved definitions and favorites remain until their owner deletes them or the
 account is deleted. They are separate from session history and from private run
 retention. Account deletion cascades these records. Completed private runs and
 their step/control copies are pruned after 30 days; Forget can remove a terminal
-private run earlier, without deleting canonical messages. Metadata-only library
-receipts expire after 14 days. Author erasure invalidates affected active runs
-and removes their derived task caches under the existing content-revision rules;
+private run earlier, without deleting canonical messages. Under storage pressure,
+acceptance may reclaim only the requester's terminal connectivity-test caches
+that no saved definition references. Current test caches, active probes, ordinary
+task records and other accounts' caches are preserved. Reclamation and replacement
+acceptance share one transaction; if admission still fails, reclamation rolls back.
+Verified test stamps are preserved before reclamation. Acceptance also stores
+a separate content-free consumed-key receipt: owning account/session, key and
+input digests, run identity, purpose, optional library binding/digest and acceptance
+time. It contains no task, plan, module instructions or response. It survives
+private Forget, pruning and author-erasure cache cleanup until account or session
+deletion, so delayed retries cannot restore deleted content or restart work.
+Startup backfill excludes anonymized deleted accounts and never recreates their
+private receipts from retained shared history. A separate content-free revision
+clock has one row per library account, survives Team deletion to fence stale
+configuration revisions, and cascades on account deletion.
+At 10,000 receipts per account, 20,000 per session or 200,000 globally, new
+acceptances fail closed with `agent_team_storage_full`; clearing a private run
+remains available and never removes its consumed-key protection. Metadata-only
+library mutation receipts are separate and expire after 14 days. Author erasure
+invalidates affected active runs and removes their derived task caches under the
+existing content-revision rules;
 saved user-authored configuration is not a hidden transcript archive. Historical
 session-plan preview rows have no public execution route and are not silently
 promoted into enabled saved Teams. Existing backup/provider retention boundaries

@@ -134,6 +134,22 @@ test("provider and personal profile remain part of a model's identity", () => {
   assert.equal(teamConnectionKey(null), "");
 });
 
+test("same-named native and shared models show their provider without changing exact selection keys", () => {
+  const profiles = [{ provider: "provider-a", model: "same-model", reasoningEfforts: ["low"] },
+    { provider: "provider-b", model: "same-model", reasoningEfforts: ["high"] }];
+  const choices = teamConnectionChoices(context({ runtimes: [runtime({ executionProfiles: profiles })], sharedAgents: [{
+    label: "Shared fixture", available: true, share: { id: "share-a", revision: 1,
+      execution_profile: { harness: "codex", provider: "provider-a", model: "same-model" },
+      execution_profiles: profiles.map(profile => ({ provider: profile.provider, model: profile.model, reasoning_efforts: profile.reasoningEfforts })) },
+  }] }));
+  for (const choice of choices) {
+    assert.deepEqual(choice.models.map(model => model.label), ["provider-a · same-model", "provider-b · same-model"]);
+    assert.notEqual(choice.models[0].key, choice.models[1].key);
+    assert.equal(teamTargetForModel(choice.models[1]).provider, "provider-b");
+    assert.equal(teamTargetForModel(choice.models[1]).reasoning_effort, "high");
+  }
+});
+
 test("favorite snapshots are independent copies without canvas ids or positions", () => {
   const node = { id: "original", x: 12, y: 34, label: "Planner", role: "Coordinate work", prompt: "Ask for concise evidence",
     target: { kind: "shared", share_id: "bob-share", share_revision: 7, harness: "codex", provider: "fixture", model: "exact-model", reasoning_effort: "high" } };
@@ -202,4 +218,19 @@ test("Bezier flows connect the output and input ports and retain finite geometry
   assert.match(reverse, /^M .* C /);
   assert.ok(reverse.endsWith(`${source.x} ${source.y + TEAM_NODE_HEIGHT / 2}`));
   assert.doesNotMatch(reverse, /NaN|Infinity/);
+});
+
+
+test("route identities remain distinct when valid module IDs contain colons", () => {
+  const edges = [{ id: "route:one", source: "a:b", target: "c", direction: "one_way" }];
+  assert.equal(teamEdgeAllowed(edges, "a", "b:c", "one_way"), true);
+  assert.equal(teamEdgeAllowed(edges, "a", "b:c", "bidirectional"), true);
+  assert.equal(teamEdgeAllowed(edges, "a:b", "c", "one_way"), false);
+});
+
+test("favorite matching ignores object key order and empty optional prompts while retaining exact targets", () => {
+  const a = { label: "Planner", role: "Plan", target: { kind: "local", runtime_id: "runtime:a", harness: "codex", provider: "fixture", model: "model:a" } };
+  const b = { target: { model: "model:a", provider: "fixture", harness: "codex", runtime_id: "runtime:a", kind: "local" }, prompt: "", role: "Plan", label: "Planner" };
+  assert.equal(sameTeamSnapshot(a, b), true);
+  assert.equal(sameTeamSnapshot(a, { ...b, target: { ...b.target, runtime_id: "runtime:b" } }), false);
 });

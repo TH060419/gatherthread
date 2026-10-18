@@ -762,6 +762,7 @@ const ZH_CN = Object.freeze({
   "Create a project to organize your sessions and invite collaborators.": "创建项目来组织会话并邀请协作者。",
   "Once invited, your projects will appear here. A project invitation does not let you create projects.": "收到邀请后，项目会显示在这里。项目邀请不会授予创建项目的权限。",
   "Connecting": "正在连接",
+  "Request timed out. Check the previous action before trying again.": "请求等待超时，操作结果尚未确认。请先核对上次操作与已有记录，再决定是否重试。",
   "Open Settings": "打开设置",
   "Collapse session sidebar": "收起会话侧栏",
   "Expand session sidebar": "展开会话侧栏",

@@ -10,7 +10,7 @@ import { AgentTeamLibrarySchema, AgentTeamDefinitionResponseSchema, AgentTeamFav
   AgentTeamRunAcceptedSchema, AgentTeamRunResponseSchema, AgentTeamRunsResponseSchema,
   SaveAgentTeamDefinitionSchema, SaveAgentTeamFavoriteSchema, ControlAgentTeamDefinitionSchema,
   TestAgentTeamDefinitionSchema, StartSavedAgentTeamSchema, ControlAgentTeamRunInputSchema,
-  DeleteAgentTeamLibraryItemSchema } from "@gatherthread/protocol";
+  DeleteAgentTeamLibraryItemSchema, AgentTeamActionIssueDetailsSchema } from "@gatherthread/protocol";
 import {
   createIdempotencyKey,
   isExecutionRuntime,
@@ -91,13 +91,23 @@ function normalizeMockTitle(value, label) {
   return title;
 }
 
+function safeTeamIssueDetails(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const fields = ["issue_code", "node_id", "node_label", "target_kind", "retry_after_seconds"];
+  const selected = Object.fromEntries(fields.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+  const parsed = AgentTeamActionIssueDetailsSchema.safeParse(selected);
+  return parsed.success && Object.keys(parsed.data).length ? parsed.data : undefined;
+}
+
 export class ApiError extends Error {
-  constructor(message, { status = 0, code = "unknown" } = {}) {
+  constructor(message, { status = 0, code = "unknown", details } = {}) {
     super(code === "connector_update_required" ? "Update and reconnect your Agent connector before continuing."
       : code === "context_changed" ? "Shared history changed. Start a new Agent request with the current history." : message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    const safeDetails = safeTeamIssueDetails(details);
+    if (safeDetails) this.details = safeDetails;
   }
 }
 
@@ -122,25 +132,59 @@ export class HttpCollaborationApi {
         });
       }
     }
-    const response = await fetch(target, {
-      ...options,
-      credentials: "include",
-      headers: {
-        Accept: "application/json",
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
-        ...options.headers,
-      },
-    });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new ApiError(body.error?.message ?? body.message ?? `Request failed (${response.status})`, {
-        status: response.status,
-        code: body.error?.code ?? body.code ?? "http_error",
+    // The acknowledgement deadline includes both headers and body decoding.
+    // Race explicitly: a stalled transport/body may ignore AbortSignal entirely.
+    const controller = new AbortController(); let rejectInterrupted, timer, finished = false;
+    const interrupted = new Promise((_, reject) => { rejectInterrupted = reject; });
+    const cancel = () => {
+      const reason = options.signal?.reason !== undefined ? options.signal.reason : new DOMException("Request interrupted", "AbortError");
+      rejectInterrupted(reason); controller.abort(reason);
+    };
+    const assertActive = () => {
+      if (controller.signal.aborted) throw controller.signal.reason !== undefined ? controller.signal.reason : new DOMException("Request interrupted", "AbortError");
+    };
+    options.signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      if (options.signal?.aborted) { cancel(); return await interrupted; }
+      const deadline = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          if (finished) return;
+          const error = new ApiError("Request timed out. Check the previous action before trying again.", { status: 0, code: "request_timeout" });
+          reject(error);
+          try { globalThis.window?.__gtPageRecovery?.report("request_timeout"); } catch { /* Recovery UI cannot prevent request cleanup. */ }
+          controller.abort(error);
+        }, 45_000);
       });
+      const request = (async () => {
+        const response = await fetch(target, {
+          ...options,
+          signal: controller.signal,
+          credentials: "include",
+          headers: {
+            Accept: "application/json",
+            ...(options.body ? { "Content-Type": "application/json" } : {}),
+            ...options.headers,
+          },
+        });
+        assertActive();
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({})); assertActive();
+          const teamRoute = /\/agent-team(?:s|-runs|-modules)(?:\/|$)/u.test(path);
+          throw new ApiError(teamRoute ? "Team action was rejected. Review its status before retrying."
+            : body.error?.message ?? body.message ?? `Request failed (${response.status})`, {
+            status: response.status,
+            code: body.error?.code ?? body.code ?? "http_error",
+            ...(teamRoute ? { details: body.error?.details } : {}),
+          });
+        }
+        if (response.status === 204) return undefined;
+        const body = await response.json(); assertActive();
+        return body.data ?? body;
+      })();
+      return await Promise.race([request, interrupted, deadline]);
+    } finally {
+      finished = true; clearTimeout(timer); options.signal?.removeEventListener("abort", cancel);
     }
-    if (response.status === 204) return undefined;
-    const body = await response.json();
-    return body.data ?? body;
   }
 
   async restoreSession() {
@@ -713,6 +757,22 @@ export class HttpCollaborationApi {
   }
   getTeamRun(sessionId, id, options = {}) {
     return teamResponse(AgentTeamRunResponseSchema, this.teamRequest(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs/${encodeURIComponent(id)}`, options), { sessionId, id });
+  }
+  async forgetTeamRun(sessionId, id, options = {}) {
+    try {
+      const data = await this.teamRequest(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs/${encodeURIComponent(id)}`, {
+        ...options, method: "DELETE", body: "{}",
+      });
+      if (data !== undefined) throw new ApiError("Invalid Team record deletion response.", { status: 502 });
+    } catch (error) {
+      // DELETE has no creation side effect to repeat. A lost 204 followed by an
+      // exact not-found receipt confirms cleanup only while current session
+      // access remains valid; membership loss is also deliberately hidden by 404.
+      if (error.status !== 404 || error.code !== "not_found") throw error;
+      const { runs } = await this.listTeamRuns(sessionId, options);
+      if (runs.some(run => run.id === id)) throw error;
+    }
+    return { deleted: true };
   }
   controlTeamRun(sessionId, id, input, options = {}) {
     return teamResponse(AgentTeamRunResponseSchema, this.teamRequest(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs/${encodeURIComponent(id)}/control`, {

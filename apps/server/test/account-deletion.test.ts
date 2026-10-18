@@ -7,6 +7,47 @@ import test from "node:test";
 import { CollaborationDatabase } from "../src/database.js";
 import { CollaborationService } from "../src/service.js";
 import { startCollaborationServer } from "../src/server.js";
+import { AgentTeams } from "../src/agent-teams.js";
+import { AgentTeamLibrary } from "../src/agent-team-library.js";
+
+test("reopening shared Team history never recreates a deleted account's private start receipts", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-team-account-delete-")), path = join(directory, "test.sqlite");
+  let database = new CollaborationDatabase(path), teams: AgentTeams | undefined;
+  try {
+    const service = new CollaborationService(database);
+    const owner = database.bootstrapIdentity({ display_name: "Synthetic departing Team owner", device_name: "Synthetic browser" }).actor;
+    const peer = database.createIdentity({ display_name: "Synthetic remaining member", device_name: "Synthetic peer", can_create_projects: true }).actor;
+    const { session } = service.createSession(owner, { mode: "multi", title: "Retained synthetic Team history", idempotency_key: "team-delete-account-session" });
+    service.setMembership(owner, session.id, peer.user_id, "participant", "team-delete-account-member");
+    const runtime = service.registerRuntime(owner, { session_id: session.id, device_id: owner.device_id, harness: "codex",
+      provider: "fixture", model: "fixture", local_session_id: "synthetic-team-account-delete", capture_fidelity: "harness_transcript", context_deletion_version: 1 });
+    teams = new AgentTeams(service, undefined, { autoStart: false });
+    const input = { plan: { name: "Synthetic private Team", team_prompt: "", nodes: [{ id: "lead", label: "Lead", role: "", x: 0, y: 0,
+      target: { kind: "local" as const, runtime_id: runtime.id, harness: "codex" as const, provider: "fixture", model: "fixture" } }], edges: [] },
+      entry_node_id: "lead", content: "Synthetic task", max_calls: 1, max_duration_minutes: 30, content_revision: 0 };
+    new AgentTeamLibrary(teams).save(owner, "synthetic-account-team", { draft: input.plan,
+      expected_revision: null, idempotency_key: "team-account-save" });
+    assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_revision_clocks WHERE user_id=?").get(owner.user_id)!.n, 1);
+    for (const [index, forget] of [true, false].entries()) {
+      const runId: string = teams.start(owner, session.id, { ...input, idempotency_key: `team-account-task-${index}` }).run.id;
+      await teams.pump(); assert.equal(teams.read(owner, session.id, runId).run.calls_used, 1);
+      teams.control(owner, session.id, runId, { action: "stop", idempotency_key: `team-account-stop-${index}` });
+      if (forget) teams.forget(owner, session.id, runId);
+    }
+    assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n, 2);
+    service.transferProjectOwnership(owner, session.project_id, peer.user_id, "team-account-transfer");
+    service.deleteAccount(owner);
+    assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n, 0);
+    assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_revision_clocks WHERE user_id=?").get(owner.user_id)!.n, 0);
+    const history = database.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE session_id=? AND type='agent_request'").get(session.id)!.n;
+    assert.equal(history, 2, "Shared history remains even when private Team data is deleted");
+    teams.close(); teams = undefined; database.close(); database = new CollaborationDatabase(path);
+    assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_start_receipts").get()!.n, 0,
+      "Startup migration must not resurrect deleted-account metadata from retained canonical history");
+    assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM agent_team_revision_clocks WHERE user_id=?").get(owner.user_id)!.n, 0);
+    assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE session_id=? AND type='agent_request'").get(session.id)!.n, history);
+  } finally { teams?.close(); database.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 test("deleting an account requires ownership transfer, deletes Solo, retains anonymized Multi, and revokes devices", () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-account-delete-"));

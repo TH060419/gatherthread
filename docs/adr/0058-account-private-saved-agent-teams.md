@@ -56,9 +56,34 @@ Detailed behavior and disclosure limits
 remain owned by Product specification and Security.
 
 Stable exact-input receipts recover unknown acceptance; definition revision CAS
-prevents stale enable/save from undoing a newer disable. Emergency controls have
-independent admission capacity and transport recovery. Private run erasure never
-turns a canonical Team-owned request into an ordinary executable request.
+prevents stale enable/save from undoing a newer disable. An account-wide monotonic
+revision clock preserves this fence even when a deleted Team ID is recreated;
+its revisions are opaque and its single metadata row is deleted with the account.
+The new namespace begins at `2^40` to separate newly allocated revisions from
+the earlier preview's per-Team counters, including deleted legacy configurations.
+Successful test stamps are committed by the server and do not depend on browser
+polling or retention of the private test run. Replacing a configuration fences
+its old test in the library transaction; physical cleanup remains recoverable.
+Emergency controls have
+independent admission capacity and transport recovery. A failed native
+cancellation remains repairable after the run ends or resumes onto a new step:
+startup and bounded coordinator retries inspect fenced outstanding claims,
+without dispatching another call or changing the run's outcome. A nullable
+per-step retry timestamp is added to preview databases without rewriting saved
+plans or canonical events. Revoked original authority cannot publish a new
+result; trusted cleanup may only retire the already fenced exact claim.
+Private run deletion atomically retires its residual native claims before
+dropping the step pointers, including Forget, expiry and storage reclamation;
+the cleanup rolls back together with a rejected deletion transaction.
+Storage-pressure admission
+may reclaim only the account's obsolete terminal connectivity caches, atomically
+with the new start and without discarding current test stamps, ordinary task
+history or consumed-key fences. Ended task records have an explicit Web cleanup
+path through the existing private Forget contract. Private run erasure never
+turns a canonical Team-owned request into an ordinary executable request or
+makes its accepted start key reusable. Keep a separate content-free consumed-key
+receipt after private Forget or expiry, including runs stopped before their first
+canonical step; receipt capacity fails closed instead of evicting that fence.
 Detailed routes and compatibility belong to
 [Interface contracts](../INTERFACE_CONTRACTS.md#saved-agent-team-preview-contract),
 data flow to [Architecture](../ARCHITECTURE.md#saved-agent-teams-local-implementation-preview),
@@ -75,9 +100,9 @@ Teams. Cycles and parent returns remain bounded by the immutable run limits.
 Verification must cover atomic library caps and ownership, immutable copies,
 test/edit/enable revisions, exact target/provenance failures, shared quota and
 Solo acknowledgment, revoked original authorizers, lost receipts, emergency
-controls, retention and canonical ownership after Forget. Instruction coverage
-includes first-contact/refresh manifests, actual caller/return attribution,
-conflict reports, qualifying human clarification, same-key Resume and erasure
+controls, retention, consumed-key fencing and canonical ownership after Forget.
+Instruction coverage includes first-contact/refresh manifests, actual caller/return
+attribution, conflict reports, qualifying human clarification, same-key Resume and erasure
 of clarification dependencies after Forget. Graph/editor behavior
 also requires real Safari and Chromium checks. This record specifies the local
 implementation contract, not completed browser/provider acceptance or released

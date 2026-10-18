@@ -167,7 +167,8 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
           await api.appendAgentRequest(current.sessionId, { ...resumeAgentRequestInput(source, key), contentRevision });
         }
       } catch (error) {
-        if (getContext().scope === current.scope && !pending.confirmed) errorNode.textContent = t(error.message ?? "Unable to control this Agent request. Try again.");
+        if (getContext().scope === current.scope && !pending.confirmed) errorNode.textContent = current.action === "stop_team" && current.teamError
+          ? current.teamError(error) : t(error.message ?? "Unable to control this Agent request. Try again.");
       } finally {
         if (operation === pending) operation = null;
         if (getContext().scope === current.scope) onChange();

@@ -20,6 +20,27 @@ const save = { draft, max_calls: 12, max_duration_minutes: 30, expected_revision
 const start = { expected_revision: 1, content_revision: 0, content: "Synthetic task", solo_transfer_ack: false, idempotency_key: "team-start-fixture-key" };
 const invalidResponse = error => error instanceof ApiError && error.status === 502 && !error.message.includes("private-fixture");
 
+test("Team HTTP errors preserve only bounded diagnostic fields through the real request path", async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ error: { code: "conflict", message: "private-fixture-provider-body",
+    details: { issue_code: "agent_team_call_limit", node_id: "module-fixture", node_label: "执行模块", target_kind: "shared",
+      headers: { authorization: "private-fixture-header" }, raw_error: "private-fixture-error" } } }, { status: 409 });
+  try {
+    const api = new HttpCollaborationApi();
+    await assert.rejects(api.controlTeamRun(summary.session_id, summary.id, { action: "resume", idempotency_key: "safe-issue-control" }), error => {
+      assert.equal(error.status, 409); assert.equal(error.code, "conflict");
+      assert.deepEqual(error.details, { issue_code: "agent_team_call_limit", node_id: "module-fixture", node_label: "执行模块", target_kind: "shared" });
+      assert.equal(JSON.stringify(error).includes("private-fixture"), false); assert.equal(error.message.includes("private-fixture"), false);
+      return true;
+    });
+    await assert.rejects(api.request("/v1/projects"), error => { assert.equal(error.details, undefined); return true; });
+    globalThis.fetch = async () => Response.json({ error: { code: "conflict", message: "private-fixture",
+      details: { issue_code: "agent_team_call_limit", node_label: "x".repeat(121) } } }, { status: 409 });
+    await assert.rejects(api.controlTeamRun(summary.session_id, summary.id, { action: "resume", idempotency_key: "invalid-issue-control" }),
+      error => { assert.equal(error.details, undefined); return true; });
+  } finally { globalThis.fetch = previous; }
+});
+
 test("Team API requests use strict snake_case input and reject unsupported overrides before transport", () => {
   const api = new HttpCollaborationApi(); let transported = 0;
   api.request = () => { transported++; throw Error("Unexpected transport"); };
@@ -125,6 +146,32 @@ async function partialServer(t, respond) {
   t.after(() => { server.closeAllConnections(); server.close(); });
   return `http://127.0.0.1:${server.address().port}`;
 }
+
+test("terminal private-record cleanup binds its exact route and recovers a lost 204 without swallowing authorization failures", async () => {
+  const api = new HttpCollaborationApi(), requests = [];
+  api.request = async (path, options) => { requests.push([path, options.method, options.body]); return undefined; };
+  assert.deepEqual(await api.forgetTeamRun(summary.session_id, summary.id), { deleted: true });
+  assert.deepEqual(requests, [["/v1/sessions/session%3Afixture/agent-team-runs/run%3Afixture", "DELETE", "{}"]]);
+  api.request = async (_path, options) => {
+    if (options.method === "DELETE") throw new ApiError("Already cleared", { status: 404, code: "not_found" });
+    return { runs: [] };
+  };
+  assert.deepEqual(await api.forgetTeamRun(summary.session_id, summary.id), { deleted: true });
+  api.request = async () => { throw new ApiError("Session access lost", { status: 404, code: "not_found" }); };
+  await assert.rejects(api.forgetTeamRun(summary.session_id, summary.id), error => error.status === 404,
+    "membership loss must not be mistaken for successful private-record cleanup");
+  api.request = async (_path, options) => {
+    if (options.method === "DELETE") throw new ApiError("Conflicting response", { status: 404, code: "not_found" });
+    return { runs: [summary] };
+  };
+  await assert.rejects(api.forgetTeamRun(summary.session_id, summary.id), error => error.status === 404);
+  for (const [status, code] of [[403, "forbidden"], [401, "unauthorized"], [409, "conflict"], [404, "unrelated_error"]]) {
+    api.request = async () => { throw new ApiError("Refused", { status, code }); };
+    await assert.rejects(api.forgetTeamRun(summary.session_id, summary.id), error => error.status === status && error.code === code);
+  }
+  api.request = async () => ({ deleted: true });
+  await assert.rejects(api.forgetTeamRun(summary.session_id, summary.id), invalidResponse);
+});
 
 test("successful headers and a partial JSON body time out; recovery reuses exactly the original body and key", async t => {
   const starts = [];

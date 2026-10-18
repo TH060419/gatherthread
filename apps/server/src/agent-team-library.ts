@@ -8,10 +8,11 @@ import { teamAllowsDelegation } from "./agent-teams.js";
 import { shareDigest, stableShareJson } from "./agent-sharing-store.js";
 import { ApiError, conflict, forbidden, idempotencyConflict, notFound } from "./errors.js";
 import { redactJson } from "./redaction.js";
+import { AGENT_TEAM_REVISION_EPOCH } from "./agent-team-schema.js";
 
 interface DefinitionRow { id: string; user_id: string; revision: number; config_json: string; enabled: number;
   tested_revision: number | null; test_run_id: string | null; test_session_id: string | null; updated_at: string }
-type ResultRef = { kind: "team" | "favorite" | "deleted"; id: string };
+type ResultRef = { kind: "team" | "favorite" | "deleted"; id: string; cancel_test_id?: string };
 /** Account-private reusable configurations. Each execution separately rechecks the current session. */
 export class AgentTeamLibrary {
   constructor(readonly teams: AgentTeams) {}
@@ -72,9 +73,29 @@ export class AgentTeamLibrary {
       return { ref, replayed: false };
     });
   }
+  private nextRevision(actor: Actor) {
+    // One bounded account clock prevents deleted/recreated IDs from recycling a
+    // revision that an older browser still holds. This runs inside mutation().
+    const row = this.sql.prepare(`INSERT INTO agent_team_revision_clocks(user_id,last_revision) VALUES(?,?)
+      ON CONFLICT(user_id) DO UPDATE SET last_revision=last_revision+1 RETURNING last_revision`)
+      .get(actor.user_id, AGENT_TEAM_REVISION_EPOCH + 1)!;
+    return Number(row.last_revision);
+  }
+  private fenceTest(actor: Actor, id: string | null | undefined) {
+    if (!id) return undefined;
+    const run = this.sql.prepare("SELECT user_id,purpose,status,current_step_id FROM agent_team_runs WHERE id=?").get(id);
+    if (!run) return undefined;
+    if (run.user_id !== actor.user_id || run.purpose !== "test") throw forbidden("Only your own connectivity test can be cancelled here");
+    if (run.status === "running" || run.status === "paused") {
+      this.store.settle(id, "stopped", "test_replaced");
+      if (run.current_step_id) this.sql.prepare(`UPDATE agent_team_steps
+        SET status=CASE WHEN status IN ('pending','running') THEN 'paused' ELSE status END,finished_at=COALESCE(finished_at,?) WHERE id=?`)
+        .run(this.store.now(), run.current_step_id);
+    }
+    return id;
+  }
   save(actor: Actor, id: string, raw: unknown) {
     const input = SaveAgentTeamDefinitionSchema.parse(raw); this.safe(input);
-    let oldTest: string | null = null;
     const result = this.mutation(actor, input.idempotency_key, { id, save: input }, () => {
       const row = this.sql.prepare("SELECT * FROM agent_team_definitions WHERE id=?").get(id) as unknown as DefinitionRow | undefined;
       if (row && row.user_id !== actor.user_id) throw notFound("Agent team configuration");
@@ -84,14 +105,17 @@ export class AgentTeamLibrary {
       }
       const config = JSON.stringify({ draft: input.draft, max_calls: input.max_calls, max_duration_minutes: input.max_duration_minutes });
       if (row?.config_json === config) return { kind: "team", id };
-      oldTest = row?.test_run_id ?? null;
+      const oldTest = this.fenceTest(actor, row?.test_run_id);
+      const revision = this.nextRevision(actor);
       this.sql.prepare(`INSERT INTO agent_team_definitions(id,user_id,revision,config_json,updated_at) VALUES(?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,config_json=excluded.config_json,enabled=0,
         tested_revision=NULL,test_run_id=NULL,test_session_id=NULL,updated_at=excluded.updated_at`)
-        .run(id, actor.user_id, (row?.revision ?? 0) + 1, config, this.store.now());
-      return { kind: "team", id };
+        .run(id, actor.user_id, revision, config, this.store.now());
+      return { kind: "team", id, ...(oldTest ? { cancel_test_id: oldTest } : {}) };
     });
-    if (oldTest) this.teams.stopPrivateTest(actor, oldTest);
+    // The transaction already blocks claims/output. Retain the cleanup identity
+    // in the receipt so a lost post-commit cancellation is retried with its ACK.
+    if (result.ref.cancel_test_id) this.teams.stopPrivateTest(actor, result.ref.cancel_test_id);
     return { team: this.read(actor, id), replayed: result.replayed };
   }
   favorite(actor: Actor, id: string, raw: unknown) {
@@ -108,17 +132,17 @@ export class AgentTeamLibrary {
     if (!favorite) throw notFound("Favorite module"); return { favorite, replayed: result.replayed };
   }
   delete(actor: Actor, kind: "team" | "favorite", id: string, key: string) {
-    let oldTest: string | null = null;
     const result = this.mutation(actor, key, { delete: kind, id }, () => {
-      if (kind === "team") { const row = this.own(actor, id); oldTest = row.test_run_id;
+      let oldTest: string | undefined;
+      if (kind === "team") { const row = this.own(actor, id); oldTest = this.fenceTest(actor, row.test_run_id);
         this.sql.prepare("DELETE FROM agent_team_definitions WHERE id=? AND user_id=?").run(id, actor.user_id);
       } else {
         if (!this.sql.prepare("SELECT 1 FROM agent_team_favorites WHERE id=? AND user_id=?").get(id, actor.user_id)) throw notFound("Favorite module");
         this.sql.prepare("DELETE FROM agent_team_favorites WHERE id=? AND user_id=?").run(id, actor.user_id);
       }
-      return { kind: "deleted", id };
+      return { kind: "deleted", id, ...(oldTest ? { cancel_test_id: oldTest } : {}) };
     });
-    if (oldTest) this.teams.stopPrivateTest(actor, oldTest);
+    if (result.ref.cancel_test_id) this.teams.stopPrivateTest(actor, result.ref.cancel_test_id);
     return { deleted: true as const, replayed: result.replayed };
   }
   private checked(actor: Actor, id: string, revision: number, enabled = false) {
@@ -128,10 +152,18 @@ export class AgentTeamLibrary {
     return team;
   }
   private existingRun(actor: Actor, id: string, sessionId: string, key: string, purpose: "task" | "test", input: unknown) {
-    this.store.authorize(actor, sessionId, true);
+    this.store.authorize(actor, sessionId, true); this.store.prune();
     const run = this.sql.prepare("SELECT id,purpose,definition_id,library_request_digest FROM agent_team_runs WHERE user_id=? AND session_id=? AND idempotency_key=?")
       .get(actor.user_id, sessionId, key);
-    if (!run) return undefined;
+    if (!run) {
+      const consumed = this.store.startReceipt(actor, sessionId, key);
+      if (!consumed) return undefined;
+      // Older canonical-only fences cannot establish an exact private input;
+      // they still prove that this key cannot authorize another execution.
+      if (consumed.input_digest && (consumed.definition_id !== id || consumed.purpose !== purpose
+        || consumed.library_request_digest !== shareDigest(input))) throw idempotencyConflict("Retry the exact original team request");
+      return this.store.clearedStart();
+    }
     if (run.definition_id !== id || run.purpose !== purpose || run.library_request_digest !== shareDigest(input)) throw idempotencyConflict("Retry the exact original team request");
     return { ...this.teams.read(actor, sessionId, String(run.id)), replayed: true };
   }
@@ -158,9 +190,10 @@ export class AgentTeamLibrary {
         if (team.revision !== input.expected_revision || team.tested_revision !== team.revision) throw conflict("Test the saved configuration before enabling it");
         this.teams.validateTargets(actor, sessionId, this.plan(team), true);
       }
+      const revision = this.nextRevision(actor);
       this.sql.prepare(`UPDATE agent_team_definitions SET enabled=?,updated_at=?,
-        tested_revision=CASE WHEN tested_revision=revision THEN revision+1 ELSE tested_revision END,revision=revision+1 WHERE id=?`)
-        .run(Number(input.enabled), this.store.now(), id); return { kind: "team", id };
+        tested_revision=CASE WHEN tested_revision=revision THEN ? ELSE tested_revision END,revision=? WHERE id=?`)
+        .run(Number(input.enabled), this.store.now(), revision, revision, id); return { kind: "team", id };
     }, !input.enabled);
     return { team: this.read(actor, id), replayed: result.replayed };
   }
