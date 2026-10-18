@@ -53,10 +53,25 @@ assert.deepEqual(dshBundle.deepseekHarness?.sourceFallback, {
   verifiedProfiles: ["headless", "web"],
   persistenceProbe: "stat",
 });
+assert.deepEqual(dshBundle.deepseekHarness?.desktop, {
+  distribution: "desktop",
+  package: "@deepseek-ai/dsh",
+  version: "0.2.1-rc.2",
+  profile: "desktop",
+  persistenceProbe: "list",
+  patchFile: "cordis.patch.yml",
+});
+assert.equal(dshBundle.deepseekHarness?.legacyPatchFile, "cordis.patch.dsh-0.1.yml");
 assert.deepEqual(dshBundle.runtimeDependencies, [], "GatherThread installation must not acquire a DSH runtime dependency");
 assert.equal(dshPackage.private, undefined, "DSH plugin package must remain publishable through the official profile installer");
 assert.deepEqual(dshPackage.publishConfig, { access: "public", tag: "beta" });
 assert.equal(dshPackage.engines?.node, ">=24");
+assert.equal(
+  dshPackage.engines?.dsh,
+  ">=0.2.1-rc.2 <0.3.0",
+  "DSH must gate the 0.2.x profile layer: an older runtime loads it and fails startup on the "
+    + "Connection inject rename, while the 0.1.x line ships the frozen cordis.patch.dsh-0.1.yml layer",
+);
 assert.equal(
   Object.keys(dshPackage.dependencies ?? {}).some((name) => name.startsWith("@deepseek-ai/")),
   false,
@@ -120,6 +135,7 @@ const requiredFiles = [
   "packages/dsh-host/bundle/enabled.example.cordis.patch.yml",
   "packages/dsh-host/bundle/project.example.cordis.patch.yml",
   "packages/dsh-host/client/client.js",
+  "packages/dsh-host/cordis.patch.dsh-0.1.yml",
   "packages/dsh-host/dist/bundle/native-plugin.js",
   "packages/dsh-host/dist/bundle/plugin.js",
   "packages/dsh-host/integration/loader-control/index.mjs",

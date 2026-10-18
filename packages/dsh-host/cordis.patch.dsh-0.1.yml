@@ -1,0 +1,36 @@
+# Frozen profile layer for DSH 0.1.7-rc.2 (the `0.1.0-beta.2` artifact).
+#
+# The published `0.1.0-beta.2` tarball ships this layer as `cordis.patch.yml`.
+# It is kept here so the 0.1.x line stays source-buildable, and it must not be
+# installed together with the 0.2.x layer: both target the same Loader row and
+# the last one applied wins.
+#
+# Do not merge the two layers. DSH 0.2.1-rc.2 provides `webRuntime` only after
+# the server binds, while Connection waits for its injected services before it
+# can register the `/api` transport, so a row that injects `webRuntime` never
+# activates on 0.2.x. DSH 0.1.7-rc.2's Connection row interpolates
+# `!!js ctx.webRuntime.trustedHosts`, so the 0.2.x `webStartup` spelling fails
+# there instead. `cordis.patch.yml` is the 0.2.x layer.
+
+- insert:
+    - id: gatherthread-dsh-native
+      name: '@gatherthread/dsh-host'
+      inject: [agents, sessions, sessionPersistence, sessionQuery, sessionTitle, workspaceRegistry, llm, credentials, connection]
+      config:
+        enabled: true
+
+# DSH 0.1.5-rc.x dropped `webServer` from the Connection plugin's own inject list
+# (`["webServer", "credentials"]` became `["credentials"]`), moving it into a
+# nested scope that covers only DSH's new index-injection feature. Connection
+# still reads `owner.webServer` from its *providing* context, so
+# `connection.rpc.handle()` raises `cannot get property "webServer" without
+# inject` and the Host row fails to activate. 0.1.2-rc.1 kept the dependency at
+# the top level, so restoring it here is what makes the Host plugin load.
+#
+# A row patch replaces `inject` wholesale rather than merging, so each entry the
+# 0.1.5 row already declares is repeated: `webRuntime` still feeds this row's
+# `trustedHosts: !!js ctx.webRuntime.trustedHosts` expression, and `credentials`
+# is repeated so the row stays self-sufficient no matter how the Loader folds a
+# row's list together with the module's own `inject` export.
+- id: connection
+  inject: [webRuntime, credentials, webServer]

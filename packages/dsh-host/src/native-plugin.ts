@@ -24,7 +24,8 @@ import {
 import { DshHostConnector } from "./connector.js";
 import {
   createDshHostFacade,
-  DSH_NPM_COMPATIBILITY,
+  DSH_COMPATIBILITY_TARGETS,
+  DSH_DESKTOP_COMPATIBILITY,
   registerDshNativeWorkspace,
   registerDshPluginDisposer,
 } from "./dsh-compat.js";
@@ -114,8 +115,13 @@ export interface DshNativePublicState {
   readonly authorization: "unpaired" | "pairing" | "paired";
   readonly compatibility: {
     readonly package: "@deepseek-ai/dsh";
-    readonly version: "0.1.7-rc.2";
-    readonly profile: "web";
+    readonly version: string;
+    readonly profile: "desktop" | "web";
+    /** Every DSH release and profile whose Host surface this build was verified against. */
+    readonly targets: readonly {
+      readonly version: string;
+      readonly profile: "desktop" | "web";
+    }[];
   };
   readonly runtime: DshPublicStatusSnapshot;
   readonly officialServerUrl?: string;
@@ -196,6 +202,8 @@ export interface DshNativeHostControllerOptions {
   readonly context: unknown;
   readonly status: DshStatusController;
   readonly workspacePath: string;
+  /** Profile the Host is loaded into; reported as the verified compatibility target. */
+  readonly profile?: "desktop" | "web";
   readonly dshHome?: string;
   /** Logical user home used for managed GatherThread Project workspaces. */
   readonly projectWorkspaceHomeDirectory?: string;
@@ -309,9 +317,13 @@ export class DshNativeHostController {
       integration: "gatherthread",
       authorization,
       compatibility: {
-        package: DSH_NPM_COMPATIBILITY.package,
-        version: DSH_NPM_COMPATIBILITY.version,
-        profile: DSH_NPM_COMPATIBILITY.profile,
+        package: DSH_DESKTOP_COMPATIBILITY.package,
+        version: DSH_DESKTOP_COMPATIBILITY.version,
+        profile: this.#options.profile ?? DSH_DESKTOP_COMPATIBILITY.profile,
+        // The scalar fields describe the running target. The list carries every
+        // pair this build was verified against, because the profile decides the
+        // surface while the release decides the inject list.
+        targets: DSH_COMPATIBILITY_TARGETS,
       },
       runtime: this.#options.status.snapshot(),
       ...(this.#options.officialServerUrl === undefined ? {} : {
@@ -1016,6 +1028,22 @@ export class DshNativeHostController {
   }
 }
 
+/**
+ * Read the profile the Host was loaded into. DSH's own web-app layer selects
+ * desktop-only rows with the same `profileContext` lookup, which is why the
+ * profile name is a public fact rather than an inference from the port or host.
+ */
+function dshProfileFromContext(context: unknown): "desktop" | "web" {
+  try {
+    const get = (context as { get?: (name: string) => unknown } | undefined)?.get;
+    if (typeof get !== "function") return "desktop";
+    const profile = get.call(context, "profileContext") as { readonly name?: unknown } | undefined;
+    return profile?.name === "web" ? "web" : "desktop";
+  } catch {
+    return "desktop";
+  }
+}
+
 /** Installed bundle entry. The explicit bundle row supplies enabled: true. */
 export async function apply(context: unknown, rawConfig?: unknown): Promise<void> {
   const config = parseNativePluginConfig(rawConfig);
@@ -1029,6 +1057,7 @@ export async function apply(context: unknown, rawConfig?: unknown): Promise<void
     context,
     status,
     workspacePath: config.workspacePath,
+    profile: dshProfileFromContext(context),
     ...(dshHome === undefined ? {} : {
       dshHome,
       projectWorkspaceHomeDirectory: path.dirname(dshHome),

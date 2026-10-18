@@ -42,6 +42,7 @@ try {
     "README.md",
     "LICENSE",
     "cordis.patch.yml",
+    "cordis.patch.dsh-0.1.yml",
     "bundle/manifest.json",
     "client/client.js",
     "types/native-plugin.d.ts",

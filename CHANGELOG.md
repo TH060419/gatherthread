@@ -4,6 +4,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Install the DeepSeek Harness plugin into the desktop application's `desktop` profile. DSH `0.2.1-rc.2` renamed Connection's trust service from `webRuntime` to `webStartup`, so the previous profile layer left the required Connection row pending and failed startup. The current layer targets `0.2.1-rc.2` for both the `desktop` and `web` profiles, declares `engines.dsh` so a mismatched runtime disables the row instead of crashing, and keeps the `0.1.7-rc.2` layer frozen as `cordis.patch.dsh-0.1.yml` for the `0.1.0-beta.2` artifact. The settings panel now lists every verified release/profile pair instead of claiming one release while running another. See [ADR-0058](docs/adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md).
 - Redesign mobile conversations, members, invitations, settings and project-file connections as focused pages. Add a browser-local Mobile/Desktop choice on login and in General, with confirmation after device detection. Preserve drafts, exact remote/Cloud Agent selection and Pause/Resume; desktop-only file transfers and native setup stay off the phone interface.
 
 ## [0.1.0-beta.2] - 2026-10-15

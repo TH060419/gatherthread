@@ -6,6 +6,16 @@ DSH 设置中的项目代码上传、下载与恢复需逐项目单独授权；G
 
 先用邮箱和密码登录，再批准设备配对。插件中可选择 `https://gatherthread.cn` 共序官方服务，也可输入自托管服务器地址。「连接 DeepSeek Harness → 下载此服务器的配套安装包」会打开带源码版本的下载页，使用该页的 DSH 插件 TGZ；下载不可用时，使用下方源码路径。
 
+## 支持的 DSH 版本
+
+当前插件构建适配 DSH `0.2.1-rc.2`（DeepSeek Harness 桌面版内置的版本），同时支持它的 `desktop` profile 与 `npx` 的 `web` profile。桌面版自行管理 profile，请用其自带的 CLI 安装：
+
+```bash
+dsh plugin --profile desktop add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+```
+
+`0.1.7-rc.2` 由冻结的 `0.1.0-beta.2` 安装包及其 `cordis.patch.dsh-0.1.yml` 层提供。两层无法合并：`0.2.x` 把 Connection 的信任来源从 `webRuntime` 改名为 `webStartup`，同时注入两者会让必需的 Connection 行永久等待，导致启动失败。构建中声明了 `engines.dsh`，版本不匹配时 DSH 会禁用该行并给出提示，而不是让整个 profile 崩溃。参见 [ADR-0058](adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md)。
+
 ## 正常连接只需四步
 
 ### 1. 一次性安装插件
@@ -19,7 +29,7 @@ npm install --global pnpm@10
 下载配套的 DSH 插件 TGZ，把下方占位路径换成下载文件的完整路径，再加入 DSH Web profile：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
 
 Windows 使用带引号的完整路径，例如 `C:/Users/you/Downloads/your-plugin.tgz`。npm 的 `@gatherthread/dsh-host@0.1.0-beta.1` 是旧发行版，不是此源码构建，也不包含本次安全删除消息的处理。
@@ -27,7 +37,7 @@ Windows 使用带引号的完整路径，例如 `C:/Users/you/Downloads/your-plu
 ### 2. 打开 DSH
 
 ```bash
-npx @deepseek-ai/dsh@0.1.7-rc.2 web
+npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 
 保持 DSH 运行，然后打开 **设置 → GatherThread / 共序**。
@@ -49,8 +59,8 @@ git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
 npm ci
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.2.tgz
-npx @deepseek-ai/dsh@0.1.7-rc.2 web
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.2.tgz
+npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 
 除非依赖元数据已完整缓存，否则不要加 `--offline`。DSH 会把 profile 包安装交给 `pnpm`；离线镜像不完整时，共序插件尚未开始安装就会失败。

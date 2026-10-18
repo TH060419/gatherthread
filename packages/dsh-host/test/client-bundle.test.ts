@@ -846,3 +846,89 @@ test("Client paints the model dropdown and its option rows with an opaque themed
   }
   cleanup?.();
 });
+
+/** Render the settings Slot against one native `status/get` value. */
+async function renderNativeState(compatibility: Record<string, unknown>): Promise<string> {
+  const loaded = await loadClient({
+    fetch: (async () => { throw new Error("native Client must not use the legacy Fetch route"); }) as typeof fetch,
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: {
+      rpc: {
+        async call() {
+          return { ok: true, value: {
+            schemaVersion: 2,
+            integration: "gatherthread",
+            authorization: "paired",
+            serverUrl: "http://127.0.0.1:8787",
+            deviceName: "DeepSeek Harness",
+            compatibility,
+            runtime: {
+              schemaVersion: 1,
+              integration: "gatherthread",
+              connection: "stopped",
+              bindingMode: "project",
+              projectName: "GatherThread / 共序",
+              activeSessionCount: 0,
+              sessions: [],
+              updatedAt: "2026-10-18T00:00:00.000Z",
+            },
+          } };
+        },
+      },
+    },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  assert.equal(typeof component, "function");
+  loaded.render(component as () => unknown);
+  const cleanup = loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const rendered = collectedText(loaded.render(component as () => unknown));
+  cleanup?.();
+  return rendered;
+}
+
+test("Client renders a desktop 0.2.x Host and names the target it runs", async () => {
+  // DSH 0.2.1-rc.2 renamed Connection's trust service, so this build ships a
+  // different profile layer than the 0.1.x artifact. Reporting one release while
+  // running another is what the compatibility block must stop doing, and a
+  // desktop pair must not be rejected for not being the pinned npm Web pair.
+  const rendered = await renderNativeState({
+    package: "@deepseek-ai/dsh",
+    version: "0.2.1-rc.2",
+    profile: "desktop",
+    targets: [
+      { version: "0.2.1-rc.2", profile: "desktop" },
+      { version: "0.2.1-rc.2", profile: "web" },
+    ],
+  });
+  assert.match(rendered, /@deepseek-ai\/dsh@0\.2\.1-rc\.2 · desktop/u, `desktop panel rendered: ${rendered}`);
+});
+
+test("Client still renders a Host that predates the verified-target list", async () => {
+  // The frozen `0.1.0-beta.2` artifact sends only the scalar pair. Rejecting it
+  // would break an installed Host that is correct for its own release.
+  const rendered = await renderNativeState({
+    package: "@deepseek-ai/dsh",
+    version: "0.1.7-rc.2",
+    profile: "web",
+  });
+  assert.match(rendered, /@deepseek-ai\/dsh@0\.1\.7-rc\.2 · web/u, `legacy panel rendered: ${rendered}`);
+});
+
+test("Client refuses a Host whose running pair is absent from its own target list", async () => {
+  const rendered = await renderNativeState({
+    package: "@deepseek-ai/dsh",
+    version: "0.2.1-rc.2",
+    profile: "desktop",
+    targets: [{ version: "0.2.1-rc.2", profile: "web" }],
+  });
+  assert.match(rendered, /状态暂不可用/u, `inconsistent claim must fail closed; rendered: ${rendered}`);
+  assert.doesNotMatch(rendered, /已验证兼容/u);
+});

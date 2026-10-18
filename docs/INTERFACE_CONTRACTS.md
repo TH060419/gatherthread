@@ -194,6 +194,8 @@ The private snapshot-job protocol adds `code_sync_status`, `code_upload`, `code_
 
 DSH native RPC adds `code/authorize {projectId,enabled}` and `code/action {projectId,action}`. Optional `codeSync` public-state entries are project-scoped. Consent is private, versioned and bound to the exact user/project/server/workspace. Packaged native controller and client upgrade together; existing conversation `sync/*` semantics do not change.
 
+`status/get` reports `compatibility {package, version, profile, targets}`. `version` and `profile` name the target the Host is running under — the profile is read from DSH's `profileContext` — and `targets` lists every `{version, profile}` pair this build was verified against. A client accepts the pair only when it appears in `targets`, and continues to accept the scalar-only `0.1.7-rc.2`/`web` form sent by older Host builds. The block is descriptive: it never enables a path that the profile layer's `engines.dsh` gate or a structural service check would otherwise refuse. The bundle's `cordis.patch.yml` is release-specific — `0.2.x` names Connection's `webStartup` trust service while the frozen `cordis.patch.dsh-0.1.yml` names `webRuntime` — and `engines.dsh` makes DSH disable the row with a warning on a mismatched runtime instead of failing profile startup. See [ADR-0058](adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md).
+
 Source visibility is project-wide, not Solo-scoped. A member branch is not a privacy boundary or per-Agent lock. Native conversation bindings, realtime context injection and the original local Git repository remain untouched. See [CODE_SYNC.md](CODE_SYNC.md) and [ADR-0025](adr/0025-opt-in-git-backed-code-checkpoints.md).
 
 ## MCP and local relay boundaries

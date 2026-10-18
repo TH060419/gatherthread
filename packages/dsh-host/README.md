@@ -7,27 +7,50 @@ installation, GatherThread does not load in DSH or alter the GatherThread
 server, Web app, Codex bridge, or Claude adapter.
 
 The normal path is the published `@deepseek-ai/dsh` CLI, not a DSH source
-checkout. The verified distribution is `@deepseek-ai/dsh@0.1.7-rc.2` with the
-`web` profile and its public `sessionPersistence` recovery surface. The
-source-only path remains fixed to `dsh-v0.1.7-rc.2`, commit
-`477b4f420553e8a52c2fbccc464d7561b239c443`, and is only an advanced diagnostic
-fallback. All version-sensitive Host calls remain inside `src/dsh-compat.ts`.
-The package does not install a DSH runtime dependency.
+checkout. This build's profile layer targets `0.2.1-rc.2`, the release bundled
+with the DeepSeek Harness desktop application, and serves both the `desktop` and
+`web` profiles of that release. The source-only path remains fixed to
+`dsh-v0.1.7-rc.2`, commit `477b4f420553e8a52c2fbccc464d7561b239c443`, and is only
+an advanced diagnostic fallback. All version-sensitive Host calls remain inside
+`src/dsh-compat.ts`. The package does not install a DSH runtime dependency.
+
+### Supported releases
+
+| DSH release | Profile | Profile layer |
+|---|---|---|
+| `0.2.1-rc.2` (desktop app and `npx` Web) | `desktop`, `web` | `cordis.patch.yml` |
+| `0.1.7-rc.2` | `web`, `headless` | `cordis.patch.dsh-0.1.yml`, shipped in the `0.1.0-beta.2` artifact |
+
+`package.json` declares `engines.dsh: ">=0.2.1-rc.2 <0.3.0"`. DSH evaluates that
+range before importing plugin code and disables the row with an actionable
+warning on a mismatch, so pairing this build with `0.1.7-rc.2` no longer breaks
+startup — but it also does not connect. Install the `0.1.0-beta.2` artifact on a
+`0.1.7-rc.2` runtime instead: `0.2.1-rc.2` renamed Connection's trust service
+from `webRuntime` to `webStartup`, and one static row cannot inject both.
+[ADR-0058](../../docs/adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md)
+records the boundary.
 
 ## Plugin-first connection
 
 Use **Connect DeepSeek Harness → Download packages for this server** in GatherThread to download its source-matched DSH plugin TGZ. Replace the example path below with the downloaded file's full path:
 
 ```text
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
-npx @deepseek-ai/dsh@0.1.7-rc.2 web
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+npx @deepseek-ai/dsh@0.2.1-rc.2 web
 # In DSH: Settings -> GatherThread / 共序 -> Sign in and pair
+```
+
+The desktop application manages its own `desktop` profile, so install into that
+profile from its bundled CLI instead of starting a second Web server:
+
+```text
+dsh plugin --profile desktop add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
 
 On Windows, use a quoted path such as `C:/Users/you/Downloads/your-plugin.tgz`. The registry's `@gatherthread/dsh-host@0.1.0-beta.1` is an older build and does not include the current message-deletion safeguards. If server downloads are unavailable, [build the matching source checkout](../../docs/DSH_CONNECT.md#source-checkout-fallback); do not substitute the old npm build.
 
 Check the active CLI with `npx @deepseek-ai/dsh --version`. The normal start
-command already pins `0.1.7-rc.2`. The pinned DSH does not
+command already pins `0.2.1-rc.2`. The pinned DSH does not
 expose the root CLI version as a stable Host service, so the package does not
 inspect npx cache paths or claim runtime-version introspection. The install
 command pins the exact verified CLI, while every required Host/Client service is
@@ -54,7 +77,7 @@ Before removal, use **Disconnect** inside the DSH panel to clear the local
 grant, then run:
 
 ```text
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web remove @gatherthread/dsh-host
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web remove @gatherthread/dsh-host
 ```
 
 The official command removes only this package dependency and profile layer;

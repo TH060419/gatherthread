@@ -7,6 +7,7 @@ import { createLiveOutputPublisher, type LiveOutputUpdate } from "@gatherthread/
 import {
   DSH_COMPATIBILITY,
   DSH_COMPATIBILITY_MATRIX,
+  DSH_DESKTOP_COMPATIBILITY,
   DSH_NPM_COMPATIBILITY,
   createDshHostFacade,
   registerDshNativeWorkspace,
@@ -422,6 +423,12 @@ test("compatibility boundary pins the Host surface verified by the PoC", () => {
     profile: "web",
     persistenceProbe: "list",
   });
+  assert.deepEqual(DSH_DESKTOP_COMPATIBILITY, {
+    package: "@deepseek-ai/dsh",
+    version: "0.2.1-rc.2",
+    profile: "desktop",
+    persistenceProbe: "list",
+  });
   assert.deepEqual(DSH_COMPATIBILITY_MATRIX.map((entry) => ({ ...entry })), [
     {
       distribution: "npm",
@@ -434,6 +441,12 @@ test("compatibility boundary pins the Host surface verified by the PoC", () => {
       version: "0.1.7-rc.2",
       profile: "headless",
       persistenceProbe: "stat",
+    },
+    {
+      distribution: "desktop",
+      version: "0.2.1-rc.2",
+      profile: "desktop",
+      persistenceProbe: "list",
     },
   ]);
 });

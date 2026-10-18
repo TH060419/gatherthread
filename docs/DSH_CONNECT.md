@@ -6,6 +6,16 @@ The plugin provides optional **project code** upload/download/recovery in DSH se
 
 Sign in with email and password before approving pairing. In the plugin, select the official service at `https://gatherthread.cn` or enter your self-hosted server address. **Connect DeepSeek Harness → Download packages for this server** opens its source-pinned index. Install that page's DSH plugin TGZ; if it is unavailable, use the [source-checkout fallback](#source-checkout-fallback).
 
+## Supported DSH releases
+
+The current plugin build installs into DSH `0.2.1-rc.2`, the release bundled with the DeepSeek Harness desktop application, and serves both its `desktop` profile and the `npx` `web` profile. The desktop application manages its own profile, so install there with its bundled CLI:
+
+```bash
+dsh plugin --profile desktop add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+```
+
+`0.1.7-rc.2` is served by the frozen `0.1.0-beta.2` artifact and its `cordis.patch.dsh-0.1.yml` layer. The two cannot be merged: `0.2.x` renamed Connection's trust service from `webRuntime` to `webStartup`, and injecting both leaves the required Connection row pending, which fails startup. The build declares `engines.dsh`, so a mismatched runtime disables the row with DSH's own warning instead of crashing. See [ADR-0058](adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md).
+
 ## Normal four-step setup
 
 ### 1. Install the plugin once
@@ -19,7 +29,7 @@ npm install --global pnpm@10
 Download the DSH plugin TGZ from that index and add it to the DSH Web profile. Replace the placeholder below with the downloaded file's full path:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
 
 On Windows, use a quoted full path such as `C:/Users/you/Downloads/your-plugin.tgz`. The registry's `@gatherthread/dsh-host@0.1.0-beta.1` is an older release, not this source-pinned build; it does not provide the current safe message-deletion handling.
@@ -27,7 +37,7 @@ On Windows, use a quoted full path such as `C:/Users/you/Downloads/your-plugin.t
 ### 2. Open DSH
 
 ```bash
-npx @deepseek-ai/dsh@0.1.7-rc.2 web
+npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 
 Keep DSH running. Open **Settings → GatherThread / 共序**.
@@ -49,8 +59,8 @@ git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
 npm ci
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.2.tgz
-npx @deepseek-ai/dsh@0.1.7-rc.2 web
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.2.tgz
+npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 
 Do not add `--offline` unless the complete dependency metadata is already cached. DSH delegates profile package installation to `pnpm`; an incomplete offline mirror can fail before GatherThread is installed.

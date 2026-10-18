@@ -32,6 +32,28 @@ export const DSH_NPM_COMPATIBILITY = Object.freeze({
   persistenceProbe: "list",
 });
 
+/**
+ * DeepSeek Harness release bundled with the desktop application, verified with
+ * the same structural Host contract. It moved Connection's trust source from
+ * `webRuntime` to `webStartup`, so the profile layer differs from the 0.1.x one.
+ */
+export const DSH_DESKTOP_COMPATIBILITY = Object.freeze({
+  package: "@deepseek-ai/dsh",
+  version: "0.2.1-rc.2",
+  profile: "desktop",
+  persistenceProbe: "list",
+});
+
+/**
+ * Release and profile pairs this build's profile layer can activate on. The
+ * layer names `webStartup`, so only 0.2.x accepts it; the same layer serves the
+ * Web and Desktop profiles because both compose the same `dsh-web-app` rows.
+ */
+export const DSH_COMPATIBILITY_TARGETS = Object.freeze([
+  Object.freeze({ version: DSH_DESKTOP_COMPATIBILITY.version, profile: "desktop" as const }),
+  Object.freeze({ version: DSH_DESKTOP_COMPATIBILITY.version, profile: "web" as const }),
+]);
+
 export const DSH_COMPATIBILITY_MATRIX = Object.freeze([
   Object.freeze({
     distribution: "npm",
@@ -44,6 +66,12 @@ export const DSH_COMPATIBILITY_MATRIX = Object.freeze([
     version: DSH_COMPATIBILITY.version,
     profile: DSH_COMPATIBILITY.profile,
     persistenceProbe: "stat",
+  }),
+  Object.freeze({
+    distribution: "desktop",
+    version: DSH_DESKTOP_COMPATIBILITY.version,
+    profile: DSH_DESKTOP_COMPATIBILITY.profile,
+    persistenceProbe: DSH_DESKTOP_COMPATIBILITY.persistenceProbe,
   }),
 ]);
 
