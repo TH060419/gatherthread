@@ -15,7 +15,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20261012-content-1" />
+    <link rel="stylesheet" href="./src/styles.css?v=20261018-tabs-2" />
   </head>
   <body>
     <div id="boot-screen" class="boot-screen" role="status" aria-live="polite"><img src="./favicon-32x32.png" alt="" width="32" height="32"><span>GatherThread</span></div>
@@ -238,8 +238,11 @@
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" shape-rendering="geometricPrecision"><path d="M8.939 4.609L9.929 4.273L10.044 1.938L13.956 1.938L14.071 4.273L15.061 4.609L16 5.072L17.732 3.502L20.498 6.268L18.928 8L19.391 8.939L19.727 9.929L22.062 10.044L22.062 13.956L19.727 14.071L19.391 15.061L18.928 16L20.498 17.732L17.732 20.498L16 18.928L15.061 19.391L14.071 19.727L13.956 22.062L10.044 22.062L9.929 19.727L8.939 19.391L8 18.928L6.268 20.498L3.502 17.732L5.072 16L4.609 15.061L4.273 14.071L1.938 13.956L1.938 10.044L4.273 9.929L4.609 8.939L5.072 8L3.502 6.268L6.268 3.502L8 5.072Z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
           <button id="logout-button" class="text-button" type="button">Log out</button>
+          <button id="open-files-button" class="icon-button topbar-icon-button workspace-icon-button file-workspace-toggle" type="button" aria-label="Collapse file sidebar" title="Collapse file sidebar" aria-controls="file-workspace-host" aria-expanded="true" data-tooltip>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/><path class="file-workspace-chevron" d="m8 9 3 3-3 3"/></svg>
+          </button>
           <button id="mobile-tools-button" class="icon-button workspace-icon-button mobile-workspace-only" type="button" aria-label="Conversation tools" title="Conversation tools" aria-haspopup="dialog" aria-controls="mobile-tools-dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
-          <button id="mobile-members-button" class="icon-button topbar-icon-button workspace-icon-button sidebar-toggle-button" type="button" aria-label="Collapse member sidebar" title="Collapse member sidebar" aria-controls="member-panel" aria-expanded="true" data-tooltip>
+          <button id="mobile-members-button" class="icon-button topbar-icon-button workspace-icon-button sidebar-toggle-button" type="button" aria-label="Open members" title="Members" aria-controls="file-workspace-host" aria-expanded="true" data-tooltip>
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v2"/></svg>
           </button>
         </div>
@@ -330,9 +333,25 @@
                 <div class="title-line">
                   <h1 id="session-title" tabindex="-1"></h1>
                   <span id="session-mode" class="mode-badge"></span>
+                </div>
+              </div>
+              <div class="session-header-actions">
+                <div id="history-summary-menu" class="session-toolbar-menu" hidden>
+                  <button id="history-summary-menu-button" class="session-toolbar-trigger" type="button" aria-label="Summaries" title="Summaries" aria-controls="history-summary-menu-panel" aria-expanded="false">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M5 10h14M5 15h9M5 20h9"/><path d="m18 16 2 2-2 2"/></svg><span>Summaries</span>
+                  </button>
+                  <div id="history-summary-menu-panel" class="session-toolbar-panel" role="group" aria-labelledby="history-summary-menu-button" hidden>
+                    <button id="history-summary-select-button" class="session-toolbar-action" type="button" aria-label="Select history to summarize" title="Select history to summarize" aria-pressed="false" aria-controls="history-summary-toolbar" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h10M4 10h10M4 15h5M4 20h5M15 14l2 2 4-5M15 20h6"/></svg><span>Select history to summarize</span></button>
+                    <button id="history-summary-view-button" class="session-toolbar-action" type="button" aria-label="Show all original messages" title="Show all original messages" aria-pressed="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16m-4-4 4 4-4 4M20 16H4m4-4-4 4 4 4"/></svg><span id="history-summary-view-label" class="session-toolbar-label">Show all original messages</span></button>
+                    <button id="history-summary-versions-button" class="session-toolbar-action" type="button" aria-label="Summary versions" title="Summary versions" aria-haspopup="dialog" aria-controls="history-summary-versions-dialog" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="13" height="15" rx="2"/><path d="M4 7v13a1 1 0 0 0 1 1h11M10 8h7M10 12h7"/></svg><span>Summary versions</span></button>
+                  </div>
+                </div>
+                <div id="session-options-menu" class="session-toolbar-menu">
+                  <button id="session-options-button" class="session-toolbar-trigger session-options-trigger" type="button" aria-label="Session options" title="Session options" aria-controls="session-options-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span class="session-options-caption">Session options</span></button>
+                  <div id="session-options-panel" class="session-toolbar-panel" role="group" aria-labelledby="session-options-button" hidden>
                   <button
                     id="rename-session-button"
-                    class="icon-button workspace-icon-button session-rename-button"
+                    class="session-toolbar-action session-rename-button"
                     type="button"
                     aria-label="Rename session"
                     title="Rename"
@@ -340,13 +359,14 @@
                     aria-haspopup="dialog"
                     aria-controls="rename-session-dialog"
                     hidden
-                  ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg><span class="sr-only">Rename</span></button>
-                  <button id="delete-session-button" class="icon-button workspace-icon-button workspace-icon-button-danger session-delete-button" type="button" aria-label="Delete" title="Delete" data-tooltip aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg><span class="sr-only">Delete</span>
+                  ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg><span>Rename</span></button>
+                  <button id="delete-session-button" class="session-toolbar-action workspace-icon-button-danger session-delete-button" type="button" aria-label="Delete" title="Delete" data-tooltip aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg><span>Delete</span>
                   </button>
                   <details id="session-context-details" class="session-context-details">
-                    <summary class="icon-button workspace-icon-button session-context-toggle" aria-label="Show session status details" title="Session status details" aria-controls="session-context-panel" aria-expanded="false" data-tooltip>
+                    <summary class="session-toolbar-action session-context-toggle" aria-label="Show session status details" title="Session status details" aria-controls="session-context-panel" aria-expanded="false">
                       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 10.8v5"/><circle cx="12" cy="7.7" r=".7" fill="currentColor" stroke="none"/></svg>
+                      <span>Session status details</span>
                     </summary>
                     <div id="session-context-panel" class="session-context-panel" aria-label="Session status details">
                       <div class="session-context-panel-heading">
@@ -389,20 +409,6 @@
                       </div>
                     </div>
                   </details>
-                </div>
-              </div>
-              <div class="session-header-actions">
-                <button id="history-summary-select-button" class="icon-button workspace-icon-button" type="button" aria-label="Select history to summarize" title="Select history to summarize" aria-pressed="false" aria-controls="history-summary-toolbar" data-tooltip hidden>
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h10M4 10h10M4 15h5M4 20h5M15 14l2 2 4-5M15 20h6"/></svg>
-                </button>
-                <button id="mentions-button" class="icon-button workspace-icon-button" type="button" aria-label="Mentions" title="Mentions" aria-haspopup="dialog" aria-controls="mentions-dialog"><span aria-hidden="true">@</span><span id="mentions-count" class="mentions-count"></span></button>
-                <button id="history-summary-view-button" class="icon-button workspace-icon-button history-view-toggle" type="button" aria-label="Show all original messages" title="Show all original messages" aria-pressed="false" data-tooltip hidden>
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16m-4-4 4 4-4 4M20 16H4m4-4-4 4 4 4"/></svg>
-                  <span id="history-summary-view-label" class="history-view-label" aria-hidden="true">Summary view</span>
-                </button>
-                <button id="history-summary-versions-button" class="icon-button workspace-icon-button" type="button" aria-label="Summary versions" title="Summary versions" aria-haspopup="dialog" aria-controls="history-summary-versions-dialog" data-tooltip hidden>
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="13" height="15" rx="2"/><path d="M4 7v13a1 1 0 0 0 1 1h11M10 8h7M10 12h7"/></svg>
-                </button>
                 <button
                   id="download-codex-button"
                   class="button button-download"
@@ -412,6 +418,8 @@
                 >
                   <span>Download to Codex</span>
                 </button>
+                  </div>
+                </div>
               </div>
             </header>
 
@@ -458,6 +466,7 @@
                 <p id="history-summary-status" class="form-error" role="alert"></p>
               </div>
               <ol id="event-timeline" class="event-timeline"></ol>
+              <button id="mentions-button" class="mentions-jump-button" type="button" aria-label="Jump to unread mention" title="Jump to unread mention" hidden><span aria-hidden="true">@</span><span id="mentions-count" class="mentions-count"></span></button>
               <div id="timeline-empty" class="timeline-empty">
                 <span aria-hidden="true">✦</span>
                 <p>No events yet. Start the conversation below.</p>
@@ -558,8 +567,9 @@
           </div>
         </main>
 
-        <div id="right-layout-resizer" class="layout-resizer" role="separator" aria-label="Resize member sidebar" aria-orientation="vertical" aria-valuemin="260" aria-valuemax="480" tabindex="0"></div>
+        <div id="right-layout-resizer" class="layout-resizer" role="separator" aria-label="Resize file workspace" aria-orientation="vertical" aria-valuemin="260" aria-valuemax="900" tabindex="0"></div>
 
+        <div id="file-workspace-host" class="file-workspace-host" role="complementary" aria-label="File workspace">
         <aside id="member-panel" class="member-panel" aria-labelledby="members-title">
           <div class="member-heading">
             <div>
@@ -640,6 +650,7 @@
             </div>
           </section>
         </aside>
+        </div>
       </div>
     </div>
 
@@ -1370,8 +1381,8 @@ codex plugin add gatherthread@gatherthread-source</code>
                 <div><p class="eyebrow">Layout</p><h3 id="settings-layout-title">Workspace panels</h3></div>
                 <p>Drag the vertical and horizontal dividers in the workspace, or set exact sizes here.</p>
               </div>
-              <div class="settings-row"><span><strong>Session sidebar</strong><small>210-420 px.</small></span><div class="numeric-setting"><select id="settings-left-width-preset" aria-label="Session sidebar width preset"><option value="220">Narrow · 220</option><option value="260">Standard · 260</option><option value="340">Default · 340</option><option value="custom">Custom</option></select><label><input id="settings-left-width" name="left-width" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact session sidebar width" /><span>px</span></label></div></div>
-              <div class="settings-row"><span><strong>Member sidebar</strong><small>260-480 px.</small></span><div class="numeric-setting"><select id="settings-right-width-preset" aria-label="Member sidebar width preset"><option value="260">Narrow · 260</option><option value="290">Standard · 290</option><option value="320">Default · 320</option><option value="380">Wide · 380</option><option value="custom">Custom</option></select><label><input id="settings-right-width" name="right-width" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact member sidebar width" /><span>px</span></label></div></div>
+              <div class="settings-row"><span><strong>Session sidebar</strong><small>210-420 px.</small></span><div class="numeric-setting"><select id="settings-left-width-preset" aria-label="Session sidebar width preset"><option value="220">Narrow · 220</option><option value="260">Standard · 260</option><option value="300">Default · 300</option><option value="custom">Custom</option></select><label><input id="settings-left-width" name="left-width" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact session sidebar width" /><span>px</span></label></div></div>
+              <div class="settings-row"><span><strong>File workspace</strong><small>260-900 px.</small></span><div class="numeric-setting"><select id="settings-right-width-preset" aria-label="File workspace width preset"><option value="320">Narrow · 320</option><option value="380">Default · 380</option><option value="640">Wide · 640</option><option value="900">Large · 900</option><option value="custom">Custom</option></select><label><input id="settings-right-width" name="right-width" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact file workspace width" /><span>px</span></label></div></div>
               <div class="settings-row"><span><strong>Message composer</strong><small>210-560 px. You can also drag the divider above the composer.</small></span><div class="numeric-setting"><select id="settings-composer-height-preset" aria-label="Message composer height preset"><option value="220">Compact · 220</option><option value="280">Default · 280</option><option value="380">Tall · 380</option><option value="custom">Custom</option></select><label><input id="settings-composer-height" name="composer-height" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact message composer height" /><span>px</span></label></div></div>
               <button id="reset-layout-button" class="button button-secondary" type="button">Reset panel sizes</button>
             </section>
@@ -1512,6 +1523,6 @@ codex plugin add gatherthread@gatherthread-source</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/bootstrap.js?v=20261012-content-1"></script>
+    <script type="module" src="./src/bootstrap.js?v=20261018-tabs-2"></script>
   </body>
 </html>

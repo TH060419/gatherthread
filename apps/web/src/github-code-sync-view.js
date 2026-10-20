@@ -1,6 +1,6 @@
-import { codeRuntimeChoices } from "./code-sync.js?v=20261012-content-1";
-import { createGithubCodeSyncController, githubLinks } from "./github-code-sync.js?v=20261012-content-1";
-import { fillRepositoryFields, bindRepositoryFields } from "./github-setup.js?v=20261012-content-1";
+import { codeRuntimeChoices } from "./code-sync.js?v=20261018-tabs-2";
+import { createGithubCodeSyncController, githubLinks } from "./github-code-sync.js?v=20261018-tabs-2";
+import { fillRepositoryFields, bindRepositoryFields } from "./github-setup.js?v=20261018-tabs-2";
 
 export function mountGithubCodeSync({ document: doc, api, localizer, confirm, mockEnabled = false }) {
   const el = (id) => doc.getElementById(id);

@@ -6,6 +6,7 @@ import { RegistrationEmailSchema } from "./registration.js";
 import { PersonalCloudRevisionSchema, hasValidPersonalCloudRevision } from "./cloud-api.js";
 import { SharedExecutionCapabilitySchema, SharedAgentMetadataSchema } from "./agent-sharing.js";
 export * from "./code-sync.js";
+export * from "./file-workspace.js";
 export * from "./github-sync.js";
 export * from "./history-summary.js";
 export * from "./test-gate.js";

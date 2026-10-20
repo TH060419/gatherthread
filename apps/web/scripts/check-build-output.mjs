@@ -26,6 +26,11 @@ test("Web build publishes the product home above the existing application", asyn
     access(new URL("app/example.html", dist)),
     access(new URL("app/src/onboarding.js", dist)),
     access(new URL("app/licenses/driver.js.txt", dist)),
+    access(new URL("app/licenses/codemirror.txt", dist)),
+    access(new URL("app/licenses/pdfjs-dist.txt", dist)),
+    access(new URL("app/src/file-editor.js", dist)),
+    access(new URL("app/src/file-pdf.js", dist)),
+    access(new URL("app/src/pdfjs/pdf.worker.min.mjs", dist)),
     access(new URL("app/src/styles.css", dist)),
     access(new URL("app/brand/lockup-color-transparent-light.svg", dist)),
   ]);

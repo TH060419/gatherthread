@@ -1,5 +1,5 @@
-import { createIdempotencyKey, eventContent, isTimedOutAgentResponse } from "./domain.js?v=20261012-content-1";
-import { eligibleHistorySources, historySelectionError, historySummaryTimeline, selectedHistorySourceIds } from "./history-summaries.js?v=20261012-content-1";
+import { createIdempotencyKey, eventContent, isTimedOutAgentResponse } from "./domain.js?v=20261018-tabs-2";
+import { eligibleHistorySources, historySelectionError, historySummaryTimeline, selectedHistorySourceIds } from "./history-summaries.js?v=20261018-tabs-2";
 
 /** Derived display state is tab-local. It never edits canonical history or drafts. */
 export function mountHistorySummaries({ document, api, localizer, getContext, onChange, renderMarkdown, renderEventAvatar, eventAuthorLabel,
@@ -96,7 +96,7 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
     el("history-summary-view-button").title = t(viewLabel);
     el("history-summary-view-button").setAttribute("aria-pressed", String(original));
     el("history-summary-view-button").disabled = selecting || !versions.some((version) => version.status === "completed");
-    el("history-summary-view-label").textContent = t(original || selecting ? "Original view" : "Summary view");
+    el("history-summary-view-label").textContent = t(viewLabel);
     el("history-summary-toolbar").hidden = !selecting && !attempt;
     el("history-summary-count").textContent = `${selected.size} / 100 · ${t("messages selected")}`;
     const selectionError = selecting ? historySelectionError(context().events, selectedHistorySourceIds(context().events, selected)) : "";
@@ -312,7 +312,7 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
   el("history-summary-cancel-button").addEventListener("click", () => {
     if (attempt) return;
     selecting = false; selected.clear(); error = ""; onChange();
-    el("history-summary-select-button").focus({ preventScroll: true });
+    (el("history-summary-menu-button") ?? el("history-summary-select-button")).focus({ preventScroll: true });
   });
   el("history-summary-generate-button").addEventListener("click", prepare);
   el("history-summary-resend-button").addEventListener("click", () => {
@@ -332,7 +332,7 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
   el("history-summary-versions-button").addEventListener("click", () => { renderVersions(); versionsDialog.showModal(); });
   el("history-summary-versions-close").addEventListener("click", () => versionsDialog.close());
   versionsDialog.addEventListener("close", () => {
-    if (context().sessionId) el("history-summary-versions-button").focus({ preventScroll: true });
+    if (context().sessionId) (el("history-summary-menu-button") ?? el("history-summary-versions-button")).focus({ preventScroll: true });
   });
   return {
     reset, updateContext, sourceControl, card, selectSources: changeSelection,

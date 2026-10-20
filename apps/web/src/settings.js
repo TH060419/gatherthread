@@ -81,8 +81,8 @@ export const DEFAULT_SETTINGS = deepFreeze({
     highContrast: true,
   },
   layout: {
-    leftRailPixels: 340,
-    rightPanelPixels: 320,
+    leftRailPixels: 300,
+    rightPanelPixels: 380,
     composerPixels: 280,
   },
   sync: {
@@ -163,7 +163,7 @@ export function normalizeSettings(input) {
     },
     layout: {
       leftRailPixels: boundedInteger(layout.leftRailPixels, 210, 420, DEFAULT_SETTINGS.layout.leftRailPixels),
-      rightPanelPixels: boundedInteger(layout.rightPanelPixels, 260, 480, DEFAULT_SETTINGS.layout.rightPanelPixels),
+      rightPanelPixels: boundedInteger(layout.rightPanelPixels, 260, 900, DEFAULT_SETTINGS.layout.rightPanelPixels),
       composerPixels: boundedInteger(layout.composerPixels, 210, 560, DEFAULT_SETTINGS.layout.composerPixels),
     },
     sync: {

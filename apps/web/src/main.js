@@ -1,24 +1,26 @@
-import { renderAvatar, isAgentReply, eventAuthorLabel, eventExecutionOwner } from "./avatars.js?v=20261012-content-1";
-import { mountAvatarSettings } from "./avatar-settings.js?v=20261012-content-1";
-import { mountCloudGithub } from "./cloud-github-view.js?v=20261012-content-1";
-import { mountSharedAgents } from "./shared-agent-view.js?v=20261012-content-1";
+import { renderAvatar, isAgentReply, eventAuthorLabel, eventExecutionOwner } from "./avatars.js?v=20261018-tabs-2";
+import { mountAvatarSettings } from "./avatar-settings.js?v=20261018-tabs-2";
+import { mountCloudGithub } from "./cloud-github-view.js?v=20261018-tabs-2";
+import { mountSharedAgents } from "./shared-agent-view.js?v=20261018-tabs-2";
 import { mountDeviceAuthorization } from "./device-authorization.js";
-import { createAccountEmailHint, mountCodexLauncher, mountAgentPackageDownloads } from "./codex-launcher.js?v=20261012-content-1";
+import { createAccountEmailHint, mountCodexLauncher, mountAgentPackageDownloads } from "./codex-launcher.js?v=20261018-tabs-2";
 import { mountAccountDevices } from "./account-devices.js";
-import { mountPersonalCloudApi } from "./personal-cloud-api.js?v=20261012-content-1";
-import { mountCloudCodeConsent } from "./cloud-code-consent.js?v=20261012-content-1";
-import { cloudRequestInput, continueCloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js?v=20261012-content-1";
-import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261012-content-1";
+import { mountPersonalCloudApi } from "./personal-cloud-api.js?v=20261018-tabs-2";
+import { mountCloudCodeConsent } from "./cloud-code-consent.js?v=20261018-tabs-2";
+import { cloudRequestInput, continueCloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js?v=20261018-tabs-2";
+import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261018-tabs-2";
+import { mountFileWorkspace } from "./workspace-files.js";
+import { mountSessionToolbar } from "./session-toolbar.js";
 import { mountInterfaceMode } from "./interface-mode.js";
 import { mountMobileSettings } from "./mobile-settings-view.js";
 import { mountMobileCodeView } from "./mobile-code-view.js";
 import { mountRegistration } from "./registration.js";
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261012-content-1";
-import { mountMessageActions, agentWorkStatus } from "./message-actions.js?v=20261012-content-1";
-import { mountMessageDeletion } from "./message-deletion.js?v=20261012-content-1";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261018-tabs-2";
+import { mountMessageActions, agentWorkStatus } from "./message-actions.js?v=20261018-tabs-2";
+import { mountMessageDeletion } from "./message-deletion.js?v=20261018-tabs-2";
 import { positionSessionContextPanel, bindSessionContextPanel } from "./session-context-panel.js";
-import { ExampleCollaborationApi } from "./example-api.js?v=20261012-content-1";
-import { mountOnboarding } from "./onboarding.js?v=20261012-content-1";
+import { ExampleCollaborationApi } from "./example-api.js?v=20261018-tabs-2";
+import { mountOnboarding } from "./onboarding.js?v=20261018-tabs-2";
 import { projectInvitationShareText } from "./invitation-share.js?v=20261012-invite-1";
 import { mountInvitationLink } from "./invitation-link.js?v=20261012-invite-1";
 import {
@@ -55,14 +57,14 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20261012-content-1";
-import { SessionSync } from "./realtime.js?v=20261012-content-1";
-import { mountCodeSync } from "./code-sync-view.js?v=20261012-content-1";
-import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20261012-content-1";
-import { mountHistorySummaries } from "./history-summary-view.js?v=20261012-content-1";
+} from "./domain.js?v=20261018-tabs-2";
+import { SessionSync } from "./realtime.js?v=20261018-tabs-2";
+import { mountCodeSync } from "./code-sync-view.js?v=20261018-tabs-2";
+import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20261018-tabs-2";
+import { mountHistorySummaries } from "./history-summary-view.js?v=20261018-tabs-2";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20261012-content-1";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20261018-tabs-2";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   CODEX_HARNESS,
@@ -79,7 +81,7 @@ import {
   resolveCodexRuntime,
   resolveDshRuntime,
   withoutDshPairingHash,
-} from "./dsh.js?v=20261012-content-1";
+} from "./dsh.js?v=20261018-tabs-2";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import { calendarDayKey, formatFullTimestamp, formatTimelineDay } from "./timeline-dates.js?v=20260927-1";
 import {
@@ -179,6 +181,7 @@ let dshRuntimePollTimer;
 let dshRuntimePollGeneration = 0;
 let dshRuntimeLoadInFlight = false;
 let selectedSessionGeneration = 0;
+let projectNavigationGeneration = 0;
 let pendingDshPairingCode = dshPairingCodeFromHash(location.hash);
 const expandedWorklogs = new Set();
 const collapsedWorklogs = new Set();
@@ -258,6 +261,7 @@ const memberPanel = element("member-panel");
 const toggleSessionRailButton = element("toggle-session-rail-button");
 const toggleMemberPanelButton = element("mobile-members-button");
 const sessionContextDetails = element("session-context-details");
+const sessionToolbar = mountSessionToolbar({ document });
 const compactWorkspaceQuery = window.matchMedia("(max-width: 1160px)");
 const acceptInvitationForm = element("accept-invitation-form");
 const createInvitationForm = element("create-invitation-form");
@@ -360,6 +364,23 @@ const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
+const fileWorkspaceHost = element("file-workspace-host");
+const filesUi = mountFileWorkspace({ document, window, api, exampleMode, host: fileWorkspaceHost, membersHost: memberPanel,
+  t: text => localizer.t(text), renderMarkdown,
+  confirm: message => window.confirm(message), prompt: (message, value) => window.prompt(message, value),
+  makeKey: () => createIdempotencyKey("files"),
+  editorFactory: options => import("./file-editor.js").then(module => module.createFileEditor({ ...options, t: text => localizer.t(text) })),
+  diffFactory: options => import("./file-editor.js").then(module => module.createFileDiff(options)),
+  pdfFactory: options => import("./file-pdf.js").then(module => module.createPdfPreview(options)),
+  getContext: () => ({ scope: `${authenticationGeneration}:${state.currentUser?.id}:${state.project?.id}`,
+    userId: state.currentUser?.id, projectId: state.project?.id, sessionId: state.session?.id,
+    members: state.projectMembers, canWrite: ["owner", "participant"].includes(state.project?.role),
+    isMobile: document.documentElement.dataset.mobileWorkspace === "true" }),
+  onOpen: () => showFileWorkspace(), onClose: () => closeFileWorkspace(),
+  onExpand: () => { workspace.dataset.workspaceExpanded = String(workspace.dataset.workspaceExpanded !== "true"); },
+  isExpanded: () => workspace.dataset.workspaceExpanded === "true",
+  onConfigure: provider => { mobileWorkspace.closeMembers(); if (provider === "github") codeSyncUi.openGithub(); else element("project-code-button").click(); },
+});
 const avatarSettings = mountAvatarSettings({ document, api, localizer,
   getUser: () => state.currentUser,
   getRevision: () => state.avatarProfileRevision,
@@ -573,6 +594,7 @@ const messageDeletion = mountMessageDeletion({ document, api, localizer, announc
 const messageActions = mountMessageActions({ document, api, localizer, announce, selectSession,
   deletionAction: messageDeletion.action,
   getContext: () => ({ projectId: state.project?.id, sessionId: state.session?.id,
+    identityScope: `${authenticationGeneration}:${projectNavigationGeneration}:${state.currentUser?.id}:${state.project?.id}`,
     userId: state.currentUser?.id, members: state.session?.members ?? [], events: state.sync.events,
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed }),
   revealEvent: (id, sequence) => {
@@ -587,6 +609,7 @@ const messageActions = mountMessageActions({ document, api, localizer, announce,
       if (entry) progressSectionState.set(entry.key, true);
     }
     historySummaryUi.revealOriginal(id); renderTimeline();
+    return Boolean(element(`message-${id}`));
   },
 });
 let connectDshReturnFocus = null;
@@ -791,6 +814,7 @@ for (const id of ["claim-display-name", "claim-device-name"]) {
 }
 
 element("logout-button").addEventListener("click", async () => {
+  if (!await filesUi.confirmLeave()) return;
   authenticationGeneration += 1;
   projectSelectionGuard.invalidate();
   selectedSessionGeneration += 1;
@@ -1354,6 +1378,8 @@ sessionContextDetails.addEventListener("toggle", updateSessionContextDisclosure)
 bindSessionContextPanel(document);
 const handleWorkspaceBreakpointChange = () => {
   memberPanel.classList.remove("member-panel-open");
+  fileWorkspaceHost.classList.remove("file-workspace-open");
+  void filesUi.updateContext();
   updateSidebarControls();
 };
 if (typeof compactWorkspaceQuery.addEventListener === "function") {
@@ -1365,11 +1391,39 @@ if (typeof compactWorkspaceQuery.addEventListener === "function") {
 element("close-members-button").addEventListener("click", closeMembersPanel);
 
 function closeMembersPanel() {
-  if (mobileWorkspace.closeMembers()) return;
-  memberPanel.classList.remove("member-panel-open");
-  updateSidebarControls();
+  filesUi.close();
   toggleMemberPanelButton.focus();
 }
+
+function showFileWorkspace() {
+  if (mobileWorkspace.isActive()) {
+    if (!element("mobile-members-dialog").open) mobileWorkspace.toggleMembers();
+  } else if (compactWorkspaceQuery.matches) fileWorkspaceHost.classList.add("file-workspace-open");
+  else workspace.dataset.rightPanelCollapsed = "false";
+  updateSidebarControls();
+}
+
+function closeFileWorkspace() {
+  const restoreFocus = fileWorkspaceHost.contains(document.activeElement);
+  mobileWorkspace.closeMembers();
+  fileWorkspaceHost.classList.remove("file-workspace-open");
+  workspace.dataset.rightPanelCollapsed = "true";
+  workspace.dataset.workspaceExpanded = "false";
+  updateSidebarControls();
+  if (restoreFocus && !workspace.hidden) element("open-files-button").focus();
+}
+function isFileWorkspaceOpen() {
+  if (mobileWorkspace.isActive()) return element("mobile-members-dialog").open;
+  return compactWorkspaceQuery.matches ? fileWorkspaceHost.classList.contains("file-workspace-open")
+    : workspace.dataset.rightPanelCollapsed !== "true";
+}
+element("open-files-button").addEventListener("click", () => {
+  if (isFileWorkspaceOpen()) filesUi.close();
+  else void filesUi.show();
+});
+element("mobile-members-dialog").addEventListener("close", () => {
+  if (!element("mobile-members-dialog").open) filesUi.close();
+});
 
 function toggleSessionRail() {
   if (mobileWorkspace.toggleRail()) return;
@@ -1378,23 +1432,18 @@ function toggleSessionRail() {
 }
 
 function toggleMemberPanel() {
-  if (mobileWorkspace.toggleMembers()) return;
-  if (compactWorkspaceQuery.matches) {
-    memberPanel.classList.toggle("member-panel-open");
-  } else {
-    workspace.dataset.rightPanelCollapsed = String(workspace.dataset.rightPanelCollapsed !== "true");
-    memberPanel.classList.remove("member-panel-open");
-  }
-  updateSidebarControls();
+  void filesUi.open("members");
 }
 
 function updateSidebarControls() {
   const sessionRailExpanded = workspace.dataset.leftRailCollapsed !== "true";
   const memberPanelExpanded = compactWorkspaceQuery.matches
-    ? memberPanel.classList.contains("member-panel-open")
+    ? fileWorkspaceHost.classList.contains("file-workspace-open")
     : workspace.dataset.rightPanelCollapsed !== "true";
   updateIconDisclosure(toggleSessionRailButton, sessionRailExpanded, "Collapse session sidebar", "Expand session sidebar");
-  updateIconDisclosure(toggleMemberPanelButton, memberPanelExpanded, "Collapse member sidebar", "Expand member sidebar");
+  updateIconDisclosure(toggleMemberPanelButton, memberPanelExpanded, "Open members", "Open members");
+  toggleMemberPanelButton.setAttribute("aria-controls", "file-workspace-host");
+  updateIconDisclosure(element("open-files-button"), isFileWorkspaceOpen(), "Collapse file sidebar", "Show file sidebar");
   mobileWorkspace.update();
   agentRequestControl.update();
 }
@@ -1444,6 +1493,8 @@ async function restoreBrowserSession() {
 }
 
 function resetWorkspaceToAuth() {
+  sessionToolbar.reset();
+  filesUi.clear();
   personalCloudApi.clear();
   invitationLink.reset();
   mobileWorkspace.close();
@@ -1601,6 +1652,10 @@ async function enterWorkspace(preferredProjectId) {
 
 async function selectProject(projectId) {
   if (!state.currentUser) return;
+  if (state.project?.id !== projectId && !await filesUi.confirmLeave()) { renderProjectSelect(); return; }
+  projectNavigationGeneration += 1;
+  sessionToolbar.reset();
+  if (state.project?.id !== projectId) filesUi.clear();
   codexLauncher.clear();
   codexDeviceAuthorization.clear();
   mobileWorkspace.close();
@@ -1679,6 +1734,8 @@ async function selectProject(projectId) {
 
 async function selectSession(sessionId) {
   if (!state.currentUser || !state.project) return;
+  if (state.session?.id !== sessionId && !await filesUi.confirmLeave()) return;
+  sessionToolbar.reset();
   mobileWorkspace.close();
   onboarding.cancel();
   selectionRetry = null;
@@ -1789,6 +1846,7 @@ function renderProjectAgentButtons(settings = state.settings) {
 }
 
 function renderProjectPermissions() {
+  void filesUi.updateContext();
   codeSyncUi.updateContext();
   cloudGithubUi.updateContext();
   const mayCreate = state.project?.role === "owner" || state.project?.role === "participant";
@@ -1991,6 +2049,7 @@ function renderSessionHeader() {
   element("delete-session-button").hidden = !mayDelete;
   element("session-subtitle").textContent = `${session.description} · You are ${membership?.role ?? "viewer"}`;
   element("session-access-note").hidden = session.mode !== "solo";
+  sessionToolbar.refresh();
   renderWorkspaceContext();
 }
 
@@ -2500,6 +2559,7 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
       pendingHistoryTarget = null;
     }
   }
+  messageActions.readVisible();
 }
 
 /**
@@ -2528,6 +2588,9 @@ function returnToNewestEvent() {
 }
 
 timelineRegion.addEventListener("scroll", renderTimelineBottomControl, { passive: true });
+timelineRegion.addEventListener("scroll", () => messageActions.readVisible(), { passive: true });
+document.addEventListener("visibilitychange", () => messageActions.readVisible());
+document.addEventListener("close", () => queueMicrotask(() => messageActions.readVisible()), true);
 timelineBottomButton.addEventListener("click", returnToNewestEvent);
 
 function renderProgressDisclosure(progressEvents, live, terminalResponse) {
@@ -3779,8 +3842,7 @@ function notifyConnectionLost() {
 }
 
 function closeMembersPanelWithoutFocus() {
-  memberPanel.classList.remove("member-panel-open");
-  updateSidebarControls();
+  filesUi.close();
 }
 
 function applyVisualSettings(settings) {
@@ -3813,6 +3875,7 @@ function applyVisualSettings(settings) {
   interfaceMode.refresh();
   mobileSettings.refresh();
   if (localeChanged) sharedAgentsUi.refreshLanguage();
+  if (localeChanged) filesUi.refreshLanguage();
   if (localeChanged) accountDevices.refreshLanguage();
   if (localeChanged) personalCloudApi.refreshLanguage();
   if (localeChanged) cloudCodeConsent.refreshLanguage();
@@ -4734,8 +4797,8 @@ function syncPreset(selectId, inputId, values) {
 
 function syncAllNumericPresets() {
   syncPreset("settings-text-scale-preset", "settings-text-scale", [90, 100, 110, 125]);
-  syncPreset("settings-left-width-preset", "settings-left-width", [220, 260, 340]);
-  syncPreset("settings-right-width-preset", "settings-right-width", [260, 290, 320, 380]);
+  syncPreset("settings-left-width-preset", "settings-left-width", [220, 260, 300]);
+  syncPreset("settings-right-width-preset", "settings-right-width", [320, 380, 640, 900]);
   syncPreset("settings-composer-height-preset", "settings-composer-height", [220, 280, 380]);
   const factor = element("settings-context-unit").value === "MiB" ? 1024 * 1024 : 1024;
   const bytes = Number(element("settings-context-budget").value) * factor;
@@ -4745,7 +4808,7 @@ function syncAllNumericPresets() {
 
 function installLayoutResizer(resizer, side) {
   const minimum = side === "left" ? 210 : 260;
-  const maximum = side === "left" ? 420 : 480;
+  const maximum = side === "left" ? 420 : 900;
   const settingKey = side === "left" ? "leftRailPixels" : "rightPanelPixels";
   const inputId = side === "left" ? "settings-left-width" : "settings-right-width";
   const applyWidth = (pixels) => {

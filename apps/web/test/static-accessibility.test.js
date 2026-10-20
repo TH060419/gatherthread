@@ -701,14 +701,16 @@ test("workspace rails and dense session context use accessible icon disclosures"
     readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8"), readFile(i18nPath, "utf8"),
   ]);
   assert.match(html, /id="toggle-session-rail-button"[^>]*aria-controls="session-rail"[^>]*aria-expanded="true"[^>]*data-tooltip[\s\S]*?<svg/);
-  assert.match(html, /id="mobile-members-button"[^>]*aria-controls="member-panel"[^>]*aria-expanded="true"[^>]*data-tooltip[\s\S]*?<svg/);
+  assert.match(html, /id="mobile-members-button"[^>]*aria-controls="file-workspace-host"[^>]*aria-expanded="true"[^>]*data-tooltip[\s\S]*?<svg/);
   assert.match(html, /class="account-cluster"[\s\S]*?id="logout-button"[\s\S]*?id="mobile-members-button"[\s\S]*?<\/div>/);
   assert.match(html, /id="topbar-session-context"[^>]*hidden[\s\S]*?id="topbar-project-name"[\s\S]*?id="topbar-session-name"/);
   assert.match(html, /id="session-context-details"[\s\S]*?<summary[^>]*aria-label="Show session status details"[^>]*aria-controls="session-context-panel"[^>]*aria-expanded="false"[\s\S]*?id="session-context-panel"[^>]*aria-label="Session status details"/);
   assert.match(html, /class="session-context-panel-heading"[\s\S]*?Session status details[\s\S]*?Codex history[\s\S]*?Local turns to cloud/);
   assert.match(main, /workspace\.dataset\.leftRailCollapsed/);
   assert.match(main, /workspace\.dataset\.rightPanelCollapsed/);
-  assert.match(main, /memberPanel\.classList\.toggle\("member-panel-open"/);
+  assert.match(main, /fileWorkspaceHost\.classList\.add\("file-workspace-open"/);
+  assert.match(html, /id="open-files-button"[^>]*aria-controls="file-workspace-host"/);
+  assert.match(main, /filesUi\.open\("members"\)/);
   assert.match(main, /function renderWorkspaceContext\(\)/);
   assert.match(main, /sessionContextDetails\.open = false;[\s\S]*?updateSessionContextDisclosure\(\)/);
   assert.match(styles, /\.workspace\[data-left-rail-collapsed="true"\][\s\S]*?\.session-rail/);

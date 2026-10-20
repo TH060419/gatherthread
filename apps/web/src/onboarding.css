@@ -83,6 +83,10 @@ html[data-example="true"] .workspace[data-onboarding-view="details"] .session-co
 
 .onboarding-popover.driver-popover { left: var(--guide-left, 14px) !important; top: var(--guide-top, 54px) !important; right: auto !important; bottom: auto !important; }
 html[data-example="true"] body.driver-active .settings-dialog { backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--paper-raised); }
+/* Give the isolated mobile guide room for both the file control and its card. */
+html[data-example="true"][data-mobile-workspace="true"] body.driver-active #project-code-dialog[data-mobile-code="true"] {
+  height: calc(100dvh - 46px); max-height: calc(100dvh - 46px); margin: 46px auto 0;
+}
 .example-toolbar select { width: auto; max-width: 230px; }
 /* Demo-only result viewer. The application does not execute uploaded HTML. */
 .example-project-dialog { width: min(1040px, calc(100vw - 28px)); height: min(740px, calc(100dvh - 72px)); max-height: calc(100dvh - 72px); padding: 24px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 24px; color: var(--ink); background: var(--paper); box-shadow: var(--shadow); }

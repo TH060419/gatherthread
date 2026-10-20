@@ -1,7 +1,7 @@
 import { positionSessionContextPanel } from "./session-context-panel.js";
-import { mountExampleGateway, exampleToolbar } from "./onboarding-example.js?v=20261012-content-1";
+import { mountExampleGateway, exampleToolbar } from "./onboarding-example.js?v=20261018-tabs-2";
 import { driver } from "driver.js";
-import { GUIDE_COPY, guideSteps, guideText, onboardingKey, createOnboardingProgress } from "./onboarding-content.js?v=20261012-content-1";
+import { GUIDE_COPY, guideSteps, guideText, onboardingKey, createOnboardingProgress } from "./onboarding-content.js?v=20261018-tabs-2";
 
 function browserStorage() { try { return globalThis.localStorage; } catch { return null; } }
 
@@ -50,6 +50,27 @@ export function prepareMobileGuidePage(doc, view) {
   const section = { "summary-settings": "settings-summaries", "account-device": "settings-device", "account-delete": "settings-account" }[view];
   if (section && el("settings-dialog")?.dataset.settingsPage !== section) {
     doc.querySelector(`#settings-dialog .settings-navigation a[href="#${section}"]`)?.click();
+  }
+}
+
+// These triggers only disclose existing controls. Guide preparation must never
+// select sources, generate a summary, or invoke a session mutation.
+export function setGuideMenuExpanded(doc, id, expanded) {
+  const trigger = doc.getElementById(id);
+  if (trigger && (trigger.getAttribute("aria-expanded") === "true") !== expanded) trigger.click();
+}
+
+export function prepareSessionGuideMenus(doc, item) {
+  const summary = /^#history-summary-(?:select|view|versions)-button$/u.test(item.target ?? "");
+  const options = ["details", "mobile-details"].includes(item.view)
+    || ["#download-codex-button", "#rename-session-button", "#delete-session-button"].includes(item.target);
+  setGuideMenuExpanded(doc, "history-summary-menu-button", summary);
+  setGuideMenuExpanded(doc, "session-options-button", options);
+}
+
+export function prepareMemberGuideTab(doc, view) {
+  if (view === "members" && doc.getElementById("fw-pane-members")?.hidden) {
+    doc.querySelector('#file-workspace-host [data-open-tab="members"]')?.click();
   }
 }
 
@@ -122,6 +143,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       if (el("member-panel").classList.contains("member-panel-open")) el("member-panel").classList.remove("member-panel-open");
       el("mobile-members-button").setAttribute("aria-expanded", "false");
     }
+    prepareSessionGuideMenus(doc, item);
     if (["details", "mobile-details"].includes(view) && getContext().session) {
       if (!el("session-context-details").open) el("session-context-details").open = true;
       positionDetailsPanel();
@@ -131,6 +153,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       el("toggle-session-rail-button").setAttribute("aria-expanded", "true");
     }
     if (view === "members" && !mobile) {
+      prepareMemberGuideTab(doc, view);
       el("workspace").dataset.rightPanelCollapsed = "false";
       if (!el("member-panel").classList.contains("member-panel-open")) el("member-panel").classList.add("member-panel-open");
       el("mobile-members-button").setAttribute("aria-expanded", "true");
@@ -337,13 +360,21 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     const right = workspace.dataset.rightPanelCollapsed;
     const memberOpen = el("member-panel").classList.contains("member-panel-open");
     const detailsOpen = el("session-context-details").open;
+    const activeWorkspaceTab = doc.querySelector('#file-workspace-host [role="tab"][aria-selected="true"]')?.id;
+    const hadMembersTab = Boolean(el("fw-tab-members"));
+    const summaryMenuOpen = el("history-summary-menu-button")?.getAttribute("aria-expanded") === "true";
+    const optionsMenuOpen = el("session-options-button")?.getAttribute("aria-expanded") === "true";
     const leftAria = el("toggle-session-rail-button").getAttribute("aria-expanded");
     const rightAria = el("mobile-members-button").getAttribute("aria-expanded");
     restorePresentation = () => {
+      if (!hadMembersTab) doc.querySelector('#file-workspace-host [data-tab-id="members"] > .fw-tab-dismiss')?.click();
+      if (activeWorkspaceTab) el(activeWorkspaceTab)?.click();
       if (previousView === undefined) delete workspace.dataset.onboardingView; else workspace.dataset.onboardingView = previousView;
       if (left === undefined) delete workspace.dataset.leftRailCollapsed; else workspace.dataset.leftRailCollapsed = left;
       if (right === undefined) delete workspace.dataset.rightPanelCollapsed; else workspace.dataset.rightPanelCollapsed = right;
       el("member-panel").classList.toggle("member-panel-open", memberOpen);
+      setGuideMenuExpanded(doc, "history-summary-menu-button", summaryMenuOpen);
+      setGuideMenuExpanded(doc, "session-options-button", optionsMenuOpen);
       el("session-context-details").open = detailsOpen;
       el("toggle-session-rail-button").setAttribute("aria-expanded", leftAria ?? "true");
       el("mobile-members-button").setAttribute("aria-expanded", rightAria ?? "true");
@@ -356,7 +387,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
         lastTarget = resolveExampleTarget(item);
         if (lastTarget) {
           const box = lastTarget.getBoundingClientRect();
-          const circular = ["quote", "mention", "create-conversation"].includes(item.id);
+          const circular = ["quote", "create-conversation"].includes(item.id);
           const radius = circular ? Math.min(box.width, box.height) / 2 + 7 : Math.max(12, Math.min(24, parseFloat(win.getComputedStyle(lastTarget).borderRadius) + 7 || 12));
           tour.setConfig({ ...tour.getConfig(), stageRadius: radius });
         }

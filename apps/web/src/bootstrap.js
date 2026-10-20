@@ -1,7 +1,7 @@
 // Never show login before the server has checked its HttpOnly session.
 // No identity, credential or authentication decision is cached on the client.
 try {
-  await import("./main.js?v=20261012-content-1");
+  await import("./main.js?v=20261018-tabs-2");
 } catch {
   document.documentElement.dataset.bootState = "failed";
   const screen = document.getElementById("boot-screen");

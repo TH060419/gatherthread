@@ -1,0 +1,50 @@
+/* Compact conversation controls, sharing the workspace's glass and contrast tokens. */
+.session-header .session-header-actions { flex: 0 0 auto; gap: 6px; }
+.session-toolbar-menu { position: relative; min-width: 0; }
+.session-toolbar-menu[hidden], .session-toolbar-panel[hidden], .session-toolbar-action[hidden] { display: none !important; }
+.session-toolbar-trigger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: 36px; padding: 7px 11px; border: 1px solid var(--glass-hairline);
+  border-radius: 12px; color: var(--ink); background: color-mix(in srgb, var(--paper-raised) 32%, transparent);
+  box-shadow: inset 0 1px var(--glass-specular); font: inherit; font-size: .8rem; font-weight: 620; cursor: pointer;
+}
+.session-toolbar-trigger svg, .session-toolbar-action svg { width: 19px; height: 19px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.session-toolbar-trigger[aria-expanded="true"] { color: var(--teal-dark); background: var(--teal-wash); }
+.session-options-trigger { width: 36px; height: 36px; min-height: 36px; padding: 7px; }
+.session-options-caption { display: none; }
+.session-toolbar-panel {
+  position: absolute; z-index: 55; inset: calc(100% + 8px) 0 auto auto;
+  width: max-content; min-width: 230px; max-width: min(360px, calc(100vw - 32px));
+  max-height: min(66dvh, 560px); overflow: auto; overscroll-behavior: contain; padding: 6px;
+  border: 1px solid var(--glass-edge); border-radius: 16px;
+  background: color-mix(in srgb, var(--paper-raised) 88%, transparent);
+  box-shadow: inset 0 1px var(--glass-specular), 0 16px 44px rgb(18 24 28 / .16);
+  backdrop-filter: blur(26px) saturate(145%); -webkit-backdrop-filter: blur(26px) saturate(145%);
+}
+.session-toolbar-panel .session-toolbar-action {
+  display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; height: auto;
+  min-height: 41px; padding: 9px 11px; border: 0; border-radius: 10px; background: transparent;
+  box-shadow: none; color: var(--ink); font: inherit; font-size: .83rem; text-align: left; white-space: normal; cursor: pointer;
+}
+.session-toolbar-action > span { min-width: 0; font: inherit; }
+.session-toolbar-panel .session-toolbar-action:hover:not(:disabled) { background: color-mix(in srgb, var(--teal-wash) 70%, transparent); }
+.session-toolbar-panel .workspace-icon-button-danger { color: var(--danger, #bc4540); }
+.session-toolbar-action:disabled { opacity: .48; cursor: not-allowed; }
+.session-toolbar-trigger:focus-visible, .session-toolbar-action:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.session-toolbar-panel .session-context-details { width: 100%; }
+.session-toolbar-panel .session-context-panel {
+  position: static; width: 100%; min-width: 0; max-height: none; margin-top: 4px;
+  padding: 5px; border: 0; border-radius: 10px; box-shadow: none; background: transparent;
+}
+.session-toolbar-panel .button-download { width: 100%; margin-top: 4px; padding: 10px; font-size: .82rem; border-radius: 10px; }
+#mobile-tools-content .session-toolbar-menu { width: 100%; }
+#mobile-tools-content .session-toolbar-trigger { justify-content: flex-start; width: 100%; height: auto; min-height: 46px; padding: 11px 12px; border: 0; background: transparent; box-shadow: none; font-size: .92rem; }
+#mobile-tools-content .session-options-caption { display: inline; }
+#mobile-tools-content .session-toolbar-panel { position: static; width: 100%; min-width: 0; max-width: none; max-height: none; margin: 0 0 6px; padding: 2px 5px 5px 18px; border: 0; border-radius: 0; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+#mobile-tools-content .session-toolbar-trigger::after { content: "⌄"; margin-left: auto; color: var(--muted); }
+#mobile-tools-content .session-toolbar-trigger[aria-expanded="true"]::after { transform: rotate(180deg); }
+#mobile-tools-content .session-toolbar-action { min-height: 44px; }
+#mobile-tools-content .session-toolbar-panel .session-context-details > summary::after { content: none; }
+@media (max-width: 600px) { .session-header-actions { gap: 3px; } .session-toolbar-trigger { padding-inline: 8px; } }
+@media (prefers-reduced-transparency: reduce) { .session-toolbar-panel, .session-toolbar-trigger { background: var(--paper-raised); backdrop-filter: none; -webkit-backdrop-filter: none; } }
+@media (forced-colors: active) { .session-toolbar-trigger, .session-toolbar-panel { border: 1px solid ButtonText; background: Canvas; box-shadow: none; } .session-toolbar-trigger[aria-expanded="true"] { outline: 1px solid Highlight; } }

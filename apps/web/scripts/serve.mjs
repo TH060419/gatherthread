@@ -24,6 +24,9 @@ const types = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".bcmap": "application/octet-stream",
+  ".pfb": "application/octet-stream",
   ".json": "application/json; charset=utf-8",
   ".map": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
@@ -135,7 +138,7 @@ async function serveStatic(request, response, root) {
     response.writeHead(200, {
       "Content-Type": types[extname(filePath)] ?? "application/octet-stream",
       "Cache-Control": "no-store",
-      "Content-Security-Policy": example ? "default-src 'none'; script-src 'nonce-gatherthread-example-v1'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'; sandbox allow-scripts" : "default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      "Content-Security-Policy": example ? "default-src 'none'; script-src 'nonce-gatherthread-example-v1'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'; sandbox allow-scripts" : "default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; img-src 'self' data: blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
       ...(example ? {} : { "X-Frame-Options": "DENY" }),

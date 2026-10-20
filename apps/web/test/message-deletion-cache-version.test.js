@@ -4,7 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const revision = "20261012-content-1";
+const revision = "20261018-tabs-2";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const sourceRoot = path.join(root, "src");
 

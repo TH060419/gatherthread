@@ -41,19 +41,21 @@ function harness(names, overrides = {}) {
   const context = vm.createContext({
     exampleMode: false,
     agentContextUpdateReason,
-    authenticationGeneration: 1, selectedSessionGeneration: 1, workspaceLoadGeneration: 0,
+    authenticationGeneration: 1, selectedSessionGeneration: 1, workspaceLoadGeneration: 0, projectNavigationGeneration: 0,
     state: { currentUser: { id: "u1", username: "User", device_id: "d1" }, avatarProfiles: new Map(), avatarProfileRevision: 0, project: { id: "p1" },
       projects: [], session: { id: "s1" }, sync: { contentRevision: 0 }, settings: { composer: {} }, invitations: [], snapshotRequests: [] },
     element: (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     authView: element(), workspace: element(), emptyState: element(), sessionView: element(),
     hostedAgentStatus: { enabled: false },
     cloudGithubUi: { updateContext: noop, completeAuthorization: async () => {} },
+    filesUi: { confirmLeave: async () => true, clear: noop, updateContext: noop },
     cloudCodeConsent: { updateContext: noop, refresh: noop, refreshLanguage: noop, includeCode: () => true,
       submission: () => ({ allowed: true, includeCode: true, reason: "" }) },
     deviceCredentialDialog: { open: false }, codeSyncUi: { showFirstLoginNotice: noop },
     onboarding: { cancel: noop, offer: noop, refreshLanguage: noop },
     invitationLink: { hasPending: () => false, reset: noop },
     sessionContextDetails: { open: false }, updateSessionContextDisclosure: noop,
+    sessionToolbar: { reset: noop, refresh: noop },
     codexLauncher: { clear: noop }, codexDeviceAuthorization: { clear: noop },
     location: { hash: "" }, URLSearchParams, initials: () => "U", localizer: { t: (value) => value },
     renderProjectSelect: noop, renderSessionList: noop, maybeOpenPendingDshPairing: noop,
@@ -81,6 +83,72 @@ test("switching projects clears unconsumed Launcher and manual authorizations be
   await assert.rejects(app.selectProject("p2"), /fixture-stop-before-API/);
   assert.equal(launcherCleared, 1);
   assert.equal(manualCleared, 1);
+});
+
+test("cancelling dirty-file project navigation preserves the current project, conversation, draft and live scope", async () => {
+  const confirmation = deferred();
+  let cleared = 0, disconnected = 0, requested = 0, pickerRestored = 0, invalidated = 0;
+  const draft = { value: "Unsent conversation draft" };
+  const app = harness(["selectProject"], {
+    messageInput: draft,
+    filesUi: { confirmLeave: () => confirmation.promise, clear: () => { cleared++; } },
+    sync: { disconnect: () => { disconnected++; } },
+    projectSelectionGuard: { begin: () => { invalidated++; } },
+    renderProjectSelect: () => { pickerRestored++; },
+    api: { getProject: async () => { requested++; return { id: "p2" }; } },
+  });
+  const project = app.state.project, session = app.state.session, actor = app.state.currentUser;
+  const scope = app.captureWorkspaceScope();
+  const pending = app.selectProject("p2");
+  await nextTurn();
+  assert.equal(app.state.project, project); assert.equal(app.state.session, session);
+  assert.equal(disconnected, 0); assert.equal(requested, 0); assert.equal(cleared, 0);
+  confirmation.resolve(false); await pending;
+  assert.equal(app.state.project, project); assert.equal(app.state.session, session); assert.equal(app.state.currentUser, actor);
+  assert.equal(draft.value, "Unsent conversation draft"); assert.equal(scope(), true);
+  assert.equal(pickerRestored, 1); assert.equal(invalidated, 0); assert.equal(disconnected, 0); assert.equal(requested, 0); assert.equal(cleared, 0);
+});
+
+test("cancelling dirty-file conversation navigation does not reset selection or clear active work", async () => {
+  const confirmation = deferred();
+  let disconnected = 0, requested = 0, reset = 0;
+  const app = harness(["selectSession"], {
+    filesUi: { confirmLeave: () => confirmation.promise, clear: () => { reset++; } },
+    sync: { disconnect: () => { disconnected++; } },
+    messageActions: { reset: () => { reset++; } }, messageDeletion: { reset: () => { reset++; } },
+    api: { getSession: async () => { requested++; return { id: "s2" }; } },
+  });
+  const project = app.state.project, session = app.state.session, generation = app.selectedSessionGeneration;
+  const pending = app.selectSession("s2"); await nextTurn();
+  assert.equal(app.state.session, session); assert.equal(disconnected, 0); assert.equal(reset, 0);
+  confirmation.resolve(false); await pending;
+  assert.equal(app.state.project, project); assert.equal(app.state.session, session);
+  assert.equal(app.selectedSessionGeneration, generation); assert.equal(disconnected, 0); assert.equal(reset, 0); assert.equal(requested, 0);
+});
+
+test("cancelling the actual logout handler's dirty-file confirmation retains authentication and workspace", async () => {
+  const confirmation = deferred();
+  let handler, loggedOut = 0, reset = 0, invalidated = 0, disconnected = 0;
+  const button = { ...element(), addEventListener(type, callback) { assert.equal(type, "click"); handler = callback; } };
+  const app = harness([], {
+    element: (id) => { assert.equal(id, "logout-button"); return button; },
+    filesUi: { confirmLeave: () => confirmation.promise },
+    projectSelectionGuard: { invalidate: () => { invalidated++; } },
+    sync: { disconnect: () => { disconnected++; } },
+    resetWorkspaceToAuth: () => { reset++; }, api: { logout: async () => { loggedOut++; } },
+  });
+  const marker = 'element("logout-button").addEventListener("click", async () => {';
+  const start = source.indexOf(marker), end = source.indexOf("\n});", start);
+  assert.ok(start >= 0 && end > start);
+  vm.runInContext(source.slice(start, end + 4), app);
+  const actor = app.state.currentUser, project = app.state.project, session = app.state.session;
+  const authentication = app.authenticationGeneration, selection = app.selectedSessionGeneration;
+  const pending = handler(); await nextTurn();
+  assert.equal(loggedOut, 0); assert.equal(disconnected, 0); assert.equal(button.disabled, false);
+  confirmation.resolve(false); await pending;
+  assert.equal(app.state.currentUser, actor); assert.equal(app.state.project, project); assert.equal(app.state.session, session);
+  assert.equal(app.authenticationGeneration, authentication); assert.equal(app.selectedSessionGeneration, selection);
+  assert.equal(loggedOut, 0); assert.equal(reset, 0); assert.equal(invalidated, 0); assert.equal(disconnected, 0);
 });
 
 test("authenticated invitation entry waits for explicit confirmation before loading projects or offering onboarding", async () => {

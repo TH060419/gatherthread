@@ -8,10 +8,14 @@ import {
   CodeDisableInputSchema, CodeEnableInputSchema, CodeFilesSchema, CodeMergeInputSchema,
   CodeReviewInputSchema, CodeUpdateInputSchema, containsCodeSyncSecret, type CodeBranch, type CodeFile,
   type CodeClearResult, type CodeMutationResult, type CodeSnapshotResult, type CodeStatus, type CodeStorageSummary,
+  FileBranchesInputSchema, FileTreeInputSchema, FileContentInputSchema, FileHistoryInputSchema, FileChangesInputSchema,
+  FileMutationInputSchema, type CodeCheckpointInput, type FileBranchesResult, type FileTreeResult, type FileContentResult,
+  type FileHistoryResult, type FileChangesResult, type FileMutationResult,
 } from "@gatherthread/protocol";
 import type { Actor, CollaborationDatabase } from "./database.js";
 import { ApiError, forbidden, idempotencyConflict, notFound } from "./errors.js";
 import { CodeStorageBudget } from "./code-storage-budget.js";
+import { applyFileOperations } from "./file-workspace.js";
 
 const MAX_PROJECT_BYTES = 256 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -26,6 +30,9 @@ export function codeGitTimeoutMs(command: string | undefined, platform: NodeJS.P
 }
 interface RepoRow { main_commit: string; enabled: number; charged_bytes: number; main_logical_bytes: number }
 interface Receipt { user_id: string; operation: string; payload_hash: string; result_json: string; invalidated_at: string | null }
+interface FileTreeEntry { path: string; object: string; size: number; executable: boolean }
+// Each retained commit is charged at least 4096 bytes; cap traversal even if storage is malformed.
+const MAX_HISTORY_COMMITS = MAX_PROJECT_BYTES / 4096 + 1;
 
 /** Standard bare Git object storage; SQLite is the atomic ref/ACL/retry authority. */
 export class CodeRepository {
@@ -120,31 +127,157 @@ export class CodeRepository {
     const input = CodeCheckpointInputSchema.parse(value);
     return this.mutate(actor, projectId, "checkpoint", input, "writer", () => {
       authorizeExecution?.();
-      const repo = this.requireRepo(projectId);
-      const branch = this.ownBranch(projectId, actor.user_id);
-      const base = branch?.head_commit ?? repo.main_commit;
-      if (input.base_commit !== base && !(input.base_commit === null && !branch && this.files(projectId, base).length === 0)) {
-        throw this.stale();
-      }
-      if (!branch && this.branches(projectId).length >= 128) throw this.quota();
-      this.validateSecrets(input.files);
-      this.hydrateUserUsage(actor.user_id);
-      const logicalBytes = input.files.reduce((sum, file) => sum + Buffer.byteLength(file.content_base64, "base64"), 0);
-      this.assertUserQuota(actor.user_id, logicalBytes - this.ownBranchBytes(projectId, actor.user_id));
-      const bytes = input.files.reduce((sum, file) => sum + Buffer.byteLength(file.content_base64, "base64"), 0) + 4096;
-      this.charge(projectId, bytes);
-      // Reserve before writing. Failed Git work keeps its reservation until reconciliation.
-      this.reserveTreeWrite(projectId, input.files.map((file) => file.path), (bytes - 4096) * 3, input.files.length);
-      const tree = this.writeTree(projectId, input.files);
-      const previousTree = this.git(projectId, ["rev-parse", `${base}^{tree}`]).toString().trim();
-      const commit = tree === previousTree ? base : this.createCommit(projectId, tree, [base], input.message, actor);
-      const id = this.branchId(actor.user_id);
-      this.database.sqlite.prepare(`INSERT INTO code_branches(project_id,id,name,user_id,head_commit,review_status,logical_bytes)
-        VALUES(?,?,?,?,?,'draft',?) ON CONFLICT(project_id,id) DO UPDATE SET head_commit=excluded.head_commit,logical_bytes=excluded.logical_bytes,
-        review_status=CASE WHEN code_branches.head_commit=excluded.head_commit THEN code_branches.review_status ELSE 'draft' END`)
-        .run(projectId, id, `gt/${id.slice(7)}`, actor.user_id, commit, logicalBytes);
-      return commit;
+      return this.applyCheckpoint(actor, projectId, input);
     }, authorizeExecution);
+  }
+
+  fileBranches(actor: Actor, projectId: string, value: unknown): FileBranchesResult {
+    this.cloudInput(FileBranchesInputSchema.parse(value));
+    this.authorize(actor, projectId);
+    const repo = this.requireRepo(projectId), own = this.ownBranch(projectId, actor.user_id);
+    const writer = this.canWriteFiles(actor, projectId);
+    const branches: FileBranchesResult["branches"] = [
+      { id: "main", name: "main", user_id: null, head_commit: repo.main_commit, can_write: false },
+      ...this.branches(projectId).map((branch) => ({ id: branch.id, name: branch.name, user_id: branch.user_id,
+        head_commit: branch.head_commit, can_write: writer && branch.user_id === actor.user_id })),
+    ];
+    if (!own && writer) branches.push({ id: "own", name: "My branch", user_id: actor.user_id, head_commit: repo.main_commit, can_write: true });
+    return { provider: "gt-cloud", branches, default_branch_id: own?.id ?? (writer ? "own" : "main") };
+  }
+
+  fileTree(actor: Actor, projectId: string, value: unknown): FileTreeResult {
+    const input = FileTreeInputSchema.parse(value); this.cloudInput(input);
+    const branch = this.fileSelection(actor, projectId, input.branch_id), commit = this.fileCommit(projectId, branch.head, input.commit);
+    return { provider: "gt-cloud", branch_id: branch.id, commit, head_commit: branch.head,
+      can_write: branch.can_write && commit === branch.head,
+      entries: this.fileEntries(projectId, commit).map(({ object: _object, ...entry }) => entry) };
+  }
+
+  fileContent(actor: Actor, projectId: string, value: unknown): FileContentResult {
+    const input = FileContentInputSchema.parse(value); this.cloudInput(input);
+    const branch = this.fileSelection(actor, projectId, input.branch_id), commit = this.fileCommit(projectId, branch.head, input.commit);
+    const entry = this.fileEntries(projectId, commit).find((file) => file.path === input.path);
+    if (!entry) throw notFound("File");
+    const content = this.git(projectId, ["cat-file", "blob", entry.object]);
+    if (content.length !== entry.size) throw new ApiError(503, "code_git_unavailable", "Git returned invalid file content");
+    return { provider: "gt-cloud", branch_id: branch.id, commit, path: entry.path,
+      content_base64: content.toString("base64"), size: entry.size, executable: entry.executable };
+  }
+
+  fileHistory(actor: Actor, projectId: string, value: unknown): FileHistoryResult {
+    const input = FileHistoryInputSchema.parse(value); this.cloudInput(input);
+    const branch = this.fileSelection(actor, projectId, input.branch_id), commit = this.fileCommit(projectId, branch.head, input.commit);
+    const reachable = this.fileAncestors(projectId, commit, input.path);
+    const cursorIndex = input.cursor ? reachable.indexOf(input.cursor) : -1;
+    if (input.cursor && cursorIndex === -1) throw notFound("Branch history cursor");
+    const ids = reachable.slice(cursorIndex + 1, cursorIndex + 1 + input.limit);
+    const metadata = ids.length ? this.git(projectId, ["log", "--no-walk=unsorted",
+      "--format=%H%x00%P%x00%an%x00%aI%x00%B%x00", ...ids]).toString("utf8").split("\0") : [];
+    const commits: FileHistoryResult["commits"] = [];
+    for (let offset = 0; offset + 4 < metadata.length; offset += 5) {
+      const id = metadata[offset]!.trim(), parents = metadata[offset + 1]!.trim();
+      const date = new Date(metadata[offset + 3]!);
+      if (!ids.includes(id) || !Number.isFinite(date.getTime())) throw new ApiError(503, "code_git_unavailable", "Git returned invalid commit metadata");
+      commits.push({ id, parent_ids: parents ? parents.split(" ") : [], author_name: metadata[offset + 2]!,
+        created_at: date.toISOString(), message: metadata[offset + 4]!.trimEnd() });
+    }
+    if (commits.length !== ids.length) throw new ApiError(503, "code_git_unavailable", "Git returned incomplete commit history");
+    const more = cursorIndex + 1 + ids.length < reachable.length;
+    return { provider: "gt-cloud", branch_id: branch.id, commits,
+      ...(more && ids.length ? { next_cursor: ids[ids.length - 1]! } : {}) };
+  }
+
+  fileChanges(actor: Actor, projectId: string, value: unknown): FileChangesResult {
+    const input = FileChangesInputSchema.parse(value); this.cloudInput(input);
+    const branch = this.fileSelection(actor, projectId, input.branch_id), commit = this.fileCommit(projectId, branch.head, input.commit);
+    const firstParent = this.git(projectId, ["show", "-s", "--format=%P", commit]).toString().trim().split(" ").filter(Boolean)[0];
+    const base = input.base_commit ? this.fileCommit(projectId, commit, input.base_commit) : firstParent ?? null;
+    const before = new Map((base ? this.fileEntries(projectId, base) : []).map((entry) => [entry.path, entry]));
+    const after = new Map(this.fileEntries(projectId, commit).map((entry) => [entry.path, entry]));
+    const files: FileChangesResult["files"] = [];
+    for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+      const previous = before.get(path), current = after.get(path);
+      if (previous?.object === current?.object && previous?.executable === current?.executable) continue;
+      files.push({ path, status: !previous ? "added" : !current ? "deleted" : "modified" });
+    }
+    return { provider: "gt-cloud", branch_id: branch.id, base_commit: base, commit, files };
+  }
+
+  fileMutate(actor: Actor, projectId: string, value: unknown): FileMutationResult {
+    const input = FileMutationInputSchema.parse(value); this.cloudInput(input);
+    // Hash and check the ORIGINAL operation request under the same lock as tree/ref updates.
+    const result = this.mutate(actor, projectId, "file_workspace", input, "writer", () => {
+      const selected = this.fileSelection(actor, projectId, input.branch_id);
+      if (!selected.can_write) throw forbidden("Only your own code branch can be edited");
+      if (selected.head !== input.base_commit) throw this.stale();
+      const files = CodeFilesSchema.parse(applyFileOperations(this.files(projectId, selected.head), input.operations));
+      return this.applyCheckpoint(actor, projectId, { files, base_commit: selected.head,
+        message: input.message, idempotency_key: input.idempotency_key });
+    });
+    return { provider: "gt-cloud", branch_id: result.status.own_branch_id!, commit: result.commit };
+  }
+
+  private cloudInput(input: { provider: string; connection_revision?: string | number | undefined }): void {
+    if (input.provider !== "gt-cloud" || input.connection_revision !== undefined) {
+      throw new ApiError(400, "file_provider_mismatch", "GT Cloud does not accept GitHub connection metadata");
+    }
+  }
+  private canWriteFiles(actor: Actor, projectId: string): boolean {
+    return this.database.projectMembershipRole(projectId, actor.user_id) !== "viewer"
+      && this.database.requireProject(projectId).state === "active";
+  }
+  private fileSelection(actor: Actor, projectId: string, branchId: string): { id: string; head: string; can_write: boolean } {
+    this.authorize(actor, projectId);
+    const repo = this.requireRepo(projectId), writer = this.canWriteFiles(actor, projectId);
+    if (branchId === "main") return { id: "main", head: repo.main_commit, can_write: false };
+    const branch = branchId === "own" ? this.ownBranch(projectId, actor.user_id) : this.branches(projectId).find((entry) => entry.id === branchId);
+    if (!branch) {
+      if (branchId === "own" && writer) return { id: "own", head: repo.main_commit, can_write: true };
+      throw notFound("Code branch");
+    }
+    return { id: branch.id, head: branch.head_commit, can_write: writer && branch.user_id === actor.user_id };
+  }
+  private fileAncestors(projectId: string, head: string, path?: string): string[] {
+    const commits = this.git(projectId, ["rev-list", "--topo-order", `--max-count=${MAX_HISTORY_COMMITS}`, head,
+      ...(path ? ["--", `:(literal)${path}`] : [])]).toString().trim().split("\n").filter(Boolean);
+    if (commits.length >= MAX_HISTORY_COMMITS) throw this.quota();
+    return commits;
+  }
+  private fileCommit(projectId: string, head: string, requested?: string): string {
+    if (!requested || requested === head) return head;
+    if (!this.fileAncestors(projectId, head).includes(requested)) throw notFound("Branch commit");
+    return requested;
+  }
+  private fileEntries(projectId: string, commit: string): FileTreeEntry[] {
+    const lines = this.git(projectId, ["ls-tree", "-rlz", "--full-tree", commit]).toString("utf8").split("\0").filter(Boolean);
+    return lines.map((line) => {
+      const match = /^(100644|100755) blob ([a-f0-9]{40}) +(\d+)\t([\s\S]+)$/u.exec(line);
+      if (!match) throw new ApiError(409, "code_unsupported_entry", "Only regular source files are supported");
+      return { path: match[4]!, object: match[2]!, size: Number(match[3]), executable: match[1] === "100755" };
+    });
+  }
+
+  private applyCheckpoint(actor: Actor, projectId: string, input: CodeCheckpointInput): string {
+    const repo = this.requireRepo(projectId), branch = this.ownBranch(projectId, actor.user_id);
+    const base = branch?.head_commit ?? repo.main_commit;
+    if (input.base_commit !== base && !(input.base_commit === null && !branch && this.files(projectId, base).length === 0)) throw this.stale();
+    if (!branch && this.branches(projectId).length >= 128) throw this.quota();
+    this.validateSecrets(input.files);
+    this.hydrateUserUsage(actor.user_id);
+    const logicalBytes = input.files.reduce((sum, file) => sum + Buffer.byteLength(file.content_base64, "base64"), 0);
+    this.assertUserQuota(actor.user_id, logicalBytes - this.ownBranchBytes(projectId, actor.user_id));
+    const bytes = logicalBytes + 4096;
+    this.charge(projectId, bytes);
+    this.reserveTreeWrite(projectId, input.files.map((file) => file.path), logicalBytes * 3, input.files.length);
+    const tree = this.writeTree(projectId, input.files);
+    const previousTree = this.git(projectId, ["rev-parse", `${base}^{tree}`]).toString().trim();
+    const commit = tree === previousTree ? base : this.createCommit(projectId, tree, [base], input.message, actor);
+    const id = this.branchId(actor.user_id);
+    this.database.sqlite.prepare(`INSERT INTO code_branches(project_id,id,name,user_id,head_commit,review_status,logical_bytes)
+      VALUES(?,?,?,?,?,'draft',?) ON CONFLICT(project_id,id) DO UPDATE SET head_commit=excluded.head_commit,logical_bytes=excluded.logical_bytes,
+      review_status=CASE WHEN code_branches.head_commit=excluded.head_commit THEN code_branches.review_status ELSE 'draft' END`)
+      .run(projectId, id, `gt/${id.slice(7)}`, actor.user_id, commit, logicalBytes);
+    return commit;
   }
 
   snapshot(actor: Actor, projectId: string, branchId: string): CodeSnapshotResult {
