@@ -127,6 +127,34 @@ test("Codex executor rejects oversized hydration before starting the harness", a
   }), /hydration prompt exceeds/);
 });
 
+test("Codex CLI cancellation uses the request signal and waits for actual process exit", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gt-cli-stop-"));
+  const fake = path.join(directory, "cli.mjs"), started = path.join(directory, "started"), stopped = path.join(directory, "stopped");
+  await writeFile(fake, `
+import { writeFileSync } from 'node:fs';
+const active=setInterval(()=>{},1000);
+process.on('SIGTERM',()=>{clearInterval(active);setTimeout(()=>{writeFileSync(process.env.STOPPED,'exited');process.exit(0);},80);});
+writeFileSync(process.env.STARTED,JSON.stringify({pid:process.pid}));
+`);
+  const executor = new CodexCliExecutor({ workspacePath: directory, statePath: path.join(directory, "state.json"),
+    model: "gpt-test", command: process.execPath, commandArgs: [fake], env: { ...process.env, STARTED: started, STOPPED: stopped } });
+  const abort = new AbortController();
+  const turn = executor.execute({ request: canonical(1, "agent_request", { content: "fictional test" }), canonicalHistory: [],
+    runtime: registeredRuntime(), signal: abort.signal });
+  const rejected = assert.rejects(turn, /fixture canceled/);
+  const deadline = Date.now() + 3000;
+  while (!(await readFile(started, "utf8").catch(() => ""))) {
+    assert.ok(Date.now() < deadline); await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  abort.abort(new Error("fixture canceled"));
+  await rejected;
+  if (process.platform === "win32") {
+    const native = JSON.parse(await readFile(started, "utf8"));
+    assert.throws(() => process.kill(native.pid, 0), "Windows cancellation must reap the real child before returning");
+  } else assert.equal(await readFile(stopped, "utf8"), "exited");
+  await assert.rejects(readFile(path.join(directory, "state.json")), /ENOENT/, "canceled execution cannot persist successful state");
+});
+
 test("Codex App Server tool variants normalize to bounded public contract events", () => {
   const imageResult = "image-result-opaque";
   const events = parseCodexAppServerItems([

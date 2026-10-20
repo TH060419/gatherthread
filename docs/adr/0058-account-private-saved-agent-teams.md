@@ -65,7 +65,18 @@ Successful test stamps are committed by the server and do not depend on browser
 polling or retention of the private test run. Replacing a configuration fences
 its old test in the library transaction; physical cleanup remains recoverable.
 Emergency controls have
-independent admission capacity and transport recovery. A failed native
+independent admission capacity and transport recovery. Native
+turn cancellation must reach the actual native executor, and its execution
+capacity stays reserved until that exact native attempt confirms exit. The
+connector durably retries content-free exit acknowledgments after reconnect;
+neither lease expiry nor removal of private run pointers proves physical exit.
+The same rule applies when sessions, projects, runtimes or claims are deleted:
+deletion atomically retains content-free exact-attempt holds outside history
+foreign keys. Exact original-device exit receipts can retire them after deletion,
+while absent or foreign acknowledgments are indistinguishable no-ops. New Team
+hold admission has account/global bounds and cannot evict unconfirmed old work.
+Native claim compatibility and the metadata-only control transport are defined
+in Interface contracts. A failed native
 cancellation remains repairable after the run ends or resumes onto a new step:
 startup and bounded coordinator retries inspect fenced outstanding claims,
 without dispatching another call or changing the run's outcome. A nullable

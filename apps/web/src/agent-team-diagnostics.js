@@ -10,6 +10,8 @@ const help = {
   sharedBusy: translated("Wait for the shared Agent to have a free execution slot, review any work already done, then start a new Team task. This failed task cannot continue automatically.", "请等待共享 Agent 出现空闲执行名额，检查已经完成的工作后，再发起新的团队任务；本次失败任务不会自动继续。"),
   sharedStorage: translated("Wait for the sharing queue to free capacity and confirm old executions have actually exited. If capacity remains full, ask the sharing owner or administrator to check retained sharing records and limits. Review existing work before starting a new task; clearing Team run records does not free sharing capacity.", "请等待共享队列释放容量，并确认旧执行已真正退出；若仍满，请共享者或管理员检查共享保留记录和容量限制。检查已有工作后再发起新任务；清理 Team 运行记录不会释放共享容量。"),
   runtimeBusy: translated("Check the existing execution on the selected Agent and wait for it to finish. Review any work already done before starting a new Team task to avoid duplicate execution.", "请检查所选 Agent 上的已有执行，并等待其结束；检查已完成的工作后再发起新的团队任务，避免重复执行。"),
+  nativeExit: translated("Keep the original device's connector running and check that its earlier task has actually stopped. This call will wait within its original time limit; do not submit a duplicate. If it remains blocked, ask the owner or administrator to check the exit confirmation.", "请保持原设备的连接程序运行，并确认旧任务已真正停止。本次调用会在原时限内等待，请勿重复提交；若持续等待，请设备持有者或管理员检查退出确认。"),
+  nativeCapacity: translated("Ask the device owner or administrator to check earlier executions and their exit confirmations. Reconnect the original devices if available; do not clear safety records before confirming those processes have exited. Clearing Team run records does not free this capacity.", "请设备持有者或管理员检查旧执行及退出确认；原设备可用时请重新连接。确认进程退出前不要清除安全记录；清理 Team 运行记录不会释放此容量。"),
   connection: translated("Reconnect the selected Agent. If its connection or model changed, update and retest the module before starting a new task.", "请重新连接所选 Agent；若连接或模型已变化，请修改模块并重新测试，再发起任务。"),
   timeout: translated("If calls and the original time allowance remain, choose Continue to start a new counted call with saved context. Otherwise start a new task.", "若剩余调用次数和原任务时限允许，点击“继续”将带上已保存的上下文开始新一轮调用；否则需重新发起任务。"),
   resume: translated("Review the task, then choose Resume while the original call and time limits allow. Resuming may require another Agent call.", "检查任务后，可在原次数和时限允许时点击“恢复”；恢复执行可能需要另一次 Agent 调用。"),
@@ -48,6 +50,8 @@ const definitions = [
   [["runtime_revoked", "agent_team_runtime_revoked", "agent_team_authorization_lost", "access_changed", "hosted_access_changed"], "The task's device or session authorization is no longer valid.", "任务所用设备或会话的授权已失效。", "newTask"],
   [["agent_team_target_unavailable", "agent_team_model_unavailable", "model_unavailable", "agent_share_unsupported"], "The exact saved Agent, model or reasoning effort is unavailable.", "保存的指定 Agent、模型或推理强度当前不可用。", "connection"],
   [["agent_team_waiting_executor"], "Waiting for the selected local Agent to claim this call; the task is not complete.", "正在等待所选本地 Agent 认领调用，任务尚未完成。", "executor"],
+  [["agent_team_native_exit_pending"], "An earlier local execution has no confirmed exit; this call has not started.", "旧的本地执行尚未确认退出，本次调用尚未开始。", "nativeExit"],
+  [["agent_team_native_hold_capacity"], "The native execution exit-confirmation record limit has been reached.", "本地执行的退出确认记录已达到容量上限。", "nativeCapacity"],
   [["agent_team_claim_expired"], "The local Agent's execution lease expired without a final result; the task is not complete.", "本地 Agent 的执行租约已过期且没有最终结果，任务尚未完成。", "executor"],
   [["agent_share_queued"], "This call is queued for the shared Agent; the task is not complete.", "调用正在等待共享 Agent 执行，任务尚未完成。", "queued"],
   [["context_changed"], "Conversation context changed or was deleted, so this task was interrupted.", "会话上下文发生变化或被删除，任务已中断。", "context"],
@@ -89,6 +93,8 @@ const unknownReason = translated("The Team task stopped before completion for an
   staleState = translated("The task state changed on another device or no longer allows this action. Refresh the run records before choosing an available control.", "其他设备已更改任务状态，或当前状态不允许此操作。请刷新运行记录，再选择可用操作。"),
   staleConfig = translated("The configuration changed elsewhere. Your unsaved edits are kept. Reopen the Team to load the latest version.", "配置已在其他页面修改，你的未保存内容仍保留。请重新打开此 Team 以加载最新版本。");
 const genericAction = translated("Unable to complete this Team action. Refresh the run records and review the configuration before retrying.", "未能完成团队操作。请刷新运行记录并检查配置后重试。");
+const priorTimeout = translated("A prior Agent call reported a timeout.", "此前的 Agent 调用报告了超时。");
+const timeoutCodes = new Set(["agent_timeout", "provider_timeout", "container_timeout", "agent_share_timeout"]);
 const testRecovery = translated("Resolve the reported issue, asking the connection owner or administrator if needed, then select Test. An unfinished previous test will be stopped. Tests use provider and sharing allowances, not the later task's Team call allowance.", "请修复以上问题，必要时联系连接持有者或管理员，再点击“测试”；原来未完成的测试会先停止。测试会使用模型和共享额度，不占后续正式任务的 Team 调用次数。"),
   testQuotaRecovery = translated("Wait for the daily reset at 00:00 UTC (08:00 Beijing time), or ask the owner to adjust the allowance. Reselect changed sharing configuration and save it before testing again. Tests also use sharing allowance.", "请等待每天 UTC 00:00（北京时间 08:00）额度重置，或请共享者调整额度；共享配置变化后需重新选择并保存，再次测试。测试也会使用共享额度。"),
   testWaiting = translated("This connectivity test is still waiting. Do not start a duplicate test. To cancel it, save a configuration change or delete the Team; the previous test will be stopped.", "本次连通性测试仍在等待，请勿重复发起。若需取消，可保存配置修改或删除 Team，原测试会停止。");
@@ -119,6 +125,13 @@ const actionMessages = new Map([
 
 export const TEAM_DIAGNOSTIC_ZH_CN = Object.fromEntries(copy);
 
+export function teamTimeoutContinuationAvailable(run, now = Date.now()) {
+  const deadline = Date.parse(run?.deadline_at);
+  return run?.status === "paused" && run.error_code === "agent_timeout" && run.purpose !== "test"
+    && !(Number.isFinite(run?.calls_used) && Number.isFinite(run?.max_calls) && run.calls_used >= run.max_calls)
+    && !(Number.isFinite(deadline) && deadline <= now);
+}
+
 export function formatTeamRunIssue(run, t = value => value) {
   if (!run || run.status === "completed") return null;
   const code = run.issue?.code ?? run.error_code ?? (run.status === "paused" ? "user_paused" : run.status === "stopped" ? "user_stopped"
@@ -126,12 +139,19 @@ export function formatTeamRunIssue(run, t = value => value) {
   if (run.status === "running" && !code) return null;
   const diagnostic = diagnostics.get(code), runningOffline = run.status === "running" && ["agent_team_runtime_offline", "runtime_offline"].includes(code);
   const runningUnknown = run.status === "running" && (!diagnostic || ["agent_team_agent_failed", "agent_team_execution_failed"].includes(code));
-  const reason = t(runningOffline ? lostHeartbeat : runningUnknown ? unknownWaiting : diagnostic?.reason ?? unknownReason);
+  const timeout = timeoutCodes.has(code);
+  const reason = t(timeout && run.status !== "paused" ? priorTimeout : runningOffline ? lostHeartbeat : runningUnknown ? unknownWaiting : diagnostic?.reason ?? unknownReason);
+  let advice = runningOffline || runningUnknown ? help.executor : diagnostic?.advice ?? help.unknown;
+  if (timeout) advice = run.status === "paused" ? run.error_code === "agent_timeout"
+    ? teamTimeoutContinuationAvailable(run) ? help.timeout : help.budget : help.resume
+    : run.status === "running" ? help.executor : ["timed_out", "call_limit"].includes(run.status) ? help.budget : help.newTask;
+  if (["failed", "stopped", "timed_out", "call_limit"].includes(run.status)
+    && [help.timeout, help.resume, help.clarification, help.executor, help.waiting, help.queued, help.nativeExit].includes(advice)) advice = help.newTask;
   const moduleLabel = typeof run.issue?.node_label === "string" ? run.issue.node_label : null;
   return { reason, text: moduleLabel ? `${t("Module")}: ${moduleLabel} · ${reason}` : reason,
     advice: t(run.purpose === "test" ? run.status === "running" ? testWaiting : code === "agent_share_daily_limit" ? testQuotaRecovery
       : code === "agent_share_source_capacity" ? help.sharedSource : testRecovery
-      : runningOffline || runningUnknown ? help.executor : diagnostic?.advice ?? help.unknown),
+      : advice),
     code: diagnostics.has(code) ? code : "unknown", moduleLabel };
 }
 

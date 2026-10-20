@@ -37,6 +37,7 @@ import {
   ApproveDshPairingInputSchema,
   BeginDshPairingInputSchema,
   ClaimAgentRequestInputSchema,
+  AgentExecutionStateInputSchema, AgentExecutionStateQuerySchema, AgentExecutionStateSchema,
   PauseAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
   ClaimSnapshotRequestInputSchema,
@@ -1581,7 +1582,19 @@ export async function startCollaborationServer(
 
       if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "claim" && parts.length === 6 && request.method === "POST") {
         const input = ClaimAgentRequestInputSchema.parse(await readAuthenticatedJson());
-        sendJson(response, 200, { data: service.claimAgentRequest(actor, sessionId, parts[4], input.runtime_id) });
+        sendJson(response, 200, { data: service.claimAgentRequest(actor, sessionId, parts[4], input.runtime_id, input.execution_control_version ?? 0) });
+        return;
+      }
+
+      if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "execution" && parts.length === 6 && request.method === "GET") {
+        const input = AgentExecutionStateQuerySchema.parse(Object.fromEntries(url.searchParams));
+        sendJson(response, 200, { data: AgentExecutionStateSchema.parse(service.readAgentExecution(actor, sessionId, parts[4], input.runtime_id, input.claim_attempt)) });
+        return;
+      }
+
+      if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "execution" && parts[6] === "stopped" && parts.length === 7 && request.method === "POST") {
+        const input = AgentExecutionStateInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: AgentExecutionStateSchema.parse(service.acknowledgeAgentExecutionStopped(actor, sessionId, parts[4], input.runtime_id, input.claim_attempt)) });
         return;
       }
 

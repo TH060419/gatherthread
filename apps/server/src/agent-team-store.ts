@@ -111,7 +111,9 @@ export class AgentTeamStore {
           code = "agent_team_claim_expired";
         } else if (!online) code = "agent_team_runtime_offline";
         else if (!claim) {
-          code = "agent_team_waiting_executor";
+          const pending = this.sql.prepare("SELECT 1 FROM agent_request_claims WHERE runtime_id=? AND execution_pending=1 LIMIT 1").get(runtimeId);
+          code = pending ? "agent_team_native_exit_pending"
+            : this.service.database.executionHoldIssue(runtimeId) ?? "agent_team_waiting_executor";
         }
       }
     }
@@ -170,7 +172,7 @@ export class AgentTeamStore {
     });
   }
   create(actor: Actor, sessionId: string, input: StartAgentTeamRunInput, purpose: "task" | "test" = "task",
-    onCreated?: (run: TeamRunRow) => void) {
+    onCreated?: (run: TeamRunRow) => void, beforeCreate?: () => void) {
     this.assertSafeInput(input);
     return this.transaction(() => {
       this.authorize(actor, sessionId, true); this.prune();
@@ -196,6 +198,9 @@ export class AgentTeamStore {
         throw conflict("Connectivity tests cannot quote or mention conversation members");
       }
       this.service.database.validateTeamTaskReferences(sessionId, input);
+      // A replacement may fence its old probe only as part of accepting this
+      // run. Any later quota/storage refusal rolls that fence back as well.
+      beforeCreate?.();
       const active = this.sql.prepare("SELECT COUNT(*) AS count FROM agent_team_runs WHERE user_id=? AND status IN ('running','paused')")
         .get(actor.user_id) as { count: number };
       if (active.count >= 2) throw new ApiError(429, "agent_team_busy", "Stop an existing team run before starting another");

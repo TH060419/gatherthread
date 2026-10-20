@@ -215,3 +215,13 @@ test("timeout continuation is a fresh request with exact cloud target and origin
     idempotencyKey: "stable-continue-key", replyTo: "quote-1", continueFromEventId: "timeout-request" });
   assert.throws(() => continueCloudRequestInput(cloud, "key", [{ id: "cloud-free", provider: "deepseek-official", model: "changed" }]), /original cloud model/);
 });
+
+test("the composer Team Stop remains independently usable while realtime replay gates new writes", async () => {
+  let stops = 0;
+  const f = fixture(); f.setContext({ writable: false, controlWritable: true, sending: true,
+    teamRun: { id: "accepted-team", status: "running" }, stopTeam: async () => { stops++; } });
+  assert.equal(f.control.action(), "stop_team"); assert.equal(f.button.disabled, false);
+  f.control.handleClick(); await flush(); assert.equal(stops, 1);
+  f.setContext({ controlWritable: false }); assert.equal(f.button.disabled, true);
+  f.control.handleClick(); await flush(); assert.equal(stops, 1, "current role loss still blocks an emergency HTTP action");
+});

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { parseHistoryContext } from "@gatherthread/bridge";
+import { parseHistoryContext, HarnessExecutionUnconfirmedError, HarnessExecutionTerminatedError } from "@gatherthread/bridge";
 import type {
   DshAgentStatus,
   DshCanonicalProjection,
@@ -369,7 +369,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
 
   const assertExecutionParentIdle = (): void => {
     const parent = requireAgent(handle);
-    if (parent.status !== "idle") throw new Error("Native DSH Agent must be idle before isolated context execution");
+    if (parent.status !== "idle") throw new HarnessExecutionUnconfirmedError("Native DSH Agent must be idle before isolated context execution");
     if (parent.session.header?.cwd !== options.workspacePath || agents.get?.(nativeSessionId) !== parent) {
       throw new Error("Native DSH workspace or live owner does not match the isolated context binding");
     }
@@ -603,7 +603,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
       if (presets !== undefined && (presets.composedPreset as (context: unknown) => unknown)(agent.ctx) !== parentPreset) {
         throw new Error("DSH native tool composition changed; reconnect before isolated context execution");
       }
-      if (agent.status !== "idle") throw new Error("DSH isolated execution Agent must be idle before context preparation");
+      if (agent.status !== "idle") throw new HarnessExecutionUnconfirmedError("DSH isolated execution Agent must be idle before context preparation");
       const markers = agent.session.snapshotEvents(0).map(asObject).filter((event) =>
         event?.type === "user/message" && String(asObject(event.data)?.id).startsWith("gatherthread-context:"));
       const previousMarker = asObject(markers.at(-1)?.data)?.id;
@@ -619,7 +619,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
         assertExecutionParentIdle();
         assertExecutionOwnership(agent);
-        if (agent.status !== "idle" || agent.session.seq !== sequenceBefore) throw new Error("DSH isolated execution changed during context preparation");
+        if (agent.status !== "idle" || agent.session.seq !== sequenceBefore) throw new HarnessExecutionUnconfirmedError("DSH isolated execution changed during context preparation");
         const nodes = agent.session.surface?.nodes;
         if (!Array.isArray(nodes) || nodes.some((seq) => !Number.isSafeInteger(seq) || seq < 0 || seq >= agent.session.seq)
           || new Set(nodes).size !== nodes.length) throw new Error("Pinned DSH public Session surface API is unavailable or invalid");
@@ -798,8 +798,8 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     if (Buffer.byteLength(text, "utf8") > 256 * 1_024) {
       throw new Error("DSH prompt exceeds the 256 KiB connector limit");
     }
-    if (promptActive) throw new Error("DSH host facade permits only one active prompt");
-    if (projectionActive) throw new Error("DSH host facade permits only one active write");
+    if (promptActive) throw new HarnessExecutionUnconfirmedError("DSH host facade permits only one active prompt");
+    if (projectionActive) throw new HarnessExecutionUnconfirmedError("DSH host facade permits only one active write");
     promptActive = true;
     let disposeSelection: (() => void) | undefined;
     let selectionRef: DshModelSelectionRef | undefined;
@@ -811,7 +811,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
       signal?.throwIfAborted();
       if (signal && typeof agent.cancel !== "function") throw new Error("DSH public cancel API is required for deletion-safe execution");
       if (requestedExecutionId !== undefined) { assertExecutionParentIdle(); assertExecutionOwnership(agent); }
-      if (agent.status !== "idle") throw new Error("DSH Agent must be idle before a GatherThread prompt");
+      if (agent.status !== "idle") throw new HarnessExecutionUnconfirmedError("DSH Agent must be idle before a GatherThread prompt");
       if (requestedSelection !== undefined) {
         const selection = await resolveDshExecutionSelection(
           context,
@@ -831,14 +831,14 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         ? await createUserMessage(text, options)
         : await createIsolatedMessage(`gatherthread-request:${createHash("sha256").update(`${requestedExecutionId}:${fromSequence}:${text}`).digest("hex")}`, text, options);
       throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
-      if (agent.status !== "idle" || agent.session.seq !== fromSequence) throw new Error("DSH Agent changed while preparing a GatherThread prompt");
+      if (agent.status !== "idle" || agent.session.seq !== fromSequence) throw new HarnessExecutionUnconfirmedError("DSH Agent changed while preparing a GatherThread prompt");
       if (requestedExecutionId !== undefined) { assertExecutionParentIdle(); assertExecutionOwnership(agent); }
       if (liveSubscribers.size > 0) {
         let imported: Record<string, unknown> | undefined;
         try { imported = asObject(await (options.moduleImporter ?? importDshModule)(USER_MESSAGE_MODULE)); }
         catch { /* Unsupported ephemeral API keeps the allowlisted durable path. */ }
         throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
-        if (agent.status !== "idle" || agent.session.seq !== fromSequence) throw new Error("DSH Agent changed while preparing live output");
+        if (agent.status !== "idle" || agent.session.seq !== fromSequence) throw new HarnessExecutionUnconfirmedError("DSH Agent changed while preparing live output");
         livePrompt = { agent, closed: false, revision: 0,
           nativeFrames: typeof imported?.expandAssistantStream === "function",
           ...(typeof imported?.isAgentLoopRequest === "function"
@@ -856,8 +856,13 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
       };
       signal?.addEventListener("abort", abortPrompt, { once: true });
       if (signal?.aborted) abortPrompt();
-      await agent.whenIdle();
-      signal?.throwIfAborted();
+      try { await agent.whenIdle(); }
+      catch (error) {
+        if (agent.status !== "idle") throw new HarnessExecutionUnconfirmedError("DSH native prompt stopped responding before an idle acknowledgment");
+        throw new HarnessExecutionTerminatedError("dsh_native_execution_stopped", "The native DSH execution stopped before a response.", { cause: error });
+      }
+      if (agent.status !== "idle") throw new HarnessExecutionUnconfirmedError("DSH native prompt returned without an idle acknowledgment");
+      if (signal?.aborted) throw new HarnessExecutionTerminatedError("dsh_native_execution_cancelled", "The native DSH execution stopped after cancellation.");
       throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
       await sessions.flush(agent.session);
       throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");

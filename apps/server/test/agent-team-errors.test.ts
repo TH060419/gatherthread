@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { teamAgentFailureCode } from "../src/agent-team-errors.js";
+import { TEAM_GLOBAL_ISSUES, teamAgentFailureCode, teamPublicIssueCode } from "../src/agent-team-errors.js";
 
 test("Team execution diagnostics accept known failures only for their actual execution kind", () => {
   assert.equal(teamAgentFailureCode("codex_turn_cancelled", "local"), "codex_turn_cancelled");
@@ -11,6 +11,13 @@ test("Team execution diagnostics accept known failures only for their actual exe
   assert.equal(teamAgentFailureCode("provider_timeout", "cloud"), "provider_timeout");
   for (const [code, kind] of [["provider_auth_failed", "local"], ["codex_turn_cancelled", "shared"],
     ["agent_share_revoked", "cloud"]] as const) assert.equal(teamAgentFailureCode(code, kind), "agent_team_agent_failed");
+});
+
+test("native safety holds expose fixed categories without misattributing account capacity to one module", () => {
+  assert.equal(teamPublicIssueCode("agent_team_native_exit_pending"), "agent_team_native_exit_pending");
+  assert.equal(teamPublicIssueCode("agent_team_native_hold_capacity"), "agent_team_native_hold_capacity");
+  assert.equal(TEAM_GLOBAL_ISSUES.has("agent_team_native_exit_pending"), false);
+  assert.equal(TEAM_GLOBAL_ISSUES.has("agent_team_native_hold_capacity"), true);
 });
 
 test("Team execution diagnostics reject arbitrary regex-valid codes, exception messages and nonstrings", () => {

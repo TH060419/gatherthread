@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
-import type { AgentTeamDraft } from "@gatherthread/protocol";
+import type { AgentTeamDraft, AgentTeamPlan } from "@gatherthread/protocol";
 import { CollaborationDatabase } from "../src/database.js";
 import { CollaborationService } from "../src/service.js";
 import { AgentTeams } from "../src/agent-teams.js";
@@ -58,6 +58,78 @@ function fixture(path = ":memory:") {
     close: () => { teams.close(); db.close(); } };
 }
 const code = (expected: string) => (error: unknown) => error instanceof ApiError && error.code === expected;
+
+test("a rejected retest preserves the active probe, native claim, canonical head and consumed allowance", async t => {
+  for (const refusal of ["content_revision", "offline", "run_capacity", "other_session"] as const) await t.test(refusal, async () => {
+    const f = fixture(); try {
+      if (refusal === "run_capacity") for (let index = 0; index < 99; index++) {
+        const task = f.teams.start(f.actor, f.session.id, { plan: f.draft as AgentTeamPlan, entry_node_id: "entry",
+          content: "Retained synthetic task", max_calls: 1, max_duration_minutes: 30,
+          content_revision: 0, idempotency_key: f.key() }).run;
+        f.teams.control(f.actor, f.session.id, task.id, { action: "stop", idempotency_key: f.key() });
+      }
+      const saved = f.save(), accepted = f.library.test(f.actor, saved.id, f.session.id,
+        { expected_revision: saved.revision, content_revision: 0, idempotency_key: f.key() });
+      await f.teams.pump();
+      const step = f.teams.store.steps(accepted.run.id)[0]!, request = step.request_event_id!;
+      assert.ok(request); assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, request, f.runtime.id).status, "claimed");
+      const requestedSession = refusal === "other_session" ? f.service.createSession(f.actor, { project_id: f.session.project_id,
+        title: "Different synthetic session", mode: "multi", idempotency_key: f.key() }).session.id : f.session.id;
+      if (refusal === "offline") f.db.sqlite.prepare("UPDATE runtimes SET status='offline' WHERE id=?").run(f.runtime.id);
+      let cancellations = 0; const cancel = f.teams.stopPrivateTest.bind(f.teams);
+      f.teams.stopPrivateTest = (actor, run) => { cancellations++; cancel(actor, run); };
+      const snapshot = () => ({
+        run: f.db.sqlite.prepare("SELECT * FROM agent_team_runs WHERE id=?").get(accepted.run.id),
+        steps: f.db.sqlite.prepare("SELECT * FROM agent_team_steps WHERE run_id=? ORDER BY id").all(accepted.run.id),
+        claim: f.db.sqlite.prepare("SELECT * FROM agent_request_claims WHERE request_event_id=?").get(request),
+        definition: f.db.sqlite.prepare("SELECT * FROM agent_team_definitions WHERE id=?").get(saved.id),
+        heads: f.db.sqlite.prepare("SELECT id,next_sequence,content_revision FROM sessions ORDER BY id").all(),
+        allowance: f.db.sqlite.prepare("SELECT COUNT(*) AS runs,SUM(calls_used) AS calls,SUM(bytes) AS bytes FROM agent_team_runs").get(),
+        receipts: f.db.sqlite.prepare("SELECT * FROM agent_team_start_receipts ORDER BY run_id").all(),
+      });
+      const before = snapshot(), input = { expected_revision: saved.revision,
+        content_revision: refusal === "content_revision" ? 1 : 0, idempotency_key: f.key() };
+      const expected = refusal === "content_revision" ? "context_changed" : refusal === "offline" ? "agent_team_runtime_offline"
+        : refusal === "run_capacity" ? "agent_team_storage_full" : "agent_team_target_unavailable";
+      assert.throws(() => f.library.test(f.actor, saved.id, requestedSession, input), code(expected));
+      assert.deepEqual(snapshot(), before, "A refused replacement must not partially retire its predecessor");
+      assert.equal(cancellations, 0); assert.equal(f.library.read(f.actor, saved.id).test_status, "running");
+      if (refusal === "offline") f.service.heartbeatRuntime(f.actor, f.runtime.id);
+      assert.equal((await f.finishProbe(accepted.run.id)).status, "completed", "The original accepted probe can still finish");
+    } finally { f.close(); }
+  });
+});
+
+test("an accepted retest atomically replaces its old probe before physical cancellation and preserves an unrelated active task", async () => {
+  const f = fixture(); try {
+    const saved = f.save(), accepted = f.library.test(f.actor, saved.id, f.session.id,
+      { expected_revision: saved.revision, content_revision: 0, idempotency_key: f.key() });
+    await f.teams.pump();
+    const oldRequest = f.teams.store.steps(accepted.run.id)[0]!.request_event_id!;
+    const oldClaim = f.service.claimAgentRequest(f.actor, f.session.id, oldRequest, f.runtime.id);
+    const unrelated = f.teams.start(f.actor, f.session.id, { plan: f.draft as AgentTeamPlan, entry_node_id: "entry",
+      content: "Unrelated accepted task", max_calls: 1, max_duration_minutes: 30,
+      content_revision: 0, idempotency_key: f.key() }).run;
+    const cancel = f.teams.stopPrivateTest.bind(f.teams); let cancellations = 0;
+    f.teams.stopPrivateTest = (actor, id) => {
+      cancellations++;
+      assert.equal(id, accepted.run.id); assert.equal(f.teams.store.row(id).status, "stopped");
+      assert.notEqual(f.library.read(f.actor, saved.id).test_run_id, id);
+      assert.equal(f.db.sqlite.isTransaction, false, "Physical cancellation must observe the committed replacement");
+      cancel(actor, id);
+    };
+    const input = { expected_revision: saved.revision, content_revision: 0, idempotency_key: f.key() };
+    const replacement = f.library.test(f.actor, saved.id, f.session.id, input);
+    assert.equal(replacement.replayed, false); assert.equal(replacement.run.calls_used, 0); assert.equal(cancellations, 1);
+    assert.equal(f.teams.store.row(unrelated.id).status, "running");
+    assert.equal(f.library.read(f.actor, saved.id).test_run_id, replacement.run.id);
+    assert.equal(f.db.teamRequestMayExecute(oldRequest), false);
+    assert.throws(() => f.service.completeAgentRequest(f.actor, f.session.id, oldRequest, f.runtime.id, f.key(),
+      { content: f.probeLines(oldRequest).join("\n") }, f.target.model, undefined, oldClaim.attempt_count));
+    assert.equal(f.library.test(f.actor, saved.id, f.session.id, input).replayed, true);
+    assert.equal(cancellations, 1, "An accepted retry must not replace the new probe again");
+  } finally { f.close(); }
+});
 
 test("a non-first configured entry is tested first, then its outgoing route is checked after every initial module probe", async () => {
   const f = fixture(); try {
@@ -303,6 +375,7 @@ test("a server-interrupted connectivity probe cannot enable a saved Team or acce
     const replacement = library.test(f.actor, saved.id, f.session.id, { expected_revision: saved.revision,
       content_revision: 0, idempotency_key: f.key() });
     assert.notEqual(replacement.run.id, accepted.run.id); assert.equal(replacement.run.calls_used, 0);
+    f.service.acknowledgeAgentExecutionStopped(f.actor, f.session.id, step.request_event_id!, f.runtime.id, claim.attempt_count);
     const finished = await f.finishProbe(replacement.run.id, lines => lines, { coordinator: restored });
     assert.equal(finished.status, "completed"); assert.equal(finished.calls_used, 3);
     assert.deepEqual(finished.steps.map(item => item.node_id), ["entry", "first", "first"]);

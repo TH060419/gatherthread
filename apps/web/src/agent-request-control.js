@@ -113,7 +113,8 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
     button.dataset.agentAction = current.action;
     button.setAttribute("aria-busy", String(busy));
     if (current.action !== "request") {
-      button.disabled = busy || current.sending && !independentStop || !current.writable || current.action === "wait";
+      const permitted = current.action === "stop_team" ? current.controlWritable ?? current.writable : current.writable;
+      button.disabled = busy || current.sending && !independentStop || !permitted || current.action === "wait";
       targetLabel.textContent = t(current.action === "stop_team" ? "Stops the Team task; your draft stays here." : current.action === "stop" ? "Stops your shared request and cancels queued work; your draft stays here." : current.action === "resume"
         ? "Starts a new request with latest history, using the original Agent and model."
         : current.action === "wait" ? current.cloud ? "Cloud Agent is working…" : "Waiting for your Agent to start this request."
@@ -131,10 +132,12 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
         && !event.deleted && !event.contentUnavailable && event.actor?.id === latest.userId);
     };
     if (current.action === "request") return false;
-    if (button.disabled || operation?.scope === current.scope || !current.writable) return true;
+    const permitted = current.action === "stop_team" ? current.controlWritable ?? current.writable : current.writable;
+    if (button.disabled || operation?.scope === current.scope || !permitted) return true;
     if (current.action === "resume" && !confirmResume(current.request)) return true;
     const pending = { scope: current.scope, action: current.action, requestId: current.request?.id };
     operation = pending;
+    delete errorNode.teamProblemIntent;
     errorNode.textContent = "";
     onChange();
     // Reuse one key after an uncertain resume acknowledgement; another click
@@ -167,8 +170,11 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
           await api.appendAgentRequest(current.sessionId, { ...resumeAgentRequestInput(source, key), contentRevision });
         }
       } catch (error) {
-        if (getContext().scope === current.scope && !pending.confirmed) errorNode.textContent = current.action === "stop_team" && current.teamError
-          ? current.teamError(error) : t(error.message ?? "Unable to control this Agent request. Try again.");
+        if (getContext().scope === current.scope && !pending.confirmed) {
+          delete errorNode.teamProblemIntent;
+          errorNode.textContent = current.action === "stop_team" && current.teamError
+            ? current.teamError(error) : t(error.message ?? "Unable to control this Agent request. Try again.");
+        }
       } finally {
         if (operation === pending) operation = null;
         if (getContext().scope === current.scope) onChange();

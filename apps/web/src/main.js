@@ -336,6 +336,9 @@ const agentRequestControl = mountAgentRequestControl({
     contentRevision: state.sync.contentRevision ?? 0,
     scope: `${authenticationGeneration}:${selectedSessionGeneration}:${state.project?.id}:${state.session?.id}:${state.sync.contentRevision ?? 0}`,
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
+    // Stopping accepted work uses authenticated HTTP and needs no new history
+    // append. Realtime replay must not disable this emergency control.
+    controlWritable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: "live", kind: "human_chat" }).allowed,
     sending: Boolean(pendingMessageSend?.()),
     requestLabel: currentProjectHarness() === "team" ? "Request Team" : currentProjectHarness() === "shared" ? "Request shared Agent" : "Request my agent",
     cloudProfiles: hostedAgentStatus.profiles,
@@ -508,6 +511,7 @@ const teamsUi = mountAgentTeams({ document, api, hostButton: element("agent-team
     events: state.sync.events,
     sharedAgents: sharedAgentsUi.agents(), cloudProfiles: hostedAgentStatus.profiles,
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
+    controlWritable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: "live", kind: "human_chat" }).allowed,
   }),
 });
 
@@ -3258,18 +3262,21 @@ async function sendMessage(kind) {
   if (kind === "agent_request" && currentProjectHarness() === "shared") kind = "shared_agent";
   if (kind === "agent_request" && currentProjectHarness() === "team") kind = "team_agent";
   if (kind === "hosted_agent" && !CLOUD_AGENT_ENTRY_ENABLED) {
+    delete sendError.teamProblemIntent;
     sendError.textContent = localizer.t("Cloud Agent · coming later");
     return;
   }
   const cloudProfile = kind === "hosted_agent" ? currentCloudProfile() : null;
   const content = messageInput.value.trim();
   if (!content || !state.session) {
+    delete sendError.teamProblemIntent;
     sendError.textContent = content ? "Choose a session first." : "Write a message first.";
     messageInput.focus();
     return;
   }
   const button = kind === "human_chat" ? sendChatButton : sendAgentButton;
   if (button.disabled || pendingMessageSend?.()) return;
+  delete sendError.teamProblemIntent;
   sendError.textContent = "";
   if (kind === "shared_agent" && (state.session.mode === "solo" || state.settings.composer.confirmAgentRequest)
     && !window.confirm(sharedAgentsUi.disclosure(state.session.mode))) {
@@ -3294,6 +3301,7 @@ async function sendMessage(kind) {
   renderComposerPermissions();
   button.textContent = "Sending…";
   let sharedAttempt = null;
+  const teamProblem = {};
   try {
     const leading = messageInput.value.length - messageInput.value.trimStart().length;
     const input = { content, idempotencyKey: createIdempotencyKey(kind), replyTo: metadata.replyTo,
@@ -3302,6 +3310,9 @@ async function sendMessage(kind) {
     else if (kind === "team_agent") {
       if (state.settings.composer.confirmAgentRequest && !window.confirm(teamsUi.t("Start this Team with its saved modules and limits?"))) return;
       const receipt = await teamsUi.startTask(content, { replyTo: input.replyTo, mentions: input.mentions, onAccepted: () => {
+        if (isCurrent() && sendError.teamProblemIntent === teamProblem && sendError.textContent === teamProblem.text) {
+          sendError.textContent = ""; delete sendError.teamProblemIntent;
+        }
         if (isCurrent() && messageInput.value === draft && JSON.stringify(messageActions.metadata()) === metadataFingerprint) {
           messageInput.value = ""; messageActions.sent();
         }
@@ -3360,8 +3371,11 @@ async function sendMessage(kind) {
     }
   } catch (error) {
     if (kind === "shared_agent" && pendingSharedAgentIntent === sharedAttempt && error.status >= 400 && error.status < 500) pendingSharedAgentIntent = null;
-    if (isCurrent() && !sharedAttempt?.accepted) sendError.textContent = kind === "team_agent"
-      ? teamsUi.describeError(error, "start") : error.message ?? "The event was not accepted.";
+    if (isCurrent() && !sharedAttempt?.accepted) {
+      sendError.textContent = kind === "team_agent" ? teamsUi.describeError(error, "start") : error.message ?? "The event was not accepted.";
+      teamProblem.text = sendError.textContent;
+      sendError.teamProblemIntent = kind === "team_agent" ? teamProblem : null;
+    }
   } finally {
     if (pendingMessageSend === isCurrent) {
       pendingMessageSend = null;
@@ -3373,14 +3387,14 @@ async function sendMessage(kind) {
 
 element("team-agent-recover").addEventListener("click", async () => {
   const isCurrent = captureWorkspaceScope();
-  try { await teamsUi.recover(); } catch (error) { if (isCurrent()) sendError.textContent = teamsUi.describeError(error, "recover"); }
+  try { await teamsUi.recover(); } catch (error) { if (isCurrent()) { delete sendError.teamProblemIntent; sendError.textContent = teamsUi.describeError(error, "recover"); } }
   if (isCurrent()) renderComposerPermissions();
 });
 
 element("shared-agent-recover").addEventListener("click", async () => {
   const intent = pendingSharedAgentIntent, isCurrent = captureWorkspaceScope();
   if (!intent || intent.scope !== `${authenticationGeneration}:${state.currentUser?.id}:${state.session?.id}:${state.sync.contentRevision ?? 0}`) return;
-  const button = element("shared-agent-recover"); button.disabled = true; sendError.textContent = "";
+  const button = element("shared-agent-recover"); button.disabled = true; delete sendError.teamProblemIntent; sendError.textContent = "";
   try {
     await api.startSharedAgentRequest(intent.sessionId, intent.input);
     if (!isCurrent() || pendingSharedAgentIntent !== intent) return;
@@ -3391,7 +3405,7 @@ element("shared-agent-recover").addEventListener("click", async () => {
   } catch (error) {
     if (isCurrent() && pendingSharedAgentIntent === intent) {
       if (error.status >= 400 && error.status < 500) pendingSharedAgentIntent = null;
-      sendError.textContent = error.message ?? localizer.t("Shared Agent request failed. Refresh and try again.");
+      delete sendError.teamProblemIntent; sendError.textContent = error.message ?? localizer.t("Shared Agent request failed. Refresh and try again.");
     }
   } finally { if (isCurrent()) { button.disabled = false; renderComposerPermissions(); } }
 });
@@ -3482,7 +3496,7 @@ async function retryAgentRequest(requestId, button, continuing = false) {
       const message = localizer.t(error.code === "hosted_user_busy" || error.code === "hosted_agent_busy"
         ? "Your cloud request is still running. Pause it first or wait for it to finish."
         : error.message ?? "The event was not accepted.");
-      sendError.textContent = message;
+      delete sendError.teamProblemIntent; sendError.textContent = message;
       if (status.isConnected) status.textContent = message;
     }
   } finally {

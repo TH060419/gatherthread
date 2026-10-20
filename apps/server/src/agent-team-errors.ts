@@ -13,10 +13,10 @@ export function teamAgentFailureCode(value: unknown, kind: "local" | "shared" | 
   return typeof value === "string" && allowed.has(value) ? value : "agent_team_agent_failed";
 }
 export const TEAM_GLOBAL_ISSUES = new Set(["agent_team_authorization_lost", "context_changed", "access_changed", "hosted_access_changed",
-  "agent_team_deadline", "agent_team_call_limit", "agent_team_storage_full", "user_paused", "server_restart", "test_replaced"]);
+  "agent_team_deadline", "agent_team_call_limit", "agent_team_storage_full", "agent_team_native_hold_capacity", "user_paused", "server_restart", "test_replaced"]);
 const PUBLIC_CODES = new Set([...NATIVE_FAILURES, ...SHARED_FAILURES, ...CLOUD_FAILURES, ...TEAM_GLOBAL_ISSUES,
   "agent_team_agent_failed", "agent_team_execution_failed", "agent_team_target_unavailable", "agent_team_model_unavailable",
-  "agent_team_runtime_offline", "agent_team_runtime_revoked", "agent_team_waiting_executor", "agent_team_claim_expired",
+  "agent_team_runtime_offline", "agent_team_runtime_revoked", "agent_team_waiting_executor", "agent_team_claim_expired", "agent_team_native_exit_pending",
   "agent_team_probe_failed", "agent_team_prompt_too_large", "agent_team_sensitive_input", "agent_team_instruction_conflict",
   "agent_team_plan_too_large", "agent_team_busy", "agent_team_incomplete", "agent_team_disconnected", "agent_team_stopped",
   "agent_team_limit", "agent_team_favorite_limit", "agent_team_clarification_required", "shared_agent_solo_disclosure_required",

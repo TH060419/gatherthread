@@ -443,14 +443,25 @@ export class CollaborationService {
     return this.database.heartbeatRuntime(actor, runtimeId);
   }
 
-  claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string) {
+  claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string, executionControlVersion = 1) {
     this.requireWrite(actor, sessionId);
-    const outcome = this.database.claimAgentRequest(actor, sessionId, requestEventId, runtimeId);
+    const outcome = this.database.claimAgentRequest(actor, sessionId, requestEventId, runtimeId, executionControlVersion);
     if ("failed" in outcome) {
       if (outcome.event !== undefined) this.publish(outcome.event);
       throw agentRequestFailed();
     }
     return outcome.claim;
+  }
+
+  readAgentExecution(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string, claimAttempt: number) {
+    this.requireWrite(actor, sessionId);
+    return this.database.readAgentExecution(actor, sessionId, requestEventId, runtimeId, claimAttempt);
+  }
+
+  acknowledgeAgentExecutionStopped(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string, claimAttempt: number) {
+    // Exact-device metadata cleanup remains possible after membership/runtime
+    // revocation. It exposes no content and grants no read/write/execution rights.
+    return this.database.acknowledgeAgentExecutionStopped(actor, sessionId, requestEventId, runtimeId, claimAttempt);
   }
 
   pauseAgentRequest(actor: Actor, sessionId: string, requestEventId: string) {

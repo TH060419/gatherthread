@@ -21,3 +21,12 @@ test("file cursor store persists atomically in a private file", async () => {
     assert.equal((await stat(cursorPath)).mode & 0o777, 0o600);
   }
 });
+
+test("native stop receipts persist only exact metadata and reject malformed attempts", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "gt-stop-receipt-"));
+  const store = new FileCursorStore(path.join(root, "cursor.json"));
+  const state = { server: {}, local: {}, stoppedExecutions: [{ sessionId: "session-1", requestId: "request-1", runtimeId: "runtime-1", claimAttempt: 3 }] };
+  await store.save(state); assert.deepEqual(await store.load(), state);
+  await store.save({ ...state, stoppedExecutions: [{ ...state.stoppedExecutions[0]!, claimAttempt: 0 }] });
+  await assert.rejects(store.load(), /stop receipts/);
+});

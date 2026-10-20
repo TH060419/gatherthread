@@ -169,7 +169,8 @@ test("pointer users can click an output then an input, and cancel a pending conn
   f.document.pointElement = f.port("a", "in");
   f.port("a", "in").dispatch("pointerdown", { clientX: 40, clientY: 120 });
   f.port("a", "in").dispatch("pointerup", { clientX: 40, clientY: 120 });
-  f.viewport.dispatch("click", { clientX: 40, clientY: 120 });
+  // The second tap has no capture: its click targets the input port normally.
+  f.port("a", "in").dispatch("click", { clientX: 40, clientY: 120 });
   assert.equal(f.draft.edges.length, 2);
   assert.deepEqual(f.canvas.pinned(), { kind: "edge", id: "edge-1" });
   f.port("a", "out").dispatch("click");
@@ -262,4 +263,129 @@ test("changing language refreshes persistent canvas and zoom accessible names", 
   chinese = true; f.canvas.render();
   assert.equal(f.viewport.attributes["aria-label"], "团队流程画布");
   assert.deepEqual(f.hud.children.map(node => node.attributes["aria-label"]), ["缩小", "重置缩放", "放大"]);
+});
+
+test("a touch drag without a compatibility click cannot swallow the next independent blank tap", () => {
+  const f = fixture();
+  f.title("a").dispatch("pointerdown", { pointerType: "touch", clientX: 70, clientY: 80 });
+  f.viewport.dispatch("pointermove", { pointerType: "touch", clientX: 120, clientY: 80 });
+  f.viewport.dispatch("pointerup", { pointerType: "touch", clientX: 120, clientY: 80 });
+  assert.equal(f.draft.nodes[0].x, 90);
+  assert.deepEqual(f.canvas.pinned(), { kind: "node", id: "a" });
+  f.viewport.dispatch("pointerdown", { pointerType: "touch", clientX: 300, clientY: 400 });
+  f.viewport.dispatch("pointerup", { pointerType: "touch", clientX: 300, clientY: 400 });
+  const tap = f.viewport.dispatch("click", { pointerType: "touch", clientX: 300, clientY: 400 });
+  assert.equal(tap.prevented, false); assert.equal(f.canvas.pinned(), null);
+});
+
+test("a cancelled wire gesture leaves the next blank tap and keyboard click available", () => {
+  const f = fixture(); f.canvas.select({ kind: "node", id: "a" });
+  f.port("a", "out").dispatch("pointerdown");
+  f.viewport.dispatch("pointercancel");
+  assert.equal(f.viewport.dataset.linking, "false");
+  f.viewport.dispatch("pointerdown"); f.viewport.dispatch("pointerup"); f.viewport.dispatch("click");
+  assert.equal(f.canvas.pinned(), null);
+  f.title("a").dispatch("pointerdown"); f.viewport.dispatch("pointerup");
+  f.port("b", "out").dispatch("click", { detail: 0, pointerId: -1 });
+  assert.equal(f.viewport.dataset.linking, "true");
+});
+
+test("remote canvas redraw preserves module keyboard focus and subsequent arrow editing", () => {
+  const f = fixture(); f.title("a").focus();
+  f.draft.nodes[0] = { ...f.draft.nodes[0], label: "Updated remotely", x: 100 };
+  f.canvas.render();
+  assert.equal(f.document.activeElement, f.title("a"));
+  assert.equal(f.document.activeElement.textContent, "Updated remotely");
+  f.document.activeElement.dispatch("keydown", { key: "ArrowRight" });
+  assert.equal(f.draft.nodes[0].x, 110); assert.equal(f.changes(), 1);
+});
+
+test("remote redraw preserves exact port and edge focus without stealing inspector focus", () => {
+  const f = fixture(); f.port("a", "out").focus(); f.canvas.render();
+  assert.equal(f.document.activeElement, f.port("a", "out"));
+  f.host.querySelector("[data-edge-id='existing']").focus();
+  f.draft.edges[0].direction = "bidirectional"; f.canvas.render();
+  assert.equal(f.document.activeElement, f.host.querySelector("[data-edge-id='existing']"));
+  const input = f.document.createElement("input"); input.focus(); f.canvas.render();
+  assert.equal(f.document.activeElement, input);
+});
+
+test("removing a focused remote module or flow falls back to the visible canvas", () => {
+  const f = fixture(); f.canvas.select({ kind: "node", id: "b" }); f.title("b").focus();
+  f.draft.nodes = f.draft.nodes.filter(node => node.id !== "b"); f.draft.edges = []; f.canvas.render();
+  assert.equal(f.document.activeElement, f.viewport);
+  assert.equal(f.canvas.pinned(), null);
+  f.card("a").dispatch("pointerenter");
+  assert.deepEqual(f.canvas.selection(), { kind: "node", id: "a" });
+  f.draft.nodes.push({ id: "b", label: "Worker", role: "Execute", target: null, x: 500, y: 80 });
+  f.draft.edges.push({ id: "replacement", source: "a", target: "b", direction: "one_way" }); f.canvas.render();
+  f.host.querySelector("[data-edge-id='replacement']").focus(); f.draft.edges = []; f.canvas.render();
+  assert.equal(f.document.activeElement, f.viewport);
+});
+
+test("losing pointer capture settles the partial drag once and fences later movement", () => {
+  const f = fixture(); f.title("a").dispatch("pointerdown", { clientX: 70, clientY: 80 });
+  f.viewport.dispatch("pointermove", { clientX: 100, clientY: 90 });
+  const position = { x: f.draft.nodes[0].x, y: f.draft.nodes[0].y };
+  f.viewport.releasePointerCapture(1); f.viewport.dispatch("lostpointercapture");
+  f.viewport.dispatch("pointermove", { clientX: 200, clientY: 190 }); f.viewport.dispatch("pointerup", { clientX: 200, clientY: 190 });
+  assert.deepEqual({ x: f.draft.nodes[0].x, y: f.draft.nodes[0].y }, position);
+  assert.equal(f.changes(), 1); assert.equal(f.viewport.dataset.linking, "false");
+});
+
+test("an unrelated touch cancellation cannot cancel the pointer that owns the drag", () => {
+  const f = fixture(); f.title("a").dispatch("pointerdown", { clientX: 70, clientY: 80 });
+  f.viewport.dispatch("pointermove", { clientX: 100, clientY: 80 }); f.viewport.dispatch("pointercancel", { pointerId: 2 });
+  f.viewport.dispatch("pointermove", { clientX: 120, clientY: 80 }); f.viewport.dispatch("pointerup", { clientX: 120, clientY: 80 });
+  assert.equal(f.draft.nodes[0].x, 90); assert.equal(f.changes(), 1); assert.equal(f.viewport.hasPointerCapture(1), false);
+});
+
+test("a remote replacement of the dragged node cannot be overwritten by the old gesture", () => {
+  const f = fixture(); f.title("a").dispatch("pointerdown", { clientX: 70, clientY: 80 });
+  f.viewport.dispatch("pointermove", { clientX: 100, clientY: 80 });
+  f.draft.nodes[0] = { ...f.draft.nodes[0], x: 800, y: 300, label: "Updated remotely" }; f.canvas.render();
+  f.viewport.dispatch("pointermove", { clientX: 170, clientY: 180 }); f.viewport.dispatch("pointerup", { clientX: 170, clientY: 180 });
+  assert.equal(f.draft.nodes[0].x, 800); assert.equal(f.draft.nodes[0].y, 300);
+  assert.equal(f.viewport.hasPointerCapture(1), false); assert.equal(f.changes(), 0);
+});
+
+test("zooming during a drag settles its current position instead of applying an old anchor at a new scale", () => {
+  const f = fixture(); f.title("a").dispatch("pointerdown", { clientX: 70, clientY: 80 });
+  f.viewport.dispatch("pointermove", { clientX: 100, clientY: 80 }); const position = f.draft.nodes[0].x;
+  f.viewport.dispatch("wheel", { ctrlKey: true, deltaY: -10 });
+  f.viewport.dispatch("pointermove", { clientX: 170, clientY: 80 }); f.viewport.dispatch("pointerup", { clientX: 170, clientY: 80 });
+  assert.equal(f.draft.nodes[0].x, position); assert.equal(f.changes(), 1); assert.equal(f.viewport.hasPointerCapture(1), false);
+});
+
+test("intentional capture release keeps click-to-connect available across zoom", () => {
+  const f = fixture(); f.document.pointElement = f.port("b", "out");
+  f.port("b", "out").dispatch("pointerdown", { clientX: 700, clientY: 100 });
+  f.viewport.dispatch("pointerup", { clientX: 700, clientY: 100 }); f.viewport.dispatch("lostpointercapture");
+  f.viewport.dispatch("click", { detail: 1 });
+  assert.equal(f.viewport.dataset.linking, "true"); f.hud.children[2].dispatch("click");
+  assert.equal(f.viewport.dataset.linking, "true"); f.port("a", "in").dispatch("click", { detail: 0 });
+  assert.equal(f.draft.edges.length, 2); assert.equal(f.changes(), 1);
+});
+
+test("a second touch cannot replace the owner of an active drag or retain an orphan capture", () => {
+  const f = fixture(); f.title("a").dispatch("pointerdown", { clientX: 70, clientY: 80 });
+  f.viewport.dispatch("pointermove", { clientX: 100, clientY: 80 });
+  f.title("b").dispatch("pointerdown", { pointerId: 2, clientX: 500, clientY: 80 });
+  assert.equal(f.viewport.hasPointerCapture(2), false);
+  f.viewport.dispatch("pointermove", { clientX: 120, clientY: 80 }); f.viewport.dispatch("pointerup", { clientX: 120, clientY: 80 });
+  assert.equal(f.draft.nodes[0].x, 90); assert.equal(f.draft.nodes[1].x, 500);
+  assert.equal(f.changes(), 1); assert.equal(f.viewport.hasPointerCapture(1), false);
+});
+
+test("a programmatic port click cannot consume the pending compatibility click of the completed gesture", () => {
+  const f = fixture(); f.document.pointElement = f.port("a", "in");
+  f.port("b", "out").dispatch("pointerdown", { clientX: 700, clientY: 100 });
+  f.viewport.dispatch("pointerup", { clientX: 40, clientY: 100 });
+  f.port("a", "out").dispatch("click", { detail: 0, pointerId: -1 });
+  assert.equal(f.viewport.dataset.linking, "true");
+  const compatibility = f.viewport.dispatch("click", { detail: 1, pointerId: 1 });
+  assert.equal(compatibility.prevented, true); assert.equal(f.viewport.dataset.linking, "true");
+  f.viewport.dispatch("pointerdown", { pointerId: 1 }); f.viewport.dispatch("pointerup", { pointerId: 1 });
+  const independent = f.viewport.dispatch("click", { detail: 1, pointerId: 1 });
+  assert.equal(independent.prevented, false); assert.equal(f.viewport.dataset.linking, "false");
 });

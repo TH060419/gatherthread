@@ -27,19 +27,25 @@ import type {
   RuntimeRegistration,
 } from "./types.js";
 import { CollaborationHttpError } from "./http-client.js";
+import { createAgentExecutionWatch, isDefinitiveAgentExecutionRejection } from "./agent-execution-control.js";
 
 export class HarnessExecutionTerminatedError extends Error {
   readonly failureCode: string;
   readonly publicMessage: string;
 
-  constructor(failureCode: string, message: string) {
+  constructor(failureCode: string, message: string, options?: ErrorOptions) {
     const safeCode = /^[a-z0-9_]{1,64}$/.test(failureCode) ? failureCode : "harness_execution_failed";
     const safeMessage = redactText(message).replace(/[\r\n]+/g, " ").slice(0, 400) || "The local harness ended without a response";
-    super(safeMessage);
+    super(safeMessage, options);
     this.name = "HarnessExecutionTerminatedError";
     this.failureCode = safeCode;
     this.publicMessage = safeMessage;
   }
+}
+
+/** Refusing a competing or indeterminate native writer is not an exit receipt. */
+export class HarnessExecutionUnconfirmedError extends Error {
+  constructor(message: string) { super(message); this.name = "HarnessExecutionUnconfirmedError"; }
 }
 
 export interface LocalBridgeOptions {
@@ -85,6 +91,7 @@ export class LocalBridge {
 
   async connect(): Promise<RegisteredRuntime> {
     this.#runtime = await this.#api.registerRuntime(this.#runtimeConfig);
+    await this.#flushStoppedExecutions();
     return this.#runtime;
   }
 
@@ -109,10 +116,7 @@ export class LocalBridge {
     const afterSequence = state.server[sessionId] ?? 0;
     const page = await this.#api.readEvents(sessionId, afterSequence, limit);
     const nextSequence = Math.max(afterSequence, page.nextSequence);
-    await this.#cursorStore.save({
-      ...state,
-      server: { ...state.server, [sessionId]: nextSequence },
-    });
+    await this.#saveServerCursor(sessionId, nextSequence);
     return page.events;
   }
 
@@ -157,17 +161,11 @@ export class LocalBridge {
         await executor.projectCanonicalEvents([event], runtime);
       }
       cursor = event.sequence;
-      await this.#cursorStore.save({
-        ...state,
-        server: { ...state.server, [runtime.sessionId]: cursor },
-      });
+      await this.#saveServerCursor(runtime.sessionId, cursor);
     }
     const nextCursor = Math.max(cursor, page.nextSequence);
     if (nextCursor !== cursor) {
-      await this.#cursorStore.save({
-        ...state,
-        server: { ...state.server, [runtime.sessionId]: nextCursor },
-      });
+      await this.#saveServerCursor(runtime.sessionId, nextCursor);
     }
     return { examined: page.events.length, claimed, completed };
   }
@@ -182,7 +180,7 @@ export class LocalBridge {
     if (!Number.isSafeInteger(throughSequence) || throughSequence < 0) {
       throw new Error("Authoritative materialization cursor must be a non-negative safe integer");
     }
-    let state = await this.#cursorStore.load();
+    const state = await this.#cursorStore.load();
     let cursor = state.server[runtime.sessionId] ?? 0;
     if (executor.prepareCanonicalProjection) {
       const nativeCursor = await executor.prepareCanonicalProjection(runtime);
@@ -191,11 +189,7 @@ export class LocalBridge {
       }
       if (nativeCursor < cursor) {
         cursor = nativeCursor;
-        state = {
-          ...state,
-          server: { ...state.server, [runtime.sessionId]: cursor },
-        };
-        await this.#cursorStore.save(state);
+        await this.#saveServerCursor(runtime.sessionId, cursor, false);
       }
     }
     while (cursor < throughSequence) {
@@ -207,20 +201,12 @@ export class LocalBridge {
         }
         await executor.projectCanonicalEvents([event], runtime);
         cursor = event.sequence;
-        state = {
-          ...state,
-          server: { ...state.server, [runtime.sessionId]: cursor },
-        };
-        await this.#cursorStore.save(state);
+        await this.#saveServerCursor(runtime.sessionId, cursor);
       }
       const coveredThrough = Math.min(throughSequence, page.nextSequence);
       if (coveredThrough > cursor && (!page.hasMore || events.length === 0)) {
         cursor = coveredThrough;
-        state = {
-          ...state,
-          server: { ...state.server, [runtime.sessionId]: cursor },
-        };
-        await this.#cursorStore.save(state);
+        await this.#saveServerCursor(runtime.sessionId, cursor);
       }
       if (events.length === 0 && coveredThrough <= cursor) {
         throw new Error("Collaboration API did not advance authoritative history materialization");
@@ -257,10 +243,8 @@ export class LocalBridge {
       ));
     }
 
-    await this.#cursorStore.save({
-      ...state,
-      local: { ...state.local, [cursorKey]: tail.cursor },
-    });
+    const latest = await this.#cursorStore.load();
+    await this.#cursorStore.save({ ...latest, local: { ...latest.local, [cursorKey]: tail.cursor } });
     return { appended, malformedLines: tail.malformedLines };
   }
 
@@ -315,10 +299,17 @@ export class LocalBridge {
     const runtime = this.#requireRuntime();
     this.#assertRuntimeSession(request.sessionId);
     this.#assertRuntimeFidelity("harness_transcript");
-    const claim = await this.#api.claimAgentRequest(request.sessionId, request.id, runtime.id);
+    await this.#flushStoppedExecutions();
+    const claim = await this.#api.claimAgentRequest(request.sessionId, request.id, runtime.id, 1);
     if (!claim.claimed) return { claimed: false, completed: [] };
     const claimAttempt = claim.attemptCount ?? 1;
-
+    let watch: ReturnType<typeof setInterval> | undefined;
+    let executionWatch: ReturnType<typeof createAgentExecutionWatch> | undefined;
+    const controller = new AbortController();
+    let executionStopped = false;
+    // Only Team claims reserve the separate native-execution capacity hold.
+    const team = request.payload !== null && typeof request.payload === "object" && "agent_team" in request.payload;
+    try {
     const canonicalHistory = await this.#readCanonicalHistory(request.sessionId, request.sequence);
     const authoritativeRequest = canonicalHistory.find((event) => event.id === request.id);
     if (request.deleted || authoritativeRequest?.deleted) throw new CollaborationHttpError(409, "Shared history changed; the request was deleted", "context_changed");
@@ -345,7 +336,6 @@ export class LocalBridge {
     const historyContext = summaryGeneration
       ? { view: "summary" as const, through_sequence: request.sequence - 1, items: [], content_revision: readContext?.content_revision ?? revision }
       : readContext;
-    const controller = new AbortController();
     const contextChanged = () => new CollaborationHttpError(409, "Shared history changed; start a new request with current history", "context_changed");
     let checking = false;
     const checkRevision = async () => {
@@ -359,9 +349,16 @@ export class LocalBridge {
         if (error instanceof CollaborationHttpError && [401, 403, 404].includes(error.status)) controller.abort(contextChanged());
       } finally { checking = false; }
     };
-    const watch = this.#api.readContext ? setInterval(() => { void checkRevision(); }, 1000) : undefined;
+    watch = this.#api.readContext ? setInterval(() => { void checkRevision(); }, 1000) : undefined;
     watch?.unref();
-    try {
+    if (team && !this.#api.acknowledgeAgentExecutionStopped) throw new CollaborationHttpError(409,
+      "Update the connector to support native Team cancellation", "connector_update_required");
+    executionWatch = createAgentExecutionWatch({ controller, required: team,
+      ...(this.#api.readAgentExecution === undefined ? {} : {
+        read: () => this.#api.readAgentExecution!(request.sessionId, request.id, runtime.id, claimAttempt),
+      }),
+    });
+    await executionWatch.check(); executionWatch.assertReady();
     await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
       idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:${claimAttempt}:progress:start`,
       payload: {
@@ -382,13 +379,14 @@ export class LocalBridge {
         signal: controller.signal,
         ...(this.#api.appendAgentProgress === undefined ? {} : {
           publishProgress: async (update) => {
+            controller.signal.throwIfAborted();
             const redacted = redactText(update.content);
             if (!redacted.trim() && update.plan === undefined) return false;
             // A streamed fragment is one slice of a longer message. Trimming it
             // would delete the whitespace that joins it to its neighbours and
             // silently corrupt the reader's merged view, so it travels verbatim.
             const content = update.phase === "stream" ? redacted : redacted.trim();
-            return this.#appendProgressFailSoft(request, runtime, claimAttempt, {
+            try { return await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
               idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:${claimAttempt}:progress:${hash(update.id)}`,
               payload: redactValue({
                 content,
@@ -405,12 +403,19 @@ export class LocalBridge {
                 capture_fidelity: "harness_transcript",
                 source_harness: runtime.harness,
               }, this.#redaction),
-            });
+            }); } catch (error) {
+              if (isDefinitiveAgentExecutionRejection(error)) controller.abort(error);
+              throw error;
+            }
           },
         }),
       });
+      executionStopped = true;
     } catch (error) {
-      if (controller.signal.aborted) throw contextChanged();
+      // Preparation/transport refusal alone cannot prove that an earlier
+      // owner of this idempotent claim has stopped its native turn.
+      executionStopped = error instanceof HarnessExecutionTerminatedError;
+      controller.signal.throwIfAborted();
       if (!(error instanceof HarnessExecutionTerminatedError)) throw error;
       const failure = await this.#api.completeAgentRequest(request.sessionId, request.id, {
         runtimeId: runtime.id,
@@ -431,7 +436,7 @@ export class LocalBridge {
       const finalContext = await this.#api.readContext(request.sessionId, undefined, request.sequence - 1);
       if ((finalContext.content_revision ?? 0) !== revision) controller.abort(contextChanged());
     }
-    if (controller.signal.aborted) throw contextChanged();
+    await executionWatch.check(); controller.signal.throwIfAborted();
     const events = execution.events.map((event) => {
       if (event.captureFidelity !== "harness_transcript") {
         throw new Error("Harness execution output must be labelled harness_transcript");
@@ -463,7 +468,43 @@ export class LocalBridge {
       ...(execution.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: execution.observedReasoningEffort }),
     }));
     return { claimed: true, completed };
-    } finally { if (watch) clearInterval(watch); }
+    } finally {
+      if (watch) clearInterval(watch);
+      await executionWatch?.close();
+      // execute() is required to settle only after its owned native execution
+      // has exited. Publication rejection alone must never free native capacity.
+      if (executionStopped && team && this.#api.acknowledgeAgentExecutionStopped && (!executionWatch || executionWatch.supported())) {
+        const state = await this.#cursorStore.load();
+        const receipt = { sessionId: request.sessionId, requestId: request.id, runtimeId: runtime.id, claimAttempt };
+        const receipts = state.stoppedExecutions ?? [];
+        if (!receipts.some((item) => JSON.stringify(item) === JSON.stringify(receipt))) receipts.push(receipt);
+        if (receipts.length > 1000) throw new Error("Native execution stop receipt capacity exhausted");
+        await this.#cursorStore.save({ ...state, stoppedExecutions: receipts });
+        await this.#flushStoppedExecutions();
+      }
+    }
+  }
+
+  async #flushStoppedExecutions(): Promise<void> {
+    if (!this.#api.acknowledgeAgentExecutionStopped) return;
+    while (true) {
+      const state = await this.#cursorStore.load();
+      if (!state.stoppedExecutions?.length) return;
+      const receipt = state.stoppedExecutions[0]!;
+      await this.#api.acknowledgeAgentExecutionStopped(receipt.sessionId, receipt.requestId, receipt.runtimeId, receipt.claimAttempt);
+      const latest = await this.#cursorStore.load();
+      await this.#cursorStore.save({ ...latest, stoppedExecutions: latest.stoppedExecutions?.filter((item) =>
+        item.sessionId !== receipt.sessionId || item.requestId !== receipt.requestId
+        || item.runtimeId !== receipt.runtimeId || item.claimAttempt !== receipt.claimAttempt) ?? [] });
+    }
+  }
+
+  async #saveServerCursor(sessionId: string, sequence: number, monotonic = true): Promise<void> {
+    // Native exit receipts can change while canonical transport/projection is
+    // awaiting I/O. Persist only this cursor over the latest private state.
+    const latest = await this.#cursorStore.load();
+    await this.#cursorStore.save({ ...latest, server: { ...latest.server,
+      [sessionId]: monotonic ? Math.max(latest.server[sessionId] ?? 0, sequence) : sequence } });
   }
 
   async #appendProgressFailSoft(
@@ -483,7 +524,7 @@ export class LocalBridge {
       });
       return true;
     } catch (error) {
-      if (error instanceof CollaborationHttpError && (error.code === "context_changed" || error.code === "connector_update_required")) throw error;
+      if (isDefinitiveAgentExecutionRejection(error)) throw error;
       // Progress is supplementary. A transient progress upload failure must not
       // strand an already-claimed request before its canonical final response.
       return false;

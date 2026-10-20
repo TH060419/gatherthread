@@ -69,7 +69,16 @@ export function adaptCollaborationApi(client: CollaborationApi): DshCollaboratio
       sessionId,
       requestId,
       runtimeId,
+      1,
     ),
+    ...(client.readAgentExecution === undefined ? {} : {
+      readAgentExecution: (sessionId: string, requestId: string, runtimeId: string, attempt: number) =>
+        client.readAgentExecution!(sessionId, requestId, runtimeId, attempt),
+    }),
+    ...(client.acknowledgeAgentExecutionStopped === undefined ? {} : {
+      acknowledgeAgentExecutionStopped: (sessionId: string, requestId: string, runtimeId: string, attempt: number) =>
+        client.acknowledgeAgentExecutionStopped!(sessionId, requestId, runtimeId, attempt),
+    }),
     appendAgentProgress: (sessionId, requestId, input) => appendAgentProgress.call(
       client,
       sessionId,

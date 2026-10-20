@@ -50,6 +50,52 @@ test("HTTP native boundary preserves authoritative deletion revisions and reject
   assert.equal((sent.at(-1) as any).context_deletion_version, 1);
 });
 
+test("native execution control is metadata-only, exact-attempt and strict on malformed authority", async () => {
+  const sent: { url: string; init: RequestInit }[] = [];
+  let response: unknown = { data: { active: true } };
+  const client = new HttpCollaborationClient({ baseUrl: "https://collab.example/v1", bearerToken: "fixture", fetch: async (url, init = {}) => {
+    sent.push({ url: String(url), init }); return Response.json(response);
+  } });
+  assert.deepEqual(await client.readAgentExecution("session-1", "request-1", "runtime-1", 3), { active: true });
+  assert.match(sent[0]!.url, /execution\?runtime_id=runtime-1&claim_attempt=3$/);
+  assert.equal(sent[0]!.init.body, undefined);
+  response = { data: { active: false } };
+  await client.acknowledgeAgentExecutionStopped("session-1", "request-1", "runtime-1", 3);
+  assert.deepEqual(JSON.parse(String(sent[1]!.init.body)), { runtime_id: "runtime-1", claim_attempt: 3 });
+  for (const malformed of [{}, { active: "true" }, { active: true, secret: "excluded" }]) {
+    response = { data: malformed };
+    await assert.rejects(client.readAgentExecution("session-1", "request-1", "runtime-1", 3),
+      (error: unknown) => error instanceof CollaborationHttpError && error.code === "agent_execution_state_invalid");
+  }
+  response = { data: { active: true } };
+  await assert.rejects(client.acknowledgeAgentExecutionStopped("session-1", "request-1", "runtime-1", 3), /stop acknowledgment/);
+  const requests = sent.length;
+  await assert.rejects(client.readAgentExecution("session-1", "request-1", "runtime-1", 0));
+  assert.equal(sent.length, requests, "invalid attempts fail before transport");
+});
+
+test("native execution control capability is opt-in per claim, never inherited by a plain client or MCP claim", async () => {
+  const requests: unknown[] = [];
+  const client = new HttpCollaborationClient({ baseUrl: "https://collab.example/v1", bearerToken: "fixture", fetch: async (_url, init = {}) => {
+    requests.push(JSON.parse(String(init.body)));
+    return Response.json({ data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed", attempt_count: 1 } });
+  } });
+  await client.claimAgentRequest("session-1", "request-1", "runtime-1");
+  await client.claimAgentRequest("session-1", "request-1", "runtime-1", 1);
+  assert.deepEqual(requests, [ { runtime_id: "runtime-1" }, { runtime_id: "runtime-1", execution_control_version: 1 } ]);
+});
+
+test("a native claim response must bind the exact requested request and runtime", async () => {
+  let response: Record<string, unknown> = { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed", attempt_count: 2 };
+  const client = new HttpCollaborationClient({ baseUrl: "https://collab.example/v1", bearerToken: "fixture",
+    fetch: async () => Response.json({ data: response }) });
+  for (const mismatch of [{ request_event_id: "different-request" }, { runtime_id: "different-runtime" }, { request_event_id: "" }]) {
+    response = { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed", attempt_count: 2, ...mismatch };
+    await assert.rejects(client.claimAgentRequest("session-1", "request-1", "runtime-1", 1), /claim.*scope|claim.*match/i,
+      "misbound native acceptance must not become execution authority");
+  }
+});
+
 test("HTTP client matches the collaboration server v1 wire contract", async () => {
   const requests: Array<{ url: string; init: RequestInit }> = [];
   const responses: unknown[] = [

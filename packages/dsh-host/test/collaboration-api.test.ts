@@ -96,3 +96,20 @@ test("HTTP compatibility preserves the user's context policy and exact pre-reque
   assert.deepEqual(result.items[0].source_event_ids, ["event-1", "event-2"]);
   assert.deepEqual(urls, ["https://gatherthread.example/v1/sessions/session-1/context?through_sequence=8"]);
 });
+
+test("the DSH execution adapter explicitly opts into exact native cancellation control", async () => {
+  const requests: { url: string; body: unknown }[] = [];
+  const api = createHttpDshCollaborationApi({ baseUrl: "https://gatherthread.example/v1", credential: "fixture-credential",
+    fetch: async (input, init) => {
+      const url = String(input); requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return Response.json({ data: url.endsWith("/claim")
+        ? { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed", attempt_count: 2 }
+        : { active: false } });
+    },
+  });
+  await api.claimAgentRequest("session-1", "request-1", "runtime-1");
+  assert.deepEqual(requests[0]!.body, { runtime_id: "runtime-1", execution_control_version: 1 });
+  assert.deepEqual(await api.readAgentExecution!("session-1", "request-1", "runtime-1", 2), { active: false });
+  await api.acknowledgeAgentExecutionStopped!("session-1", "request-1", "runtime-1", 2);
+  assert.deepEqual(requests[2]!.body, { runtime_id: "runtime-1", claim_attempt: 2 });
+});

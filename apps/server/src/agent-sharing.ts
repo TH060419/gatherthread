@@ -210,10 +210,13 @@ export class AgentSharing {
         AND json_extract(j.profile_json,'$.harness')=? AND (j.status='running' OR j.cleanup_pending=1) LIMIT 1`)
         .get(job.project_id, job.owner_device_id, this.store.profile(job).harness);
       const ordinaryBusy = this.store.sql.prepare(`SELECT 1 FROM agent_request_claims c JOIN runtimes r ON r.id=c.runtime_id
-        JOIN sessions s ON s.id=r.session_id WHERE r.device_id=? AND r.harness=? AND s.project_id=? AND c.status='claimed'
-        AND (c.lease_expires_at IS NULL OR c.lease_expires_at>?) LIMIT 1`)
+        JOIN sessions s ON s.id=r.session_id WHERE r.device_id=? AND r.harness=? AND s.project_id=?
+        AND (c.execution_pending=1 OR (c.status='claimed' AND (c.lease_expires_at IS NULL OR c.lease_expires_at>?))) LIMIT 1`)
         .get(job.owner_device_id, this.store.profile(job).harness, job.project_id, this.store.now());
-      if (running >= limits.max_concurrent || poolBusy || ordinaryBusy) throw new ApiError(409, "agent_share_busy", "The native Agent is already executing work");
+      const detachedBusy = this.store.sql.prepare(`SELECT 1 FROM agent_native_exit_holds
+        WHERE owner_device_id=? AND project_id=? AND harness=? LIMIT 1`)
+        .get(job.owner_device_id, job.project_id, this.store.profile(job).harness);
+      if (running >= limits.max_concurrent || poolBusy || ordinaryBusy || detachedBusy) throw new ApiError(409, "agent_share_busy", "The native Agent is already executing work");
       const start = this.store.now(), ownDeadline = new Date(this.store.clock().getTime() + job.max_request_seconds * 1000).toISOString();
       const deadline = job.deadline_at && job.deadline_at < ownDeadline ? job.deadline_at : ownDeadline;
       const lease = new Date(Math.min(Date.parse(deadline), this.store.clock().getTime() + AGENT_SHARE_LEASE_MS)).toISOString();

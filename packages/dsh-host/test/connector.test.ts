@@ -10,6 +10,7 @@ import type {
   SessionSummary,
   HistoryContext,
 } from "@gatherthread/bridge";
+import { CollaborationHttpError, HarnessExecutionUnconfirmedError, HarnessExecutionTerminatedError } from "@gatherthread/bridge";
 import { buildDshCanonicalPrompt } from "../src/canonical-prompt.js";
 import { parseDshHostConfig, type EnabledDshHostConfig } from "../src/config.js";
 import { DshHostConnector } from "../src/connector.js";
@@ -609,7 +610,8 @@ test("DSH author deletion interrupt retains the execution permit until the nativ
   host.prompt = async (_text, _profile, _id, signal?: AbortSignal) => {
     signal?.addEventListener("abort", () => { interrupted = true; }, { once: true });
     started(); await stoppedPromise;
-    released = true; signal?.throwIfAborted();
+    released = true;
+    if (signal?.aborted) throw new HarnessExecutionTerminatedError("dsh_native_execution_cancelled", "Native fixture is idle after cancellation");
     throw new Error("fixture should only terminate from context deletion");
   };
   const store = new MemoryConnectorStateStore();
@@ -629,6 +631,176 @@ test("DSH author deletion interrupt retains the execution permit until the nativ
   assert.equal((await store.load())!.activeRequest, undefined);
   assert.equal(api.completions.length, 0); assert.equal(api.appended.length, 0);
   await connector.stop();
+});
+
+for (const action of ["stop", "pause", "deadline", "deleted-session"] as const) {
+  test(`DSH Team ${action} observes claim authority without progress and waits for native termination`, async () => {
+    const cfg = config(), api = new FakeApi(), persistence = freshPersistence();
+    const event = request(1); event.payload = { ...(event.payload as object), agent_team: { run_id: "run-1" } };
+    api.events.push(event);
+    const host = new FakeHost(cfg.dshSessionId, persistence);
+    let active = true, interrupted = false, nativeExited = false, acknowledgments = 0, effects = 0;
+    let started!: () => void, release!: () => void;
+    const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+    const releasePromise = new Promise<void>((resolve) => { release = resolve; });
+    const control: DshCollaborationApi = Object.assign(api, {
+      async readAgentExecution() {
+        if (!active && action === "deleted-session") throw new CollaborationHttpError(404, "session removed");
+        return { active };
+      },
+      async acknowledgeAgentExecutionStopped() {
+        assert.equal(nativeExited, true, "never ACK a mere cancellation request"); acknowledgments += 1;
+      },
+    });
+    host.prompt = async (text: string, _selection?: unknown, _execution?: string, signal?: AbortSignal) => {
+      persistence.events.push({ type: "user/message", seq: 0, time: eventTime,
+        data: { role: "user", source: { kind: "user" }, content: [{ type: "text", text }] } });
+      const timer = setInterval(() => { effects += 1; }, 10);
+      signal!.addEventListener("abort", () => { interrupted = true; clearInterval(timer); }, { once: true });
+      started(); await releasePromise; clearInterval(timer);
+      persistence.events.push({ type: "turn/end", seq: 1, time: eventTime, data: { turn: 1, status: "interrupted" } });
+      nativeExited = true;
+      if (signal!.aborted) throw new HarnessExecutionTerminatedError("dsh_native_execution_cancelled", "Native fixture is idle after cancellation");
+      throw new Error("Fixture must be canceled");
+    };
+    const store = new MemoryConnectorStateStore();
+    const connector = new DshHostConnector({ config: cfg, api: control, host, stateStore: store });
+    await connector.start({ schedule: false, runImmediately: false });
+    const turn = connector.pollOnce();
+    const rejected = assert.rejects(turn, /execution was stopped/);
+    await startedPromise; active = false;
+    const until = Date.now() + 3000;
+    while (!interrupted && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(interrupted, true); assert.equal(nativeExited, false); assert.equal(acknowledgments, 0);
+    const writes = effects;
+    await new Promise((resolve) => setTimeout(resolve, 50)); assert.equal(effects, writes);
+    release(); await rejected;
+    assert.equal(acknowledgments, 1); assert.equal(api.completions.length, 0);
+    assert.equal((await store.load())!.activeRequest, undefined);
+    await connector.uploadLocalTurns();
+    assert.equal(api.localTurns.length, 0, "canceled native execution is never recaptured as a local user turn");
+    await connector.stop();
+  });
+}
+
+test("DSH retries a lost native exit ACK after restart without another prompt", async () => {
+  const cfg = config(), api = new FakeApi(), persistence = freshPersistence();
+  const event = request(1); event.payload = { ...(event.payload as object), agent_team: { run_id: "run-1" } };
+  api.events.push(event);
+  let acknowledgments = 0;
+  const control: DshCollaborationApi = Object.assign(api, {
+    async readAgentExecution() { return { active: true }; },
+    async acknowledgeAgentExecutionStopped() { acknowledgments += 1; if (acknowledgments === 1) throw new Error("fixture ACK lost"); },
+  });
+  const store = new MemoryConnectorStateStore();
+  const first = new DshHostConnector({ config: cfg, api: control, host: new FakeHost(cfg.dshSessionId, persistence), stateStore: store });
+  await first.start({ schedule: false, runImmediately: false });
+  await assert.rejects(first.pollOnce(), /ACK lost/);
+  assert.equal((await store.load())!.stoppedExecutions!.length, 1);
+  assert.equal(persistence.prompts.length, 1);
+  await first.stop();
+  const second = new DshHostConnector({ config: cfg, api: control, host: new FakeHost(cfg.dshSessionId, persistence), stateStore: store });
+  await second.start({ schedule: false, runImmediately: false });
+  assert.equal(acknowledgments, 2); assert.equal(persistence.prompts.length, 1);
+  assert.deepEqual((await store.load())!.stoppedExecutions, []);
+  assert.equal(api.completions.length, 1);
+  await second.stop();
+});
+
+test("DSH refuses an indeterminate native writer without acknowledging that writer as stopped", async () => {
+  const cfg = config(), api = new FakeApi(), persistence = freshPersistence(), store = new MemoryConnectorStateStore();
+  const event = request(1); event.payload = { ...(event.payload as object), agent_team: { run_id: "run-1" } };
+  api.events.push(event);
+  let acknowledgments = 0;
+  const control: DshCollaborationApi = Object.assign(api, {
+    async readAgentExecution() { return { active: true }; },
+    async acknowledgeAgentExecutionStopped() { acknowledgments += 1; },
+  });
+  const host = new FakeHost(cfg.dshSessionId, persistence);
+  host.prompt = async () => { throw new HarnessExecutionUnconfirmedError("Native DSH Agent still owns an active prompt"); };
+  const connector = new DshHostConnector({ config: cfg, api: control, host, stateStore: store });
+  await connector.start({ schedule: false, runImmediately: false });
+  await assert.rejects(connector.pollOnce(), HarnessExecutionUnconfirmedError);
+  assert.equal(acknowledgments, 0, "a refused duplicate is not native exit evidence");
+  assert.equal((await store.load())!.stoppedExecutions, undefined);
+  assert.ok((await store.load())!.activeRequest, "retain the exact request's native publication fence");
+  await connector.stop();
+});
+
+test("a DSH abort during Host preparation supplies no physical native-exit acknowledgment", async () => {
+  const cfg = config(), api = new FakeApi(), persistence = freshPersistence(), store = new MemoryConnectorStateStore();
+  const event = request(1); event.payload = { ...(event.payload as object), agent_team: { run_id: "run-1" } };
+  api.events.push(event);
+  let active = true, acknowledgments = 0, prepared!: () => void;
+  const preparing = new Promise<void>((resolve) => { prepared = resolve; });
+  const control: DshCollaborationApi = Object.assign(api, {
+    async readAgentExecution() { return { active }; },
+    async acknowledgeAgentExecutionStopped() { acknowledgments += 1; },
+  });
+  const host = new FakeHost(cfg.dshSessionId, persistence);
+  host.prompt = async (_text: string, _selection?: unknown, _execution?: string, signal?: AbortSignal) => {
+    prepared();
+    await new Promise<void>((_resolve, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));
+    throw new Error("unreachable");
+  };
+  const connector = new DshHostConnector({ config: cfg, api: control, host, stateStore: store });
+  await connector.start({ schedule: false, runImmediately: false });
+  const turn = connector.pollOnce(), rejected = assert.rejects(turn, /execution was stopped/);
+  await preparing; active = false; await rejected;
+  assert.equal(acknowledgments, 0, "an early AbortError cannot certify that an earlier native owner became idle");
+  assert.equal((await store.load())!.stoppedExecutions, undefined);
+  assert.ok((await store.load())!.activeRequest);
+  await connector.stop();
+});
+
+test("DSH Team preparation failure does not acknowledge a possibly older native owner", async () => {
+  const cfg = config(), api = new FakeApi(), persistence = freshPersistence(), store = new MemoryConnectorStateStore();
+  const event = request(1); event.payload = { ...(event.payload as object), agent_team: { run_id: "run-1" } };
+  api.events.push(event);
+  const host = new FakeHost(cfg.dshSessionId, persistence), sequence = host.currentSequence.bind(host), claim = api.claimAgentRequest.bind(api);
+  let failPreparation = false, acknowledgments = 0;
+  api.claimAgentRequest = async (...args) => { const result = await claim(...args); failPreparation = true; return result; };
+  host.currentSequence = () => { if (failPreparation) { failPreparation = false; throw new Error("Team native preparation failed"); } return sequence(); };
+  const control: DshCollaborationApi = Object.assign(api, {
+    async readAgentExecution() { return { active: true }; },
+    async acknowledgeAgentExecutionStopped() { acknowledgments += 1; },
+  });
+  const connector = new DshHostConnector({ config: cfg, api: control, host, stateStore: store });
+  await connector.start({ schedule: false, runImmediately: false });
+  await assert.rejects(connector.pollOnce(), /native preparation failed/);
+  assert.equal(acknowledgments, 0); assert.equal(persistence.prompts.length, 0); assert.equal((await store.load())!.stoppedExecutions, undefined);
+  api.claimAgentRequest = claim;
+  await connector.pollOnce();
+  assert.equal(persistence.prompts.length, 1); assert.equal(acknowledgments, 1); assert.equal(api.completions.length, 1);
+  await connector.stop();
+});
+
+test("ordinary DSH preparation failure on an older server never strands unsupported exit receipts", async () => {
+  const cfg = config(), api = new FakeApi(), persistence = freshPersistence(), store = new MemoryConnectorStateStore();
+  api.events.push(request(1));
+  const host = new FakeHost(cfg.dshSessionId, persistence);
+  const originalSequence = host.currentSequence.bind(host), originalClaim = api.claimAgentRequest.bind(api);
+  let failPreparation = false, acknowledgments = 0;
+  api.claimAgentRequest = async (...args) => { const claim = await originalClaim(...args); failPreparation = true; return claim; };
+  host.currentSequence = () => {
+    if (failPreparation) { failPreparation = false; throw new Error("legacy native preparation failed"); }
+    return originalSequence();
+  };
+  const control: DshCollaborationApi = Object.assign(api, {
+    async readAgentExecution() { throw new CollaborationHttpError(404, "legacy endpoint absent"); },
+    async acknowledgeAgentExecutionStopped() { acknowledgments += 1; throw new CollaborationHttpError(404, "legacy endpoint absent"); },
+  });
+  const first = new DshHostConnector({ config: cfg, api: control, host, stateStore: store });
+  await first.start({ schedule: false, runImmediately: false });
+  await assert.rejects(first.pollOnce(), /legacy native preparation failed/);
+  assert.equal(acknowledgments, 0); assert.equal((await store.load())!.stoppedExecutions, undefined);
+  await first.stop();
+  api.claimAgentRequest = originalClaim;
+  const second = new DshHostConnector({ config: cfg, api: control, host: new FakeHost(cfg.dshSessionId, persistence), stateStore: store });
+  await second.start({ schedule: false });
+  assert.equal(api.completions.length, 1); assert.equal(persistence.prompts.length, 1);
+  assert.equal(acknowledgments, 0); assert.equal((await store.load())!.stoppedExecutions, undefined);
+  await second.stop();
 });
 
 class ContextHost extends FakeHost {

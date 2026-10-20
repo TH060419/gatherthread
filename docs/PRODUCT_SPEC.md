@@ -336,6 +336,9 @@ Run records expose Pause/Resume/Continue/Stop for active tasks and explicit
 Clear private record for ended tasks. Clearing frees private run/step/control
 storage, keeps canonical conversation messages, and cannot restart the old task.
 The Web client confirms this distinction and can recover a lost clear acknowledgment.
+Pause/Stop remain available under current account/device/session permission when
+WebSocket replay or reconnection temporarily blocks ordinary chat. A successful
+recovery clears only the corresponding old error, including after language changes.
 
 An interrupted or waiting Team explains the affected module, observed cause and
 next action in its run records and a requester-private workspace notice. Failed
@@ -358,7 +361,10 @@ remove cached private diagnostic labels; stale replies cannot restore them.
 
 Adding a module selects it. A module or connection highlights on hover only
 while no selection is fixed; clicking fixes the selection, and clicking blank
-canvas clears it. Selected modules and connections have Delete. Dragging between ports
+canvas clears it, including the first independent tap after a touch drag or
+cancelled connection. Remote redraws preserve the focused module/port/connection
+by stable identity, or return focus to the canvas if it was removed, without
+overwriting unsaved local edits. Selected modules and connections have Delete. Dragging between ports
 adds an allowed-call relationship; its inspector selects endpoints and one-way/bidirectional
 behavior. A read-only View configuration dialog lists the resulting
 relationships. The lower editor places the selection inspector and call/time

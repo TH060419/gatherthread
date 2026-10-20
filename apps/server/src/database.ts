@@ -1069,6 +1069,41 @@ export class CollaborationDatabase {
     }
     this.migrateAgentClaimLease();
     this.migrateAgentClaimPause();
+    this.transaction(() => {
+      if (!this.sqlite.prepare("PRAGMA table_info(agent_request_claims)").all().some(row => row.name === "execution_pending")) {
+        this.sqlite.exec("ALTER TABLE agent_request_claims ADD COLUMN execution_pending INTEGER NOT NULL DEFAULT 0 CHECK(execution_pending IN (0,1))");
+        // A legacy server's abandoned-lease failure answer also did not prove
+        // native exit. Completed native turns remain confirmed, not backfilled.
+        this.sqlite.exec(`UPDATE agent_request_claims SET execution_pending=1 WHERE status IN ('claimed','paused','failed')
+          AND request_event_id IN (SELECT id FROM events WHERE deleted_at IS NOT NULL OR json_type(payload_json,'$.agent_team.run_id')='text')`);
+      }
+    });
+    // These fixed-size execution identities outlive cloud history, never native
+    // processes. Session/project FKs must not make deletion evidence of exit.
+    this.sqlite.exec(`CREATE TABLE IF NOT EXISTS agent_native_exit_holds (
+      request_event_id TEXT NOT NULL, runtime_id TEXT NOT NULL, claim_attempt INTEGER NOT NULL CHECK(claim_attempt>0),
+      owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      owner_device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+      project_id TEXT NOT NULL, session_id TEXT NOT NULL, harness TEXT NOT NULL, created_at TEXT NOT NULL,
+      PRIMARY KEY(request_event_id,runtime_id,claim_attempt)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS agent_native_exit_holds_pool_idx ON agent_native_exit_holds(owner_device_id,project_id,harness);
+    CREATE INDEX IF NOT EXISTS agent_native_exit_holds_owner_idx ON agent_native_exit_holds(owner_user_id);
+    CREATE INDEX IF NOT EXISTS agent_request_claims_native_pending_idx ON agent_request_claims(runtime_id) WHERE execution_pending=1;`);
+    const captureNativeHolds = (predicate: string) => `INSERT OR IGNORE INTO agent_native_exit_holds
+      (request_event_id,runtime_id,claim_attempt,owner_user_id,owner_device_id,project_id,session_id,harness,created_at)
+      SELECT c.request_event_id,c.runtime_id,c.attempt_count,r.user_id,r.device_id,s.project_id,s.id,r.harness,c.claimed_at
+      FROM agent_request_claims c JOIN runtimes r ON r.id=c.runtime_id JOIN sessions s ON s.id=r.session_id
+      JOIN users u ON u.id=r.user_id JOIN devices d ON d.id=r.device_id AND d.user_id=r.user_id
+      WHERE c.execution_pending=1 AND r.purpose='execution' AND ${predicate};`;
+    // Parent BEFORE triggers see metadata that SQLite removes before invoking
+    // child FK cascades. The claim trigger also covers independent erasure.
+    this.sqlite.exec(`CREATE TRIGGER IF NOT EXISTS agent_native_exit_hold_session_capture BEFORE DELETE ON sessions BEGIN
+      ${captureNativeHolds("s.id=OLD.id")} END;
+      CREATE TRIGGER IF NOT EXISTS agent_native_exit_hold_runtime_capture BEFORE DELETE ON runtimes BEGIN
+      ${captureNativeHolds("r.id=OLD.id")} END;
+      CREATE TRIGGER IF NOT EXISTS agent_native_exit_hold_claim_capture BEFORE DELETE ON agent_request_claims BEGIN
+      ${captureNativeHolds("c.request_event_id=OLD.request_event_id")} END;`);
     this.sqlite.exec(AGENT_SHARING_SCHEMA);
     if (!this.sqlite.prepare("PRAGMA table_info(events)").all().some(row => row.name === "shared_execution_json")) {
       this.sqlite.exec("ALTER TABLE events ADD COLUMN shared_execution_json TEXT CHECK(shared_execution_json IS NULL OR json_valid(shared_execution_json))");
@@ -4321,7 +4356,7 @@ export class CollaborationDatabase {
     return this.getRuntime(runtimeId);
   }
 
-  claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string): AgentClaimOutcome {
+  claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string, executionControlVersion = 1): AgentClaimOutcome {
     this.assertActiveDevice(actor);
     // The transaction returns terminal failure to the service instead of
     // throwing. That lets the canonical failure commit before the service
@@ -4329,6 +4364,10 @@ export class CollaborationDatabase {
     return this.transaction((): AgentClaimOutcome => {
       const event = this.getEvent(sessionId, requestEventId);
       if (event.type !== "agent_request") throw conflict("Only agent_request events can be claimed");
+      const team = event.payload !== null && typeof event.payload === "object" && !Array.isArray(event.payload)
+        && event.payload.agent_team !== undefined;
+      if (team && executionControlVersion !== 1) throw new ApiError(409, "agent_execution_control_required",
+        "Update the native connector before executing an Agent team");
       if (event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
         && event.payload.shared_agent !== undefined) throw forbidden("Shared requests require the dedicated execution broker");
       this.assertRequestContextCurrent(sessionId, requestEventId);
@@ -4387,17 +4426,20 @@ export class CollaborationDatabase {
         // The lease lapsed, so no accepted work is arriving. Exact-runtime
         // reclaim is bounded: past the budget the request ends visibly instead
         // of executing forever.
+        if (this.sqlite.prepare("SELECT 1 FROM agent_request_claims WHERE request_event_id=? AND execution_pending=1").get(requestEventId)) throw runtimeBusy();
         if (this.sqlite.prepare("SELECT 1 FROM agent_team_steps WHERE request_event_id=?").get(requestEventId)
           || (existing.attempt_count ?? 1) >= MAX_AGENT_CLAIM_ATTEMPTS) {
           const failure = this.failAbandonedClaim(sessionId, event, target.harness);
           return failure === undefined ? { failed: true } : { failed: true, event: failure };
         }
         this.assertRuntimeClaimSlotAvailable(runtimeId, requestEventId, now);
+        if (team && this.nativeHoldCapacityFull(actor.user_id)) throw new ApiError(429, "agent_team_native_hold_capacity",
+          "Native execution exit confirmation storage is full; finish or confirm stopped native work before starting another Team call");
         this.sqlite.prepare(`
           UPDATE agent_request_claims
-          SET runtime_id = ?, claimed_at = ?, attempt_count = attempt_count + 1, lease_expires_at = ?
+          SET runtime_id = ?, claimed_at = ?, attempt_count = attempt_count + 1, lease_expires_at = ?, execution_pending = ?
           WHERE request_event_id = ?
-        `).run(runtimeId, now, leaseExpiresAt, requestEventId);
+        `).run(runtimeId, now, leaseExpiresAt, team ? 1 : 0, requestEventId);
         return { claim: {
           request_event_id: requestEventId,
           runtime_id: runtimeId,
@@ -4407,10 +4449,12 @@ export class CollaborationDatabase {
         } };
       }
       this.assertRuntimeClaimSlotAvailable(runtimeId, requestEventId, now);
+      if (team && this.nativeHoldCapacityFull(actor.user_id)) throw new ApiError(429, "agent_team_native_hold_capacity",
+        "Native execution exit confirmation storage is full; finish or confirm stopped native work before starting another Team call");
       this.sqlite.prepare(`
-        INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, status, attempt_count, lease_expires_at)
-        VALUES (?, ?, ?, 'claimed', 1, ?)
-      `).run(requestEventId, runtimeId, now, leaseExpiresAt);
+        INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, status, attempt_count, lease_expires_at, execution_pending)
+        VALUES (?, ?, ?, 'claimed', 1, ?, ?)
+      `).run(requestEventId, runtimeId, now, leaseExpiresAt, team ? 1 : 0);
       return { claim: {
         request_event_id: requestEventId,
         runtime_id: runtimeId,
@@ -4418,6 +4462,68 @@ export class CollaborationDatabase {
         attempt_count: 1, content_revision: event.content_revision ?? 0,
       } };
     });
+  }
+
+  private requireExecutionOwner(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string, cleanup = false): void {
+    this.assertActiveDevice(actor);
+    const runtime = this.getRuntime(runtimeId), request = this.getEvent(sessionId, requestEventId);
+    if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id || runtime.session_id !== sessionId
+      || (!cleanup && runtime.status === "revoked") || runtime.purpose !== "execution" || request.actor_user_id !== actor.user_id
+      || request.type !== "agent_request") throw forbidden("Only the exact native executor may observe or acknowledge its execution");
+  }
+
+  readAgentExecution(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string, claimAttempt: number): { active: boolean } {
+    this.requireExecutionOwner(actor, sessionId, requestEventId, runtimeId);
+    const claim = this.requireClaimRow(requestEventId);
+    return { active: this.requireSession(sessionId).state === "active"
+      && this.isCurrentClaimAttempt(claim, runtimeId, claimAttempt, this.now())
+      && this.isRequestContextCurrent(sessionId, requestEventId) && this.teamRequestMayExecute(requestEventId) };
+  }
+
+  acknowledgeAgentExecutionStopped(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string, claimAttempt: number): { active: false } {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      // Missing and unauthorized identities have the same content-free reply:
+      // a foreign caller cannot observe whether this request was ever claimed.
+      // Each write still binds the original account/device and exact attempt.
+      this.sqlite.prepare(`DELETE FROM agent_native_exit_holds WHERE request_event_id=? AND runtime_id=? AND claim_attempt=?
+        AND owner_user_id=? AND owner_device_id=? AND session_id=?`)
+        .run(requestEventId, runtimeId, claimAttempt, actor.user_id, actor.device_id, sessionId);
+      // Even a delayed acknowledgment may clear only its exact native attempt.
+      // Missing/older receipts are harmless; they never retire a newer claim.
+      this.sqlite.prepare(`UPDATE agent_request_claims SET execution_pending=0
+        WHERE request_event_id=? AND runtime_id=? AND attempt_count=? AND EXISTS(
+          SELECT 1 FROM runtimes r JOIN events e ON e.id=agent_request_claims.request_event_id
+          WHERE r.id=agent_request_claims.runtime_id AND r.user_id=? AND r.device_id=? AND r.session_id=?
+            AND r.purpose='execution' AND e.session_id=? AND e.actor_user_id=? AND e.type='agent_request')`)
+        .run(requestEventId, runtimeId, claimAttempt, actor.user_id, actor.device_id, sessionId, sessionId, actor.user_id);
+      return { active: false };
+    });
+  }
+
+  /** Advisory own-node wait reason; claim admission separately enforces it. */
+  executionHoldIssue(runtimeId: string, forTeam = true): "agent_team_native_exit_pending" | "agent_team_native_hold_capacity" | undefined {
+    const runtime = this.sqlite.prepare(`SELECT r.user_id,r.device_id,r.harness,s.project_id FROM runtimes r
+      JOIN sessions s ON s.id=r.session_id WHERE r.id=?`).get(runtimeId);
+    if (!runtime) return undefined;
+    if (this.sqlite.prepare(`SELECT 1 FROM agent_native_exit_holds WHERE owner_device_id=? AND project_id=? AND harness=? LIMIT 1`)
+      .get(runtime.device_id!, runtime.project_id!, runtime.harness!)) return "agent_team_native_exit_pending";
+    if (forTeam && this.nativeHoldCapacityFull(String(runtime.user_id))) return "agent_team_native_hold_capacity";
+    return undefined;
+  }
+
+  private nativeHoldCapacityFull(userId: string): boolean {
+    // A deletion moves a hold between these stores; it does not grow the total.
+    // Legacy migrations retain all old holds even above this admission ceiling.
+    for (const [owner, values, limit] of [["user_id=?", [userId], 1000], ["1=1", [], 100000]] as const) {
+      const count = Number(this.sqlite.prepare(`SELECT COUNT(*) AS n FROM (
+        SELECT c.request_event_id,c.runtime_id,c.attempt_count FROM agent_request_claims c JOIN runtimes r ON r.id=c.runtime_id
+          WHERE c.execution_pending=1 AND ${owner === "1=1" ? owner : "r.user_id=?"}
+        UNION SELECT request_event_id,runtime_id,claim_attempt FROM agent_native_exit_holds WHERE ${owner === "1=1" ? owner : "owner_user_id=?"})`)
+        .get(...values, ...values)?.n ?? 0);
+      if (count >= limit) return true;
+    }
+    return false;
   }
 
   /**
@@ -4500,13 +4606,14 @@ export class CollaborationDatabase {
   }
 
   private assertRuntimeClaimSlotAvailable(runtimeId: string, requestEventId: string, now: string): void {
+    if (this.executionHoldIssue(runtimeId, false)) throw runtimeBusy();
     const shared = this.sqlite.prepare(`SELECT 1 FROM agent_share_jobs j JOIN runtimes r ON r.id=? JOIN sessions s ON s.id=r.session_id
       WHERE j.owner_device_id=r.device_id AND j.project_id=s.project_id AND json_extract(j.profile_json,'$.harness')=r.harness
         AND (j.status='running' OR j.cleanup_pending=1) LIMIT 1`).get(runtimeId);
     if (shared) throw runtimeBusy();
     const active = this.sqlite.prepare(`
       SELECT request_event_id FROM agent_request_claims
-      WHERE runtime_id = ? AND status = 'claimed' AND request_event_id != ? AND lease_expires_at > ?
+      WHERE runtime_id = ? AND request_event_id != ? AND (execution_pending=1 OR (status = 'claimed' AND lease_expires_at > ?))
       LIMIT 1
     `).get(runtimeId, requestEventId, now) as { request_event_id: string } | undefined;
     if (active) throw runtimeBusy();
@@ -4599,7 +4706,7 @@ export class CollaborationDatabase {
         payload,
         runtime_id: runtimeId,
       }, provenance);
-      this.sqlite.prepare("UPDATE agent_request_claims SET status = 'completed', completed_at = ? WHERE request_event_id = ?")
+      this.sqlite.prepare("UPDATE agent_request_claims SET status = 'completed', completed_at = ?, execution_pending=0 WHERE request_event_id = ?")
         .run(this.now(), requestEventId);
       return response;
     });
@@ -5639,6 +5746,9 @@ export class CollaborationDatabase {
       this.sqlite.exec(`
         BEGIN IMMEDIATE;
         DROP TRIGGER IF EXISTS agent_team_runs_native_claim_cleanup;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_session_capture;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_runtime_capture;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_claim_capture;
         CREATE TABLE agent_request_claims_next (
           request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
           runtime_id TEXT NOT NULL REFERENCES runtimes(id),
@@ -5682,6 +5792,9 @@ export class CollaborationDatabase {
       this.sqlite.exec(`
         BEGIN IMMEDIATE;
         DROP TRIGGER IF EXISTS agent_team_runs_native_claim_cleanup;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_session_capture;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_runtime_capture;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_claim_capture;
         CREATE TABLE agent_request_claims_next (
           request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
           runtime_id TEXT NOT NULL REFERENCES runtimes(id),

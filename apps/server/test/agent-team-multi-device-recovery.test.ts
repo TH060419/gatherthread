@@ -146,6 +146,12 @@ test("a lost start ACK survives server restart and recovery from another device 
   assert.equal(resumed.status, 200);
   const next = await f.until(() => f.read(id), run => run.calls_used === 2 && Boolean(run.current_step_id && run.current_step_id !== oldStep.id));
   assert.notEqual(next.steps.find(step => step.id === next.current_step_id)!.request_event_id, oldStep.request_event_id);
+  const nextRequest = next.steps.find(step => step.id === next.current_step_id)!.request_event_id!;
+  assert.throws(() => f.server.service.claimAgentRequest(f.owner.actor, f.session.id, nextRequest, f.runtime.id), { code: "runtime_busy" },
+    "Server restart alone does not prove that the previous native executor exited");
+  // The synthetic executor has now exited; only its exact metadata receipt can
+  // release the surviving capacity hold before the resumed native call starts.
+  f.server.service.acknowledgeAgentExecutionStopped(f.owner.actor, f.session.id, oldStep.request_event_id!, f.runtime.id, claim.attempt_count!);
   f.complete(next, `Recovered result.\n\n\`\`\`gatherthread-team\n${JSON.stringify({ version: 1, step_id: next.current_step_id, action: "complete" })}\n\`\`\``);
   const done = await f.until(() => f.read(id), run => run.status === "completed"); assert.equal(done.calls_used, 2);
   const replay = await f.api<{ run: AgentTeamRunDetail }>(`${f.root}/agent-team-runs/${id}/control`, "POST", {

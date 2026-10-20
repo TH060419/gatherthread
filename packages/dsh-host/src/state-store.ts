@@ -136,7 +136,7 @@ export function validateConnectorState(value: unknown): ConnectorState {
       ...(legacyUploadPolicy ? [] : ["automaticUpload"]),
       "activeRequest",
       "outbox",
-      "contentRevision", "projectionSessionId", "localOnlySessionIds",
+      "contentRevision", "projectionSessionId", "localOnlySessionIds", "stoppedExecutions",
     ]),
     "state",
   );
@@ -178,10 +178,21 @@ export function validateConnectorState(value: unknown): ConnectorState {
       ? true
       : requiredBoolean(state.automaticUpload, "state.automaticUpload"),
     ...(activeRequest === undefined ? {} : { activeRequest }),
+    ...(state.stoppedExecutions === undefined ? {} : { stoppedExecutions: parseStoppedExecutions(state.stoppedExecutions) }),
     outbox,
   };
   assertAlreadyRedacted(validated);
   return validated;
+}
+
+function parseStoppedExecutions(value: unknown): NonNullable<ConnectorState["stoppedExecutions"]> {
+  if (!Array.isArray(value) || value.length > 1000) throw new Error("Invalid DSH native stop receipt list");
+  return value.map((item, index) => {
+    const receipt = requiredObject(item, `state.stoppedExecutions[${index}]`);
+    exactKeys(receipt, new Set(["requestId", "runtimeId", "claimAttempt"]), "state.stoppedExecutions");
+    return { requestId: safeString(receipt.requestId, "stop.requestId", 128),
+      runtimeId: safeString(receipt.runtimeId, "stop.runtimeId", 128), claimAttempt: positiveInteger(receipt.claimAttempt, "stop.claimAttempt") };
+  });
 }
 
 function parseActiveRequest(value: unknown): NonNullable<ConnectorState["activeRequest"]> {

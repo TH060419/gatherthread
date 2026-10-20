@@ -15,6 +15,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { teamStartDigest } from "../src/agent-team-schema.js";
 import { spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 
 const directive = (stepId: string, action: "complete" | "delegate" = "complete", target = "worker") =>
   `Public result.\n\n\`\`\`gatherthread-team\n${JSON.stringify({ version: 1, step_id: stepId, action,
@@ -64,6 +65,50 @@ function orientation(f: ReturnType<typeof fixture>, requestId: string) {
   return { content, value: JSON.parse(line) };
 }
 
+test("Team control parsing retains a short final instruction after a long public answer and rejects ambiguous fences", () => {
+  const body = JSON.stringify({ version: 1, step_id: "bounded-step", action: "complete" });
+  const block = `\`\`\`gatherthread-team\n${body}\n\`\`\``;
+  assert.equal(parseTeamDirective(`${"A public result.\n".repeat(12000)}${block}\n \t`, "bounded-step").action, "complete");
+  assert.equal(parseTeamDirective(`Earlier public text.\r\n\`\`\`gatherthread-team \t\r\n${body}\r\n\`\`\` \t\r\n`, "bounded-step").action, "complete");
+  assert.equal(parseTeamDirective(`\`\`\`text\nOrdinary code example\n\`\`\`\n${block}`, "bounded-step").action, "complete");
+  for (const answer of [block + "\n" + block, block + "\nUnapproved trailing text", "```gatherthread-team\n{}",
+    `\`\`\`gatherthread-team\n${" ".repeat(15001)}${body}\n\`\`\``, `\`\`\`gatherthread-team\n${block}`]) {
+    assert.throws(() => parseTeamDirective(answer, "bounded-step"), { code: "team_directive_invalid" });
+  }
+  assert.throws(() => parseTeamDirective(block, "another-step"), { code: "team_directive_mismatch" });
+});
+
+test("malformed bounded Team answers cannot monopolize the coordinator while searching for a final control block", { timeout: 15000 }, async t => {
+  // Run the adversarial shape off the test runner's thread. Start the deadline
+  // after module loading, so a regression is interrupted rather than hanging
+  // the server suite; no provider or canonical payload is needed or retained.
+  const worker = new Worker(`
+    const { parentPort } = require("node:worker_threads");
+    (async () => {
+      const { parseTeamDirective } = await import(${JSON.stringify(new URL("../src/agent-teams.js", import.meta.url).href)});
+      parentPort.once("message", () => {
+        const opening = ["\x60".repeat(3) + "gatherthread-team", ""].join("\\n");
+        const answer = opening.repeat(Math.floor(196608 / opening.length));
+        const started = performance.now(); let code;
+        try { parseTeamDirective(answer, "bounded-step"); } catch (error) { code = error.code; }
+        parentPort.postMessage({ code, elapsed: performance.now() - started, bytes: Buffer.byteLength(answer) });
+      });
+      parentPort.postMessage("ready");
+    })().catch(() => parentPort.postMessage("fixture_failed"));
+  `, { eval: true });
+  t.after(() => worker.terminate());
+  await new Promise<void>((resolve, reject) => {
+    worker.once("error", reject);
+    worker.once("message", value => value === "ready" ? resolve() : reject(new Error("Parser worker failed before execution")));
+  });
+  const result = await new Promise<{ code: string; elapsed: number; bytes: number }>((resolve, reject) => {
+    const deadline = setTimeout(() => { reject(new Error("Bounded malformed Team answer exceeded the 2-second parser budget")); }, 2000);
+    worker.once("message", value => { clearTimeout(deadline); resolve(value); }); worker.postMessage("parse");
+  });
+  assert.equal(result.code, "team_directive_invalid"); assert.ok(result.bytes <= 196608);
+  assert.ok(result.elapsed < 1000, `Bounded scanning took ${result.elapsed}ms`);
+});
+
 for (const code of ["codex_turn_cancelled", "codex_turn_missing", "codex_turn_failed", "harness_execution_failed",
   "agent_request_abandoned", "unknown_private_provider_detail", "provider_auth_failed"]) {
   test(`native Team failure keeps an allowlisted category and frozen module only: ${code}`, async () => {
@@ -85,6 +130,23 @@ for (const code of ["codex_turn_cancelled", "codex_turn_missing", "codex_turn_fa
     } finally { f.close(); }
   });
 }
+
+test("a queued Team identifies a previous native exit hold before and after claim erasure, then clears the explanation on exact cleanup", async () => {
+  const f = fixture(); try {
+    const old = f.start(); await drive(f.teams, () => f.teams.store.row(old.id).calls_used === 1);
+    const request = f.teams.store.steps(old.id)[0]!.request_event_id!;
+    const claim = f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id);
+    f.teams.control(f.actor, f.session.id, old.id, { action: "stop", idempotency_key: "hold-explanation-stop" });
+    const next = f.start(); await drive(f.teams, () => f.teams.store.row(next.id).calls_used === 1);
+    const expected = { code: "agent_team_native_exit_pending", node_id: "lead", node_label: "Director", target_kind: "local", retry_at: null };
+    assert.deepEqual(f.teams.read(f.actor, f.session.id, next.id).run.issue, expected);
+    f.db.sqlite.prepare("DELETE FROM agent_request_claims WHERE request_event_id=?").run(request);
+    assert.deepEqual(f.teams.read(f.actor, f.session.id, next.id).run.issue, expected);
+    f.service.acknowledgeAgentExecutionStopped(f.actor, f.session.id, request, f.lead.id, claim.attempt_count!);
+    assert.equal(f.teams.read(f.actor, f.session.id, next.id).run.issue?.code, "agent_team_waiting_executor");
+    assert.equal(f.teams.store.row(next.id).calls_used, 1);
+  } finally { f.close(); }
+});
 
 test("native queued, disconnected and expired-claim Teams expose live wait reasons without changing execution or losing a completed result", async () => {
   const f = fixture(); try {
@@ -647,6 +709,10 @@ test("a queued or claimed team loses its original device grant without revoking 
         const ordinary = f.service.appendEvent(executor, f.session.id, { type: "agent_request", visibility: "session",
           idempotency_key: "valid-device-ordinary-request", payload: { content: "Ordinary task from the still-valid device",
             execution_profile: { harness: "codex", provider: "openai", model: "fixture-gpt", runtime_id: runtime.id } } });
+        if (claimed) {
+          assert.throws(() => f.service.claimAgentRequest(executor, f.session.id, ordinary.id, runtime.id), { code: "runtime_busy" });
+          f.service.acknowledgeAgentExecutionStopped(executor, f.session.id, request, runtime.id, 1);
+        }
         assert.equal(f.service.claimAgentRequest(executor, f.session.id, ordinary.id, runtime.id).status, "claimed");
         f.service.appendAgentProgress(executor, f.session.id, ordinary.id, runtime.id, "ordinary-progress", { content: "Ordinary progress" });
         assert.equal(f.service.completeAgentRequest(executor, f.session.id, ordinary.id, runtime.id, "ordinary-answer", { text: "Ordinary final answer" }).type, "agent_response");
@@ -770,6 +836,9 @@ test("two devices replaying interleaved Pause and Resume receipts cannot undo a 
       assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id).status, "paused");
       assert.throws(() => f.service.completeAgentRequest(f.actor, f.session.id, request, f.lead.id,
         `interrupted-result-${round}`, { text: "Must not resume an old native execution" }, "fixture-gpt", "low", claim.attempt_count));
+      const next = f.teams.read(second, f.session.id, run.id).run.steps.at(-1)!;
+      assert.throws(() => f.service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id), { code: "runtime_busy" });
+      f.service.acknowledgeAgentExecutionStopped(f.actor, f.session.id, request, f.lead.id, claim.attempt_count);
     }
     const stop = { action: "stop" as const, idempotency_key: "interleaved-final-stop" };
     f.teams.control(second, f.session.id, run.id, stop);
@@ -816,6 +885,8 @@ test("lost Pause or Stop cleanup is retried by its receipt, and a paused restart
         teams.control(second, f.session.id, run.id, { action: "resume", idempotency_key: `cleanup-${phase}-resume` });
         await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
         const next = teams.read(f.actor, f.session.id, run.id).run.steps.at(-1)!;
+        assert.throws(() => f.service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id), { code: "runtime_busy" });
+        f.service.acknowledgeAgentExecutionStopped(f.actor, f.session.id, first.request_event_id!, f.lead.id, claim.attempt_count);
         f.service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id);
         assert.equal(teams.control(second, f.session.id, run.id, control).run.status, "running");
         assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(next.request_event_id!)!.status, "claimed",
@@ -892,6 +963,8 @@ test("a failed Pause followed immediately by Resume retries the historical claim
     assert.throws(() => f.service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id), { code: "runtime_busy" });
     f.service.pauseTeamAgentRequest = cancel; f.advance(5000); await f.teams.pump();
     assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(first.request_event_id!)!.status, "paused");
+    assert.throws(() => f.service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id), { code: "runtime_busy" });
+    f.service.acknowledgeAgentExecutionStopped(f.actor, f.session.id, first.request_event_id!, f.lead.id, 1);
     assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id).status, "claimed");
     await f.teams.pump();
     assert.equal(f.db.sqlite.prepare("SELECT status FROM agent_request_claims WHERE request_event_id=?").get(next.request_event_id!)!.status, "claimed");
@@ -900,7 +973,7 @@ test("a failed Pause followed immediately by Resume retries the historical claim
   } finally { f.close(); }
 });
 
-test("a stopped native claim releases its execution slot after the original authorizing device is revoked", async () => {
+test("a stopped native claim with a revoked authorizer holds its slot until the still-valid executor acknowledges exit", async () => {
   const f = fixture(); try {
     const executor = { ...f.actor, device_id: f.db.createDevice(f.actor.user_id, "Synthetic independent executor").device_id };
     const runtime = f.service.registerRuntime(executor, { session_id: f.session.id, device_id: executor.device_id, harness: "codex", provider: "openai",
@@ -925,11 +998,13 @@ test("a stopped native claim releases its execution slot after the original auth
       "trusted cleanup must not publish new content using a revoked author's grant");
     const ordinary = f.service.appendEvent(executor, f.session.id, { type: "agent_request", visibility: "session", idempotency_key: "after-revoked-author-cleanup",
       payload: { content: "An independent human request", execution_profile: { harness: "codex", provider: "openai", model: "fixture-gpt", runtime_id: runtime.id } } });
+    assert.throws(() => f.service.claimAgentRequest(executor, f.session.id, ordinary.id, runtime.id), { code: "runtime_busy" });
+    f.service.acknowledgeAgentExecutionStopped(executor, f.session.id, request, runtime.id, 1);
     assert.equal(f.service.claimAgentRequest(executor, f.session.id, ordinary.id, runtime.id).status, "claimed");
   } finally { f.close(); }
 });
 
-test("Forget releases a failed Stop's native claim before deleting its last private cleanup identity", async () => {
+test("Forget fences a failed Stop's native claim without releasing the execution slot before an exact exit acknowledgment", async () => {
   const f = fixture(); try {
     const run = f.start();
     await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
@@ -943,6 +1018,8 @@ test("Forget releases a failed Stop's native claim before deleting its last priv
     assert.equal(f.db.getEvent(f.session.id, request).type, "agent_request");
     const ordinary = f.service.appendEvent(f.actor, f.session.id, { type: "agent_request", visibility: "session", idempotency_key: "after-forget-cleanup",
       payload: { content: "An independent human request", execution_profile: { harness: "codex", provider: "openai", model: "fixture-gpt", runtime_id: f.lead.id } } });
+    assert.throws(() => f.service.claimAgentRequest(f.actor, f.session.id, ordinary.id, f.lead.id), { code: "runtime_busy" });
+    f.service.acknowledgeAgentExecutionStopped(f.actor, f.session.id, request, f.lead.id, 1);
     assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, ordinary.id, f.lead.id).status, "claimed");
   } finally { f.close(); }
 });
@@ -1101,6 +1178,10 @@ test("disk reopen recovers lost acknowledgments at queued, claimed and completed
         assert.throws(() => service.completeAgentRequest(f.actor, f.session.id, first.request_event_id!, f.lead.id,
           `disk-${phase}-late-result`, { text: "Discard the old execution after restart" }, "fixture-gpt", "low", 1));
         const next = restored.read(second, f.session.id, run.id).run.steps.at(-1)!;
+        if (phase === "claimed") {
+          assert.throws(() => service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id), { code: "runtime_busy" });
+          service.acknowledgeAgentExecutionStopped(f.actor, f.session.id, first.request_event_id!, f.lead.id, 1);
+        }
         const claim = service.claimAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id);
         service.completeAgentRequest(f.actor, f.session.id, next.request_event_id!, f.lead.id,
           `disk-${phase}-fresh-result`, { text: "The explicitly resumed task completed" }, "fixture-gpt", "low", claim.attempt_count);

@@ -69,6 +69,8 @@ export interface DshCollaborationApi {
     requestId: string,
     runtimeId: string,
   ): Promise<AgentRequestClaim>;
+  readAgentExecution?(sessionId: string, requestId: string, runtimeId: string, claimAttempt: number): Promise<{ active: boolean }>;
+  acknowledgeAgentExecutionStopped?(sessionId: string, requestId: string, runtimeId: string, claimAttempt: number): Promise<void>;
   appendAgentProgress(
     sessionId: string,
     requestId: string,
@@ -194,6 +196,7 @@ export interface DshHostFacade {
   resetCanonicalContext?(contentRevision: number): Promise<{ sessionId: string }>;
   projectCanonicalEvents(events: readonly DshCanonicalProjection[]): Promise<void>;
   flush(): Promise<void>;
+  /** After actual native idle, cancellation rejects with HarnessExecutionTerminatedError; preparation/unknown ownership is not exit evidence. */
   prompt(text: string, selection?: DshExecutionSelection, executionSessionId?: string, signal?: AbortSignal): Promise<DshPromptResult>;
   onSessionEvent(listener: (event: DshSessionEventRecord) => void): () => void;
   onLiveOutput?(listener: (event: DshLiveOutputEvent) => void): () => void;
@@ -289,6 +292,8 @@ export interface ConnectorState {
   publishedDshSequence: number;
   automaticUpload: boolean;
   activeRequest?: ConnectorActiveRequest;
+  /** Content-free native exit receipts; retry ACKs without re-driving a prompt. */
+  stoppedExecutions?: { requestId: string; runtimeId: string; claimAttempt: number }[];
   outbox: ConnectorOutboxOperation[];
 }
 

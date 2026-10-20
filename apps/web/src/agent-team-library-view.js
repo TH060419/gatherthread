@@ -1,9 +1,10 @@
 import { TEAM_ZH_CN } from "./agent-team-i18n.js";
-import { describeTeamActionError, formatTeamRunIssue, isTeamActionUncertain } from "./agent-team-diagnostics.js";
+import { describeTeamActionError, formatTeamRunIssue, isTeamActionUncertain, teamTimeoutContinuationAvailable } from "./agent-team-diagnostics.js";
 import { mountTeamCanvas } from "./agent-team-canvas.js";
 import { teamConnectionChoices, teamConnectionKey, teamModelKey, teamTargetForModel, moduleSnapshot,
   sameTeamSnapshot, removeTeamNode, teamEdgeAllowed } from "./agent-team-graph.js";
 const terminal = run => !["running", "paused"].includes(run.status);
+const testMetadataKey = team => JSON.stringify([team?.revision, team?.test_status, team?.test_run_id, team?.tested_revision]);
 // Compare configuration content, independent of object key order or optional
 // empty prompts. Metadata/control revisions are not edits to the configuration.
 const configurationKey = (draft, limits) => JSON.stringify({ draft: { ...draft,
@@ -89,8 +90,9 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   let scope = "", generation = 0, epoch = 0, readBusy = false, refreshTimer, teams = [], favorites = [], runs = [], testRuns = [], runRefreshFailed = false, hadTaskActivity = false,
     editId = null, draft = null, budgets = null, baseRevision = null, baseline = null, dirty = false, draftVersion = 0, selectedKey = "", returnFocus, catalogSignature = "", writableState, secondaryMode = "", refreshFavoriteControl = null;
   const intents = new Map();
-  const actionKinds = new WeakMap(), testReads = new Map();
-  let displayedProblem = null;
+  const actionKinds = new WeakMap(), problemIntents = new WeakMap(), testReads = new Map();
+  let runAuthority = 0, runAccessBlocked = false, observedContentRevision;
+  let displayedProblem = null, displayedProblemText = null;
   const canvas = mountTeamCanvas({ document: doc, host: graphHost, t, makeId: makeKey, getDraft: () => draft,
     onChange: changed, onSelection: () => renderInspector() });
   const context = () => getContext() ?? {};
@@ -99,6 +101,18 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   const pendingFor = id => [...intents.values()].filter(intent => intent.id === id);
   const pendingEnable = id => pendingFor(id).some(intent => intent.kind === "control" && intent.input.enabled);
   const canEnable = team => team?.test_status === "passed" && team.tested_revision === team.revision;
+  const canControl = () => context().controlWritable ?? context().writable;
+  function clearPrivateRuns(blocked = false) {
+    // This also fences receipts for runs not yet observed in this tab. A late
+    // acceptance remains a receipt, but cannot restore erased/unauthorized data.
+    runAuthority++; runs = []; testRuns = []; testReads.clear(); runAccessBlocked = blocked;
+  }
+  function observeTeams(values, acceptedIntent) {
+    for (const intent of intents.values()) if (intent !== acceptedIntent && ["save", "control", "test"].includes(intent.kind)) {
+      for (const team of values) if (intent.id === team.id) (intent.observedTeams ??= new Map()).set(team.id,
+        { revision: team.revision, testKey: testMetadataKey(team) });
+    }
+  }
   function supersedeDefinitionActions(id) {
     for (const [slot, intent] of intents) if (intent.id === id && ["save", "control", "test"].includes(intent.kind)) {
       intent.superseded = true;
@@ -137,22 +151,36 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       && item.payload?.agent_team?.task_content === pending.input.content)?.payload.agent_team.run_id;
   }
   function showError(problem) {
-    displayedProblem = problem;
+    displayedProblem = problem; displayedProblemText = null;
     error.textContent = describeTeamActionError(problem, actionKinds.get(problem), t);
+  }
+  function showLocalError(message) {
+    displayedProblem = null; displayedProblemText = message; error.textContent = t(message);
+  }
+  function clearIntentProblem(intent) {
+    if (displayedProblem && problemIntents.get(displayedProblem) === intent) { displayedProblem = null; error.textContent = ""; }
   }
   function mergeTeam(team) {
     const index = teams.findIndex(item => item.id === team.id);
-    if (index >= 0 && teams[index].revision > team.revision) return;
+    // Save/control advance the definition revision. Once that revision has
+    // already been observed, their receipt cannot reset later test metadata,
+    // including on an exact retry. A new authenticated GET remains authoritative.
+    if (index >= 0 && teams[index].revision >= team.revision) return teams[index];
     if (index < 0) teams.push(team); else teams[index] = team;
     if (editId === team.id && baseline === configurationKey(team.draft,
       { max_calls: team.max_calls, max_duration_minutes: team.max_duration_minutes })) baseRevision = team.revision;
+    return team;
   }
   function updateContext() {
     const next = context(); hostButton.disabled = !next.userId || !next.projectId || !next.sessionId || !next.writable || !api.saveAgentTeam;
-    const permissionChanged = writableState !== next.writable; writableState = next.writable;
+    const permission = `${next.writable}:${next.controlWritable ?? next.writable}`;
+    const permissionChanged = writableState !== permission; writableState = permission;
     hostButton.textContent = t("Agent teams");
     const signature = JSON.stringify(teamConnectionChoices(next, t));
     if (scope === next.scope) {
+      if (observedContentRevision !== (next.contentRevision ?? 0)) {
+        observedContentRevision = next.contentRevision ?? 0; epoch++; clearPrivateRuns(runAccessBlocked); render();
+      }
       if (signature !== catalogSignature && draft) {
         catalogSignature = signature;
         const focused = doc.activeElement, id = focused?.id, start = focused?.selectionStart, end = focused?.selectionEnd;
@@ -165,7 +193,8 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     }
     catalogSignature = signature;
     scope = next.scope; generation++; epoch++; teams = []; favorites = []; runs = []; testRuns = []; testReads.clear(); intents.clear(); selectedKey = "";
-    runRefreshFailed = false; hadTaskActivity = false; displayedProblem = null;
+    runRefreshFailed = false; hadTaskActivity = false; displayedProblem = null; displayedProblemText = null;
+    runAccessBlocked = false; observedContentRevision = next.contentRevision ?? 0; runAuthority++;
     editId = null; dirty = false; draft = null; baseline = null; clearTimeout(refreshTimer); readBusy = false;
     if (secondary.open) secondary.close(); if (dialog.open) dialog.close();
     refreshFavoriteControl = null; secondaryMode = ""; secondaryTitle.textContent = ""; secondaryBody.replaceChildren();
@@ -184,10 +213,18 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     try {
       const results = await Promise.allSettled([api.listAgentTeams(), api.listTeamRuns(ctx.sessionId)]);
       if (!current(gen) || before !== epoch) return;
+      let favoritesChanged = false;
       if (results[0].status === "fulfilled") {
+        favoritesChanged = JSON.stringify(favorites) !== JSON.stringify(results[0].value.modules);
         for (const old of teams) if (!results[0].value.teams.some(team => team.id === old.id)) supersedeDefinitionActions(old.id);
         for (const old of favorites) if (!results[0].value.modules.some(item => item.id === old.id)) supersedeFavoriteCreation(old.id);
-        teams = results[0].value.teams; favorites = results[0].value.modules;
+        teams = results[0].value.teams; favorites = results[0].value.modules; observeTeams(teams);
+        // Favorite snapshots have no revision, and even created_at can match
+        // after a same-tick delete/recreate. Once a read has observed this ID
+        // during deletion, only another read may decide its current absence.
+        // Keep the fence across exact-key retries of that deletion receipt.
+        for (const intent of intents.values()) if (intent.kind === "favorite" && !intent.input.module
+          && favorites.some(item => item.id === intent.id)) intent.favoriteObserved = true;
         for (const id of testReads.keys()) if (!teams.some(team => team.test_run_id === id)) testReads.delete(id);
         const fresh = saved();
         if (!dirty && fresh && fresh.revision !== baseRevision) {
@@ -197,9 +234,9 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
           nameInput.value = draft.name; calls.value = String(budgets.max_calls); minutes.value = String(budgets.max_duration_minutes);
           rulesInput.value = draft.team_prompt; canvas.render(); renderInspector();
         }
-      } else if (dialog.open) error.textContent = t("Unable to refresh Teams.");
+      } else if (dialog.open) showLocalError("Unable to refresh Teams.");
       if (results[1].status === "fulfilled") {
-        runRefreshFailed = false;
+        runRefreshFailed = false; runAccessBlocked = false;
         const fresh = results[1].value.runs.filter(run => run.purpose !== "test");
         if (fresh.length) hadTaskActivity = true;
         const currentTests = results[1].value.runs.filter(run => run.purpose === "test");
@@ -211,10 +248,10 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
         runs = fresh;
       } else {
         runRefreshFailed = true;
-        if ([401, 403, 404].includes(results[1].reason?.status)) { runs = []; testRuns = []; }
+        if ([401, 403, 404].includes(results[1].reason?.status)) clearPrivateRuns(true);
       }
       if (saved()?.test_status === "failed") void loadTestFailure(saved());
-      render(); onChange();
+      render(); if (favoritesChanged) showFavoritesContent(); onChange();
     } finally {
       if (current(gen)) { readBusy = false; clearTimeout(refreshTimer);
         refreshTimer = setTimeout(() => void refresh(), dialog.open || runs.some(run => !terminal(run)) || intents.size ? 2000 : 12000); refreshTimer.unref?.(); }
@@ -222,39 +259,61 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   }
   async function attempt(intent) {
     if (intent.generation !== generation || intent.scope !== scope || context().scope !== scope) return;
+    if (intent.superseded || intents.get(intent.slot) !== intent) return;
     if (intent.busy) return intent.promise;
     // An exact-key retry returns the server's current state. Only observations
     // arriving during this transport attempt can supersede that new receipt.
-    const gen = generation; intent.busy = true; delete intent.observedRunIds; epoch++; render(); error.textContent = "";
+    const gen = generation, authority = runAuthority, contentRevision = context().contentRevision ?? 0;
+    intent.busy = true; delete intent.observedRunIds; delete intent.observedTeams; epoch++; render(); clearIntentProblem(intent);
     intent.promise = (async () => {
       try {
         const result = await intent.call();
         if (!current(gen)) return;
-        if (intent.kind === "delete") supersedeDefinitionActions(intent.id);
-        if (result.team && !intent.superseded) mergeTeam(result.team);
+        // A Delete receipt has no state revision. A newer observed definition
+        // may be a recreated Team, so leave that snapshot and its pending
+        // actions intact until the post-receipt authenticated refresh settles it.
+        const newerDefinition = intent.kind === "delete" && teams.some(team => team.id === intent.id
+          && team.revision > intent.definitionRevision);
+        const observedFavoriteDeletion = intent.kind === "favorite" && !intent.input.module && intent.favoriteObserved;
+        if (intent.kind === "delete" && !newerDefinition) supersedeDefinitionActions(intent.id);
+        const observedTeamRevision = intent.observedTeams?.get(intent.id)?.revision;
+        const teamReceiptCurrent = result.team && (observedTeamRevision === undefined || result.team.revision > observedTeamRevision);
+        let acceptedTeam;
+        if (teamReceiptCurrent && !intent.superseded) { acceptedTeam = mergeTeam(result.team); observeTeams([acceptedTeam], intent); }
         if (result.favorite && !intent.superseded && !favorites.some(item => item.id === result.favorite.id)) favorites.push(result.favorite);
-        if (result.run?.purpose === "test") testRuns = [result.run, ...testRuns.filter(run => run.id !== result.run.id)];
-        if (result.run && !intent.clearedRunIds?.has(result.run.id) && !intent.observedRunIds?.has(result.run.id)) { if (result.run.purpose !== "test") {
+        const runReceiptCurrent = authority === runAuthority && !runAccessBlocked
+          && contentRevision === (context().contentRevision ?? 0) && intent.contentRevision === contentRevision;
+        if (runReceiptCurrent && result.run?.purpose === "test" && (!intent.observedTeams?.has(intent.id)
+          || intent.observedTeams.get(intent.id).testKey === intent.initialTestKey)) testRuns = [result.run, ...testRuns.filter(run => run.id !== result.run.id)];
+        if (runReceiptCurrent && result.run && !intent.clearedRunIds?.has(result.run.id) && !intent.observedRunIds?.has(result.run.id)) { if (result.run.purpose !== "test") {
           const index = runs.findIndex(item => item.id === result.run.id);
           if (index < 0) runs.unshift(result.run); else if (!terminal(runs[index]) || terminal(result.run)) runs[index] = result.run;
           observeRuns([result.run.id], intent);
         } }
-        if (!intent.superseded) intent.accept?.(result);
+        const receipt = result.team ? { ...result, team: acceptedTeam ?? teams.find(team => team.id === result.team.id) ?? result.team } : result;
+        if (!intent.superseded && !newerDefinition && !observedFavoriteDeletion
+          && (intent.kind !== "test" || runReceiptCurrent)) intent.accept?.(receipt, intent);
+        if (intent.kind === "favorite" && !intent.superseded) showFavoritesContent();
+        clearIntentProblem(intent);
         intents.delete(intent.slot); status.textContent = t("Connection recovered.");
-        return intent.superseded ? undefined : result;
+        return intent.superseded ? undefined : receipt;
       } catch (problem) {
         if (!current(gen)) return;
         if (intent.superseded) { intents.delete(intent.slot); return; }
         if (!isTeamActionUncertain(problem)) intents.delete(intent.slot);
         else intent.uncertain = true;
-        if (problem && typeof problem === "object") actionKinds.set(problem, intent.kind);
+        if (problem && typeof problem === "object") { actionKinds.set(problem, intent.kind); problemIntents.set(problem, intent); }
+        if (["start", "run", "test"].includes(intent.kind) && [401, 403, 404].includes(problem?.status)) clearPrivateRuns(true);
         showError(problem); throw problem;
       } finally { if (current(gen)) { intent.busy = false; epoch++; render(); onChange(); void refresh(); } }
     })(); return intent.promise;
   }
   function mutate(slot, kind, id, value, call, accept) {
     const previous = intents.get(slot); if (previous) return attempt(previous);
-    const intent = { slot, kind, id, generation, scope, input: structuredClone(value), call: () => call(intent.input), accept, busy: false };
+    const intent = { slot, kind, id, generation, scope, contentRevision: context().contentRevision ?? 0,
+      definitionRevision: teams.find(team => team.id === id)?.revision ?? 0,
+      initialTestKey: testMetadataKey(teams.find(team => team.id === id)),
+      input: structuredClone(value), call: () => call(intent.input), accept, busy: false };
     intents.set(slot, intent); if (kind === "start") hadTaskActivity = true; return attempt(intent);
   }
   async function recoverActions() {
@@ -263,7 +322,7 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       if (!intent.busy) { try { await attempt(intent); } catch { /* The original action remains reviewable. */ } } }
   }
   function changed() {
-    if (!draft) return; updateDirty(); draftVersion++; error.textContent = ""; displayedProblem = null;
+    if (!draft) return; updateDirty(); draftVersion++; error.textContent = ""; displayedProblem = null; displayedProblemText = null;
     if (dirty && (saved()?.enabled || pendingEnable(editId))) void control(saved(), false).catch(() => {});
     renderButtons();
   }
@@ -328,14 +387,19 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     if (!current(gen) || editId !== selectedId || !team || !acknowledgeShared(team.draft)) return;
     const ctx = context(), id = team.id;
     return mutate(`test:${id}`, "test", id, { expected_revision: team.revision, content_revision: ctx.contentRevision ?? 0,
-      solo_transfer_ack: ctx.sessionMode === "solo", idempotency_key: makeKey("team-test") }, value => api.executeAgentTeam(ctx.sessionId, id, value, true), result => {
+      solo_transfer_ack: ctx.sessionMode === "solo", idempotency_key: makeKey("team-test") }, value => api.executeAgentTeam(ctx.sessionId, id, value, true), (result, intent) => {
         const stored = teams.find(item => item.id === id);
-        if (stored?.revision === team.revision) Object.assign(stored, { enabled: false, tested_revision: null, test_run_id: result.run.id, test_session_id: ctx.sessionId,
+        const observed = intent.observedTeams?.get(id);
+        // A pre-acceptance GET may still say not_tested. The accepted probe
+        // must then latch even if the following GET fails. A later observed
+        // running/terminal test stamp, however, outranks this original ACK.
+        if ((!observed || observed.testKey === intent.initialTestKey)
+          && stored?.revision === team.revision && testMetadataKey(stored) === intent.initialTestKey) Object.assign(stored, { enabled: false, tested_revision: null, test_run_id: result.run.id, test_session_id: ctx.sessionId,
           test_status: ["completed", "running"].includes(result.run.status) ? "running" : "failed" });
       });
   }
   function openEditor(team) {
-    if (team === null && teams.length >= 5) { error.textContent = t("Team limit reached (5). Delete one to add another."); return; }
+    if (team === null && teams.length >= 5) { showLocalError("Team limit reached (5). Delete one to add another."); return; }
     if (dirty && !confirm(t("Discard unsaved changes?"))) return;
     editId = team?.id ?? makeKey("team"); baseRevision = team?.revision ?? null;
     draft = team ? structuredClone(team.draft) : { name: t("New Agent Team"), team_prompt: "", nodes: [], edges: [] };
@@ -346,17 +410,18 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     if (team?.test_status === "failed") void loadTestFailure(team);
   }
   async function loadTestFailure(team) {
-    if (!team?.test_run_id || !team.test_session_id || !api.getTeamRun || testRuns.some(run => run.id === team.test_run_id)
+    if (runAccessBlocked || !team?.test_run_id || !team.test_session_id || !api.getTeamRun || testRuns.some(run => run.id === team.test_run_id)
       || testReads.has(team.test_run_id) && Date.now() - testReads.get(team.test_run_id) < 12000) return;
-    const gen = generation, id = team.test_run_id; testReads.set(id, Date.now());
+    const gen = generation, authority = runAuthority, contentRevision = context().contentRevision ?? 0, id = team.test_run_id; testReads.set(id, Date.now());
     try {
       const result = await api.getTeamRun(team.test_session_id, id);
-      if (!current(gen) || result.run?.purpose !== "test" || result.run.id !== id || !teams.some(item => item.test_run_id === id)) return;
+      if (!current(gen) || authority !== runAuthority || runAccessBlocked || contentRevision !== (context().contentRevision ?? 0)
+        || result.run?.purpose !== "test" || result.run.id !== id || !teams.some(item => item.test_run_id === id)) return;
       testRuns = [result.run, ...testRuns.filter(run => run.id !== id)]; renderButtons(); onChange();
     } catch { /* A removed record or changed access cannot expose an old private failure. */ }
   }
   function insertModule(snapshot) {
-    if (!draft || draft.nodes.length >= 16) { error.textContent = t("Maximum 16 modules and 32 data flows."); return; }
+    if (!draft || draft.nodes.length >= 16) { showLocalError("Maximum 16 modules and 32 data flows."); return; }
     const index = draft.nodes.length, id = makeKey("module"); let slot = 0;
     while (slot < 64 && draft.nodes.some(node => Math.abs(node.x - (60 + slot % 4 * 290)) < 245
       && Math.abs(node.y - (70 + Math.floor(slot / 4) * 180)) < 130)) slot++;
@@ -389,7 +454,8 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     const gen = generation; void refreshSources().then(() => { if (current(gen)) updateContext(); }).catch(() => {}); });
   function selectField(text, choices, value, change, disabled = false) {
     const select = el("select"); select.id = `team-selection-${text.toLowerCase().replaceAll(" ", "-")}`; select.setAttribute("aria-label", t(text));
-    for (const item of choices) { const option = el("option", "", item.label); option.value = item.key; option.disabled = item.available === false; select.append(option); }
+    for (const item of choices) { const option = el("option", "", item.available === false ? `${item.label} · ${t("Unavailable")}` : item.label);
+      option.value = item.key; option.disabled = item.available === false; select.append(option); }
     select.value = value ?? ""; if (!choices.some(item => item.key === value)) select.selectedIndex = -1;
     select.disabled = disabled || !choices.length;
     select.addEventListener("change", () => change(select.value)); return field(text, select);
@@ -418,15 +484,27 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       const targetBase = value => { if (!value) return null; const { reasoning_effort: _effort, ...base } = value; return base; };
       const model = connection?.models.find(item => teamModelKey(item.target) === teamModelKey(node.target)
         && JSON.stringify(item.target) === JSON.stringify(targetBase(node.target)));
+      // Catalogs are advisory and may remove an exact route. Keep the saved
+      // selection visible and disabled, never silently show/select a substitute.
+      const unavailable = (key, label) => ({ key, label, available: false });
+      const connectionChoices = [...choices];
+      if (node.target && !connection) connectionChoices.unshift(unavailable(teamConnectionKey(node.target), node.target.kind === "cloud"
+        ? t("Cloud Agent") : `${node.target.harness === "codex" ? "Codex" : "DSH"} · ${node.target.runtime_id ?? node.target.share_id}`));
+      const modelChoices = [...(connection?.models ?? [])];
+      const selectedModelKey = node.target && !model && modelChoices.some(item => item.key === teamModelKey(node.target))
+        ? `saved:${teamModelKey(node.target)}` : node.target ? teamModelKey(node.target) : undefined;
+      if (node.target && !model) modelChoices.unshift(unavailable(selectedModelKey, `${node.target.provider} · ${node.target.model}`));
       const profileFields = el("div", "team-model-grid");
-      profileFields.append(selectField("Agent", choices, teamConnectionKey(node.target), key => {
+      profileFields.append(selectField("Agent", connectionChoices, teamConnectionKey(node.target), key => {
         const next = choices.find(item => item.key === key); node.target = teamTargetForModel(next?.models.find(item => item.available !== false)); changed(); canvas.render(); renderInspector();
       }));
-      profileFields.append(selectField("Model", connection?.models ?? [], model?.key, key => {
+      profileFields.append(selectField("Model", modelChoices, selectedModelKey, key => {
         node.target = teamTargetForModel(connection.models.find(item => item.key === key)); changed(); canvas.render(); renderInspector();
       }));
       const efforts = model?.efforts ?? [];
-      profileFields.append(selectField("Reasoning effort", efforts.map(value => ({ key: value, label: t(value) })), node.target?.reasoning_effort, value => {
+      const effortChoices = efforts.map(value => ({ key: value, label: t(value) }));
+      if (node.target?.reasoning_effort && !efforts.includes(node.target.reasoning_effort)) effortChoices.unshift(unavailable(node.target.reasoning_effort, t(node.target.reasoning_effort)));
+      profileFields.append(selectField("Reasoning effort", effortChoices, node.target?.reasoning_effort, value => {
         const next = teamTargetForModel(model, value); if (!next) return; node.target = next; changed();
       }, !efforts.length)); inspector.append(profileFields);
       if (!efforts.length) inspector.append(el("p", "field-help", t("No reasoning choices advertised.")));
@@ -447,7 +525,7 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
           void mutate(`favorite:${id}`, "favorite", id, { idempotency_key: makeKey("team-unfavorite") },
             value => api.deleteTeamItem("module", id, value), () => { supersedeFavoriteCreation(id); favorites = favorites.filter(item => item.id !== id); renderInspector(); }).catch(showError);
         } else {
-          if (favorites.length >= 5) { error.textContent = t("Favorite limit reached (5). Remove one to add another."); return; }
+          if (favorites.length >= 5) { showLocalError("Favorite limit reached (5). Remove one to add another."); return; }
           const id = makeKey("favorite");
           void mutate(`favorite-node:${node.id}`, "favorite", id, { module: moduleSnapshot(node), idempotency_key: makeKey("team-favorite") },
             value => api.saveTeamModule(id, value), () => renderInspector()).catch(showError).finally(refreshFavoriteState);
@@ -470,7 +548,7 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       const endpoints = draft.nodes.map(node => ({ key: node.id, label: node.label })), endpointsGrid = el("div", "team-edge-endpoints");
       function updateEdge(property, value) {
         const candidate = { ...edge, [property]: value };
-        if (!teamEdgeAllowed(draft.edges, candidate.source, candidate.target, candidate.direction, edge.id)) { error.textContent = t("This route already exists, or its endpoints are invalid."); renderInspector(); return; }
+        if (!teamEdgeAllowed(draft.edges, candidate.source, candidate.target, candidate.direction, edge.id)) { showLocalError("This route already exists, or its endpoints are invalid."); renderInspector(); return; }
         Object.assign(edge, candidate); changed(); canvas.render(); renderInspector();
       }
       endpointsGrid.append(selectField("Source", endpoints, edge.source, value => updateEdge("source", value)),
@@ -494,19 +572,27 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     if (!secondary.open) secondary.showModal();
   }
   function showFavorites() {
+    const previous = doc.activeElement, focusKey = previous?.dataset?.teamFavoriteControl;
     secondaryMode = "favorites"; secondaryTitle.textContent = `${t("Favorite modules")} (${favorites.length}/5)`; secondaryBody.replaceChildren();
     if (!favorites.length) secondaryBody.append(el("p", "field-help", t("No favorite modules yet.")));
     const favoriteList = el("ul", "team-library-list");
     for (const favorite of favorites) {
       const row = el("li", "team-library-row"), choose = button("", () => { insertModule(favorite.module); secondary.close(); }, "team-row-edit");
+      choose.dataset.teamFavoriteControl = `pick:${favorite.id}`;
       choose.textContent = favorite.module.label;
       const remove = button("Delete", () => { void mutate(`favorite:${favorite.id}`, "favorite", favorite.id,
         { idempotency_key: makeKey("team-unfavorite") }, value => api.deleteTeamItem("module", favorite.id, value), () => {
           supersedeFavoriteCreation(favorite.id); favorites = favorites.filter(item => item.id !== favorite.id); showFavoritesContent(); renderInspector();
         }).catch(showError); }, "text-button team-danger");
+      remove.dataset.teamFavoriteControl = `delete:${favorite.id}`;
       remove.setAttribute("aria-label", `${t("Delete")}: ${favorite.module.label}`); row.append(choose, remove); favoriteList.append(row);
     }
     secondaryBody.append(favoriteList); if (!secondary.open) secondary.showModal();
+    if (focusKey && previous.isConnected === false && [previous, doc.body].includes(doc.activeElement)) {
+      const replacement = [...secondaryBody.querySelectorAll("[data-team-favorite-control]")].find(node => node.dataset.teamFavoriteControl === focusKey)
+        ?? secondaryHeader.querySelector("button");
+      replacement?.focus({ preventScroll: true });
+    }
   }
   const showFavoritesContent = () => { if (dialog.open && secondary.open && secondaryMode === "favorites") showFavorites(); };
   function renderButtons() {
@@ -543,11 +629,12 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       summary.textContent = `${teams.find(team => team.id === run.definition_id)?.draft.name ?? "Team"} · ${t(needsClarification ? "Awaiting clarification" : run.status)} · ${run.calls_used}/${run.max_calls}`;
       const actions = el("div", "team-run-actions");
       const available = run.status === "running" ? [["pause", "Pause"], ["stop", "Stop"]] : run.status === "paused"
-        ? [[run.error_code === "agent_timeout" ? "continue" : "resume", needsClarification ? "Continue after clarification" : run.error_code === "agent_timeout" ? "Continue" : "Resume"], ["stop", "Stop"]] : [];
+        ? [...(run.error_code === "agent_timeout" && !teamTimeoutContinuationAvailable(run) ? []
+          : [[run.error_code === "agent_timeout" ? "continue" : "resume", needsClarification ? "Continue after clarification" : run.error_code === "agent_timeout" ? "Continue" : "Resume"]]), ["stop", "Stop"]] : [];
       for (const [action, label] of available) {
         const controlButton = button(label, () => void controlRun(run, action).catch(showError), action === "stop" ? "team-glass team-danger" : "team-glass");
         controlButton.dataset.teamControl = `run:${run.id}:${action}`;
-        controlButton.disabled = !context().writable || Boolean(intents.get(`run-${action}:${run.id}`)?.busy); actions.append(controlButton);
+        controlButton.disabled = !(action === "stop" ? canControl() : context().writable) || Boolean(intents.get(`run-${action}:${run.id}`)?.busy); actions.append(controlButton);
       }
       if (terminal(run) && api.forgetTeamRun) {
         const slot = `forget:${run.id}`, clear = button("Clear private record", () => {
@@ -603,7 +690,9 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   }
   const activeRun = () => {
     const pending = intents.get("start-task"), ctx = context();
+    if (runAccessBlocked) return undefined;
     if (!pending) return runs.find(run => ["running", "paused"].includes(run.status));
+    if (pending.contentRevision !== (ctx.contentRevision ?? 0)) return undefined;
     const runId = pendingCanonicalRunId(pending, ctx);
     if (!runId || pending.clearedRunIds?.has(runId)) return undefined;
     const known = runs.find(run => run.id === runId);
@@ -649,7 +738,7 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       rulesInput.setAttribute("aria-label", t("Team rules"));
       if (draft) { canvas.render(); renderInspector(); }
       if (secondary.open) { if (secondaryMode === "favorites") showFavorites(); else if (secondaryMode === "relationships") showRelationships(); }
-      render(); if (displayedProblem) showError(displayedProblem); },
+      render(); if (displayedProblem) showError(displayedProblem); else if (displayedProblemText) error.textContent = t(displayedProblemText); },
     t, choices: () => teams.filter(team => team.enabled && canEnable(team)).map(team => ({ key: `team:${team.id}`, label: team.draft.name, team })),
     selected: () => teams.find(team => `team:${team.id}` === selectedKey), select(key) { selectedKey = key; }, selectionKey: () => selectedKey,
     startTask, pendingStart: () => intents.has("start-task"), activeRun, recover: recoverActions, runNotice,

@@ -60,6 +60,14 @@ test("memory state is cloned and schema validated", async () => {
   assert.equal((await store.load())?.binding.sessionId, "session-1");
 });
 
+test("native exit receipts retain exact metadata without accepting content or invalid attempts", () => {
+  const receipt = { requestId: "request-1", runtimeId: "runtime-1", claimAttempt: 3 };
+  assert.deepEqual(validateConnectorState({ ...state, stoppedExecutions: [receipt] }).stoppedExecutions, [receipt]);
+  for (const invalid of [{ ...receipt, claimAttempt: 0 }, { ...receipt, content: "must not persist" }, { ...receipt, runtimeId: "" }]) {
+    assert.throws(() => validateConnectorState({ ...state, stoppedExecutions: [invalid] }));
+  }
+});
+
 test("frozen DSH context stays in the private active request, is bounded, and validates the exact request fence", async () => {
   const contextExecution = {
     sessionId: `gatherthread-execution-${"a".repeat(32)}`, selectedOnly: false,

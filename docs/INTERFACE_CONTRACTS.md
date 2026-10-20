@@ -165,7 +165,7 @@ An `agent_request` names an exact harness/model profile and eligible runtime. Th
 - The final response does not close the claim until it is durably committed.
 - Other connected harnesses may passively project the result but cannot execute the same request.
 - A claim carries a server-assigned lease and is renewed only by accepted `agent_progress` from its holder. Runtime presence never extends a lease.
-- A lapsed exact-runtime claim may be reclaimed only by the runtime recorded in the request profile. Reclaim never changes device, harness, provider, model, or runtime implicitly. Legacy requests without a runtime target retain their existing fail-closed selection rules. Only a live claim occupies a runtime's single active slot.
+- A lapsed exact-runtime claim may be reclaimed only by the runtime recorded in the request profile. Reclaim never changes device, harness, provider, model, or runtime implicitly. Legacy requests without a runtime target retain their existing fail-closed selection rules. Ordinary claims occupy the runtime slot only while live; native Team execution additionally retains the exit-confirmation hold described below.
 - Claim success includes `attempt_count`. Progress and completion may send it as `claim_attempt`; current connectors always do. The server rejects an expired lease or a superseded attempt. For compatibility with Alpha connectors, omission is accepted only on attempt 1.
 - Reclaim is bounded. A request past the attempt budget terminates as `failed`: claiming it returns `agent_request_failed`, the server commits and publishes exactly one canonical `agent_response` with `status: "failed"` and no capture-fidelity or runtime-provenance claim, and a connector treats that conflict as terminal rather than retrying it.
 - The author of a request may **pause** it. Pausing is authorized to that author alone — a project owner who did not ask has no more right to stop it than to have asked it — and it is idempotent. A paused request is never handed to a runtime: claiming it returns `status: "paused"`, which is neither an execution nor a failure. A connector skips it, and no later lease lapse re-opens it.
@@ -174,6 +174,50 @@ An `agent_request` names an exact harness/model profile and eligible runtime. Th
 - A paused request is a record, not a queue entry. Continuing is a **new** `agent_request`, exactly as retrying a failed one is: the new request's position in the log is what lets the resumed run see anything said while it was stopped.
 
 The Web composer reuses `send-agent-button` for its author's latest ordinary request, with `data-agent-action=request|wait|pause|resume`, bilingual accessible names and `aria-busy` during control writes. `POST /v1/sessions/:id/agent-requests/:eventId/pause` retains its strict empty JSON body and existing author/write checks. Resume uses the existing event append route with the original execution profile and message references and one stable retry key; it does not reopen a claim or change native connector contracts. `add-agent-button` opens the existing Agents settings section without changing the project/session URL or granting permissions.
+
+Native Team claims require `execution_control_version:1` in the claim input;
+older native clients receive 409 `agent_execution_control_required` before work
+is admitted. Ordinary non-Team claims retain their previous compatibility.
+Updated bridges and DSH must be installed together with this preview server.
+`GET /v1/sessions/:session_id/agent-requests/:request_id/execution` takes strict
+`runtime_id,claim_attempt` query fields and returns `{ data:{ active:boolean } }`.
+It observes current authority, context, lease and Team control without renewing
+the lease or exposing content. The native executor requires an initial active
+confirmation and watches it during execution; explicit invalidation aborts the
+exact native turn. Unknown transport results are not exit confirmation.
+After the native executor has actually settled, the same device posts strict
+`{ runtime_id,claim_attempt }` to `/execution/stopped`, returning
+`{ data:{ active:false } }`. Only that exact attempt's capacity hold is cleared;
+an old acknowledgment cannot clear another attempt. Exact authenticated-device cleanup can acknowledge an archived/read-only
+session or revoked runtime/membership without gaining read, execution or write permission.
+Deletion of a session, project, runtime or claim preserves an outstanding native
+hold in a separate content-free identity record. The original active device can
+acknowledge that exact identity even after its history resources are gone.
+Missing and unauthorized identities receive the same content-free no-op reply,
+without modifying another device's hold or revealing whether a claim exists.
+A generic HTTP 404 is never interpreted as exit confirmation by a client.
+After a client has observed the execution-control surface, a later 404 invalidates
+the execution but does not downgrade that surface to an unsupported old server;
+the client still records and retries its exact exit acknowledgment after stopping.
+Team pause, deadline, lease expiry, private Forget and restart retain the hold
+until confirmed native exit or accepted completion. Additive `execution_pending`
+claim metadata survives restart; earlier claimed/paused/failed rows with a
+surviving Team marker or an erased request are conservatively backfilled. A server-generated
+failure answer after lease expiry is not native-exit evidence. A disconnected
+client cannot imply process exit.
+New Team native holds are bounded at 1,000 per account and 100,000 globally;
+legacy holds are preserved even above these admission limits. Ordinary claims
+do not acquire new Team holds, but all native and shared admission respects a
+detached hold in the same device/project/harness pool. Live and detached copies
+of one exact attempt count once. `agent_team_native_exit_pending` explains a
+queued call blocked by a previous exit; `agent_team_native_hold_capacity`
+explains the separate safety-record limit without exposing another account.
+This is a coordinated preview upgrade: stop old connectors and confirm their
+native turns have exited before replacing them. Conservative legacy holds with
+no surviving local exit receipt cannot be cleared merely by reconnecting or
+waiting; the owning exact device must confirm the old attempt's actual exit.
+Content-free pending exit receipts are persisted locally and retried on reconnect
+without rerunning a turn. These APIs remain connector-only, outside user MCP.
 
 ## Snapshot and visible-history boundary
 
@@ -505,7 +549,10 @@ even when every old definition was already deleted. Test completion persists its
 stamp on the server without requiring a library read; forgetting or pruning the
 private test record does not erase that stamp. Replacing or deleting a definition
 atomically fences its old connectivity test before acknowledging the library
-mutation; exact receipt recovery can retry physical cleanup. Accepted task runs
+mutation; exact receipt recovery can retry physical cleanup. A replacement test
+must pass admission in that same transaction: a rejected replacement preserves
+the old probe, claims, canonical head and allowances. Physical cancellation runs
+only after the replacement transaction commits. Accepted task runs
 remain independent. A favorite inserted into a
 graph receives a new node identity and position. At the atomic five-item limit,
 new entries return 409 `agent_team_limit` or `agent_team_favorite_limit`; unbound
@@ -526,7 +573,13 @@ client must not replace a later observed run status with a delayed Start or
 control response; it still settles the original intent and refreshes current
 state. A confirmed removal also fences outstanding run/favorite creation
 responses so reconnect cannot restore an already cleared private record or
-deleted favorite. A new exact-key recovery attempt can read the current receipt.
+deleted favorite. Access denial and content-revision invalidation also fence
+pending Start/control cache writes, including runs never previously listed.
+Receipt acceptance may still settle the original composer intent without
+restoring invalid private data. Reauthorization requires a fresh authorized read.
+At equal definition revision, delayed Save/Test acknowledgments cannot replace
+newer observed test metadata; a new exact recovery may read current state.
+A new exact-key recovery attempt can read the current receipt.
 Pause/Stop fence execution before acknowledging. If native cancellation fails
 after that durable transition, same-state receipt recovery, startup and bounded
 coordinator retries repair the outstanding claim; they do not reopen the run,

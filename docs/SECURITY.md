@@ -393,6 +393,30 @@ a raw plan to the run collection.
 Pause/Stop control admission has bounded independent emergency capacity. Unknown
 mutation acknowledgments preserve the original body/key for recovery rather
 than issuing a new task; reads and receipt recovery cannot hold Stop hostage.
+Native cancellation propagates to the exact executor's AbortSignal. Refusing
+late publication alone is insufficient: capacity remains held until native exit
+is acknowledged, including after lease expiry, private erasure and reconnect.
+Metadata-only observation/exit acknowledgment is bound to the authenticated
+device, runtime and claim attempt and never authorizes another execution.
+Session, project, runtime and claim deletion atomically detach outstanding holds
+before removing their routing metadata. These records retain only fixed native
+attempt identity, owner/device/project/session/harness IDs and creation time;
+they contain no task, prompt, credential or local session identifier. They have
+no history-resource foreign key or expiry that could imply physical exit, and
+are deleted by an exact original-device exit acknowledgment or account/device
+cleanup. Missing and foreign acknowledgment targets are indistinguishable
+content-free no-ops. New Team hold admission is bounded per account and globally;
+old holds are never evicted to admit new work. A failed preparation, writer-lock
+refusal, uncertain host-idle result or arbitrary exception is not exit evidence
+and cannot clear another invocation's hold. Durable receipt and cursor updates
+merge current state after network waits instead of restoring stale snapshots.
+Codex cancellation also covers automatic context compaction. Verified turn
+identity and terminal evidence permit exact interruption without stopping
+unrelated threads; if identity or terminal evidence cannot be obtained, the
+owned-process fallback may interrupt other threads in that same process.
+Team control-block extraction uses bounded, linear scanning before parsing the
+small candidate JSON; a malformed but size-legal reply cannot trigger unbounded
+cross-line backtracking. Long public answers may retain a short valid control block.
 Canonical `agent_team` ownership is server reserved and continues fencing a
 request after private run Forget or pruning. Generic event writes, local-turn
 uploads and ordinary cloud continuation cannot turn such a request into an

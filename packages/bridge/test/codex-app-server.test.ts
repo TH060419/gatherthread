@@ -18,6 +18,9 @@ import {
   CodexAppServerExecutor,
   CodexProjectHarness,
   HarnessExecutionTerminatedError,
+  HarnessExecutionUnconfirmedError,
+  LocalBridge,
+  MemoryCursorStore,
   buildVisibleHistoryImport,
   codexSessionKey,
   discoverCompletedLocalTurns,
@@ -3538,6 +3541,31 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   );
 });
 
+for (const status of ["prepared", "started"] as const) {
+  test(`a recovered ${status} Team journal cannot release another native owner's execution hold`, async () => {
+    const workspacePath = await realpath(await mkdtemp(path.join(tmpdir(), `gt-native-owner-${status}-`)));
+    const statePath = path.join(workspacePath, "state.json"), request = canonical(3, "agent_request", { content: "same accepted request", agent_team: {} });
+    const initial = { ...projectionState(workspacePath), executionJournal: { [request.id]: { requestId: request.id, status,
+      ...(status === "started" ? { turnId: "unconfirmed-turn" } : {}) } } };
+    await writeFile(statePath, JSON.stringify(initial));
+    let acknowledgments = 0;
+    const api = { async registerRuntime() { return registeredRuntime("old-thread"); },
+      async readEvents(_session: string, after: number) { return { events: after < 3 ? [request] : [], hasMore: false, nextSequence: 3 }; },
+      async claimAgentRequest() { return { claimed: true, status: "claimed", requestId: request.id, runtimeId: "runtime-1", attemptCount: 1 }; },
+      async readAgentExecution() { return { active: true }; },
+      async acknowledgeAgentExecutionStopped() { acknowledgments += 1; },
+    } as unknown as CollaborationApi;
+    const client = { processGeneration: 1, async close() {}, async startThread() { throw new Error("must not replace an unconfirmed native owner"); } } as unknown as CodexAppServerClient;
+    const executor = new CodexAppServerExecutor({ client, workspacePath, statePath, threadName: "uncertain recovery", model: "gpt-test", threadSource: "exec" });
+    const cursorStore = new MemoryCursorStore();
+    const bridge = new LocalBridge({ api, cursorStore, runtime: registeredRuntime("old-thread"), transcriptRoots: {} });
+    await bridge.connect();
+    await assert.rejects(bridge.processAgentRequest(request, executor), HarnessExecutionUnconfirmedError);
+    assert.equal(acknowledgments, 0); assert.equal((await cursorStore.load()).stoppedExecutions, undefined);
+    assert.equal(JSON.parse(await readFile(statePath, "utf8")).executionJournal[request.id].status, status);
+  });
+}
+
 test("failed and cancelled Codex turns persist terminal journals for idempotent claim completion", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-terminal-journal-"));
   const statePath = path.join(directory, "state.json");
@@ -4058,6 +4086,9 @@ for await (const line of lines) {
     // discovery fails fast instead of waiting for its own request timeout.
     fail(message.id, "Method not found");
   } else if (message.method === "thread/compact/start") {
+    process.stdout.write(JSON.stringify({ method: "item/started", params: {
+      threadId: message.params.threadId, turnId: "compact-turn", item: { type: "contextCompaction" },
+    } }) + "\\n");
     respond(message.id, {});
     process.stdout.write(JSON.stringify({ method: "thread/tokenUsage/updated", params: {
       threadId: message.params.threadId, turnId: "compact-" + message.id, tokenUsage: { modelContextWindow: 4096, last: { totalTokens: 500 } },

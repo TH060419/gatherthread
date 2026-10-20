@@ -153,7 +153,11 @@ export class CodexCliExecutor implements HarnessExecutor {
       );
     }
 
-    const result = await this.#runCodex(prompt, state?.threadId, workspacePath);
+    const signals = [this.#signal, input.signal].filter((signal): signal is AbortSignal => signal !== undefined);
+    const signal = signals.length ? AbortSignal.any(signals) : undefined;
+    signal?.throwIfAborted();
+    const result = await this.#runCodex(prompt, state?.threadId, workspacePath, signal);
+    signal?.throwIfAborted();
     await this.#saveState({
       version: 1,
       gatherThreadSessionId: input.request.sessionId,
@@ -171,6 +175,7 @@ export class CodexCliExecutor implements HarnessExecutor {
     prompt: string,
     threadId: string | undefined,
     workspacePath: string,
+    signal?: AbortSignal,
   ): Promise<CodexRunResult> {
     const args = threadId
       ? [
@@ -191,7 +196,7 @@ export class CodexCliExecutor implements HarnessExecutor {
       env: this.#env,
       timeoutMs: this.#timeoutMs,
       maxOutputBytes: this.#maxOutputBytes,
-      signal: this.#signal,
+      signal,
     });
     return parseCodexJsonl(output.stdout, {
       expectedThreadId: threadId,
@@ -784,10 +789,10 @@ function runProcess(options: {
     const stderr: Buffer[] = [];
     let outputBytes = 0;
     let settled = false;
+    let terminationError: Error | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
     const timeout = setTimeout(() => {
-      terminateChild();
-      finish(new Error("Codex execution timed out"));
+      terminateChild(new Error("Codex execution timed out"));
     }, options.timeoutMs);
     timeout.unref();
 
@@ -801,14 +806,14 @@ function runProcess(options: {
       else resolve(result ?? { stdout: "", stderr: "" });
     };
     const abort = () => {
-      terminateChild();
-      finish(new Error("Codex execution aborted"));
+      terminateChild(options.signal?.reason instanceof Error ? options.signal.reason : new Error("Codex execution aborted"));
     };
     options.signal?.addEventListener("abort", abort, { once: true });
     child.stdout.on("data", collect(stdout));
     child.stderr.on("data", collect(stderr));
     child.once("error", () => finish(new Error("Codex CLI could not be started; install Codex and confirm `codex login status`")));
     child.once("close", (code, signal) => {
+      if (terminationError) { finish(terminationError); return; }
       const result = {
         stdout: Buffer.concat(stdout).toString("utf8").trim(),
         stderr: Buffer.concat(stderr).toString("utf8").trim(),
@@ -828,14 +833,15 @@ function runProcess(options: {
       return (chunk) => {
         outputBytes += chunk.length;
         if (outputBytes > options.maxOutputBytes) {
-          terminateChild();
-          finish(new Error("Codex output exceeded the configured limit"));
+          terminateChild(new Error("Codex output exceeded the configured limit"));
           return;
         }
         target.push(chunk);
       };
     }
-    function terminateChild() {
+    function terminateChild(error: Error) {
+      if (terminationError) return;
+      terminationError = error;
       child.kill("SIGTERM");
       forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
       forceKillTimer.unref();

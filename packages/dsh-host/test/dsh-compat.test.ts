@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createLiveOutputPublisher, type LiveOutputUpdate } from "@gatherthread/adapters";
+import { HarnessExecutionUnconfirmedError, HarnessExecutionTerminatedError } from "@gatherthread/bridge";
 import {
   DSH_COMPATIBILITY,
   DSH_COMPATIBILITY_MATRIX,
@@ -1264,7 +1265,8 @@ test("Host facade rejects concurrent prompts and unavailable pinned message APIs
   f.holdIdle();
   const first = facade.prompt("one");
   await new Promise<void>((resolve) => setImmediate(resolve));
-  await assert.rejects(facade.prompt("two"), /only one active prompt/);
+  await assert.rejects(facade.prompt("two"), (error: unknown) => error instanceof HarnessExecutionUnconfirmedError
+    && /only one active prompt/.test(error.message));
   f.releaseIdle();
   await first;
   await facade.dispose();
@@ -1293,6 +1295,31 @@ test("Host facade disposal interrupts an active prompt before flush or result pu
   assert.equal(f.calls.dispose, 1);
   assert.equal(f.calls.flush, 0);
   assert.equal(f.listenerCount(), 0);
+});
+
+test("Host facade never treats a premature whenIdle reply as native execution termination", async () => {
+  const { f, facade } = facadeFixture(false);
+  f.agent.whenIdle = async () => {};
+  await assert.rejects(facade.prompt("one"), (error: unknown) => error instanceof HarnessExecutionUnconfirmedError
+    && /without an idle acknowledgment/.test(error.message));
+  assert.equal(f.calls.flush, 0);
+  await facade.dispose();
+});
+
+test("Host facade emits cancellation exit evidence only after the real native idle fence", async () => {
+  const { f, facade } = facadeFixture(false);
+  const abort = new AbortController();
+  Object.assign(f.agent, { cancel() { f.releaseIdle(); } });
+  f.holdIdle();
+  const prompt = facade.prompt("one", undefined, undefined, abort.signal);
+  const rejected = assert.rejects(prompt, (error: unknown) => error instanceof HarnessExecutionTerminatedError
+    && error.failureCode === "dsh_native_execution_cancelled");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(f.calls.followup, 1);
+  abort.abort(new Error("fixture canceled"));
+  await rejected;
+  assert.equal(f.agent.status, "idle"); assert.equal(f.calls.flush, 0);
+  await facade.dispose();
 });
 
 test("Host facade aborts delayed create and resume without retaining a late handle", async () => {

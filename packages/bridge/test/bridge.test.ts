@@ -7,6 +7,7 @@ import {
   BridgeDaemon,
   CollaborationHttpError,
   HarnessExecutionTerminatedError,
+  HttpCollaborationClient,
   LocalBridge,
   MemoryCursorStore,
   type AppendEventInput,
@@ -299,6 +300,138 @@ test("native execution is aborted when authoritative revision changes without a 
     return { events: [{ localEventId: "late", harness: "codex", kind: "assistant", text: "OLD_CONTEXT_ANSWER", captureFidelity: "harness_transcript" }] };
   } }), /history changed|context.*changed/i);
   assert.equal(api.completeInput, undefined);
+});
+
+test("native exit acknowledgment survives transport failure and reconnect without re-execution", async () => {
+  const api: CollaborationApi = new FakeApi();
+  const cursorStore = new MemoryCursorStore();
+  const receipt = { sessionId: "session-1", requestId: "event-1", runtimeId: "runtime-1", claimAttempt: 2 };
+  const request = canonical("session-1", 1, { type: "agent_request", idempotencyKey: "team", payload: { content: "test", agent_team: {} } });
+  (api as FakeApi).history.push(request);
+  let executions = 0, acknowledgments = 0;
+  api.readAgentExecution = async () => ({ active: true });
+  api.acknowledgeAgentExecutionStopped = async () => { acknowledgments += 1; if (acknowledgments === 1) throw new Error("ACK transport unknown"); };
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  await assert.rejects(bridge.processAgentRequest(request, { async execute() {
+    executions += 1;
+    return { events: [{ localEventId: "done", harness: "codex", kind: "assistant", text: "done", captureFidelity: "harness_transcript" }] };
+  } }), /ACK transport unknown/);
+  assert.deepEqual((await cursorStore.load()).stoppedExecutions, [receipt]);
+  await new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} }).connect();
+  assert.equal(executions, 1); assert.equal(acknowledgments, 2);
+  assert.deepEqual((await cursorStore.load()).stoppedExecutions, []);
+});
+
+test("pending replay cannot resurrect a native exit receipt already acknowledged during its claim check", async () => {
+  const api: CollaborationApi = new FakeApi(), cursorStore = new MemoryCursorStore();
+  const request = canonical("session-1", 1, { type: "agent_request", idempotencyKey: "team", payload: { content: "test", agent_team: {} } });
+  (api as FakeApi).history.push(request);
+  let acknowledgments = 0;
+  api.acknowledgeAgentExecutionStopped = async () => { acknowledgments += 1; };
+  api.claimAgentRequest = async () => ({ claimed: false, status: "paused", requestId: request.id, runtimeId: "runtime-1", attemptCount: 2 });
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  await cursorStore.save({ server: {}, local: {}, stoppedExecutions: [{ sessionId: "session-1", requestId: request.id, runtimeId: "runtime-1", claimAttempt: 2 }] });
+  await bridge.processPendingAgentRequests({ async execute() { throw new Error("paused work must not execute"); } });
+  assert.equal(acknowledgments, 1);
+  assert.deepEqual((await cursorStore.load()).stoppedExecutions, [], "cursor persistence must retain the newer acknowledged outbox state");
+  await new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} }).connect();
+  assert.equal(acknowledgments, 1, "reconnect must not replay a receipt resurrected by a stale cursor snapshot");
+});
+
+test("an exit ACK returning after another durable receipt preserves that receipt and newer cursors", async () => {
+  const api: CollaborationApi = new FakeApi(), cursorStore = new MemoryCursorStore();
+  const first = { sessionId: "session-1", requestId: "request-1", runtimeId: "runtime-1", claimAttempt: 1 };
+  const second = { ...first, requestId: "request-2" };
+  const acknowledgments: string[] = [];
+  api.acknowledgeAgentExecutionStopped = async (_session, requestId) => {
+    acknowledgments.push(requestId);
+    if (requestId === first.requestId) await cursorStore.save({ server: { "session-1": 42 }, local: {}, stoppedExecutions: [first, second] });
+  };
+  await cursorStore.save({ server: {}, local: {}, stoppedExecutions: [first] });
+  await new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} }).connect();
+  assert.deepEqual(acknowledgments, [first.requestId, second.requestId]);
+  assert.equal((await cursorStore.load()).server["session-1"], 42);
+  assert.deepEqual((await cursorStore.load()).stoppedExecutions, []);
+});
+
+test("the strict HTTP client retires a deleted-session exit receipt only after authoritative active:false", async () => {
+  const cursorStore = new MemoryCursorStore(), ackPaths: string[] = [];
+  await cursorStore.save({ server: {}, local: {}, stoppedExecutions: [{ sessionId: "deleted-session", requestId: "deleted-request", runtimeId: "deleted-runtime", claimAttempt: 2 }] });
+  const api = new HttpCollaborationClient({ baseUrl: "https://collab.example/v1", bearerToken: "fixture", fetch: async (input) => {
+    const url = String(input);
+    if (url.endsWith("/runtimes")) return Response.json({ data: { runtime: { id: "runtime-1", user_id: "user-1", session_id: "session-1", device_id: "device-1",
+      harness: "codex", provider: "openai", model: "gpt", local_session_id: "local-1", capture_fidelity: "harness_transcript" } } });
+    ackPaths.push(url); return Response.json({ data: { active: false } });
+  } });
+  await new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} }).connect();
+  assert.deepEqual(ackPaths, ["https://collab.example/v1/sessions/deleted-session/agent-requests/deleted-request/execution/stopped"]);
+  assert.deepEqual((await cursorStore.load()).stoppedExecutions, []);
+});
+
+test("ordinary legacy preparation failure never creates an unsupported native exit receipt", async () => {
+  const api = new FakeApi(), cursorStore = new MemoryCursorStore();
+  const request = canonical("session-1", 1, { type: "agent_request", idempotencyKey: "ordinary", payload: { content: "ordinary task" } });
+  api.history.push(request);
+  const originalRead = api.readEvents.bind(api);
+  let failPreparation = true, acknowledgments = 0;
+  api.readEvents = async (...args) => {
+    if (failPreparation) throw new Error("legacy canonical preparation failed");
+    return originalRead(...args);
+  };
+  (api as CollaborationApi).readAgentExecution = async () => { throw new CollaborationHttpError(404, "legacy endpoint absent"); };
+  (api as CollaborationApi).acknowledgeAgentExecutionStopped = async () => {
+    acknowledgments += 1; throw new CollaborationHttpError(404, "legacy endpoint absent");
+  };
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const executor = { async execute() {
+    return { events: [{ localEventId: "done", harness: "codex" as const, kind: "assistant" as const, text: "done", captureFidelity: "harness_transcript" as const }] };
+  } };
+  await assert.rejects(bridge.processAgentRequest(request, executor), /legacy canonical preparation failed/);
+  assert.equal(acknowledgments, 0); assert.equal((await cursorStore.load()).stoppedExecutions, undefined);
+  failPreparation = false;
+  await new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} }).connect();
+  assert.equal((await bridge.processAgentRequest(request, executor)).completed.length, 1);
+  assert.equal(acknowledgments, 0); assert.equal((await cursorStore.load()).stoppedExecutions, undefined);
+});
+
+test("a Team cannot start native execution without a confirmed first authority read", async () => {
+  const api: CollaborationApi = new FakeApi();
+  const request = canonical("session-1", 1, { type: "agent_request", idempotencyKey: "team", payload: { content: "test", agent_team: {} } });
+  (api as FakeApi).history.push(request);
+  let executions = 0;
+  api.readAgentExecution = async () => { throw new TypeError("fictional connection offline"); };
+  api.acknowledgeAgentExecutionStopped = async () => {};
+  const bridge = new LocalBridge({ api, cursorStore: new MemoryCursorStore(), runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  await assert.rejects(bridge.processAgentRequest(request, { async execute() { executions += 1; throw new Error("must not start"); } }),
+    (error: unknown) => error instanceof CollaborationHttpError && error.code === "agent_execution_unconfirmed");
+  assert.equal(executions, 0);
+  delete api.readAgentExecution;
+  await assert.rejects(bridge.processAgentRequest(request, { async execute() { executions += 1; throw new Error("must not start"); } }),
+    (error: unknown) => error instanceof CollaborationHttpError && error.code === "connector_update_required");
+  assert.equal(executions, 0);
+});
+
+test("failed Team preparation retains its claim hold until the exact request actually completes", async () => {
+  const api: CollaborationApi = new FakeApi(), cursorStore = new MemoryCursorStore();
+  const request = canonical("session-1", 1, { type: "agent_request", idempotencyKey: "team", payload: { content: "task", agent_team: {} } });
+  (api as FakeApi).history.push(request);
+  const read = api.readEvents.bind(api);
+  let preparationFailed = false, acknowledgments = 0, executions = 0;
+  api.readEvents = async (...args) => { if (!preparationFailed) { preparationFailed = true; throw new Error("context preparation unavailable"); } return read(...args); };
+  api.readAgentExecution = async () => ({ active: true });
+  api.acknowledgeAgentExecutionStopped = async () => { acknowledgments += 1; };
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const executor = { async execute() { executions += 1; return { events: [{ localEventId: "done", harness: "codex" as const,
+    kind: "assistant" as const, text: "done", captureFidelity: "harness_transcript" as const }] }; } };
+  await assert.rejects(bridge.processAgentRequest(request, executor), /preparation unavailable/);
+  assert.equal(acknowledgments, 0); assert.equal(executions, 0); assert.equal((await cursorStore.load()).stoppedExecutions, undefined);
+  await bridge.processAgentRequest(request, executor);
+  assert.equal(executions, 1); assert.equal(acknowledgments, 1);
 });
 
 test("pending request polling persists the server cursor only after execution completes", async () => {

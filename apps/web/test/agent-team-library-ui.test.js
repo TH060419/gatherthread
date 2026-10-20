@@ -1491,3 +1491,320 @@ test("a healthy task on a second device cannot hide another still-active task ne
     issue: { code: "hosted_user_rate_limit", node_label: "云端模块" } }];
   await f.ui.refresh(); assert.equal(f.ui.runNotice().runId, "older-waiting");
 });
+
+for (const change of ["access denied", "content erased"]) {
+  for (const action of ["start", "pause"]) {
+    test(`a delayed ${action} receipt cannot restore private runs after ${change}, even before first observation`, async () => {
+      let release, blocked = false, accepted = 0;
+      const original = startedRun("private-pre-fence");
+      const enabled = team("team-a", { enabled: true, test_status: "passed", tested_revision: 1 });
+      const f = fixture({ initial: [enabled], initialRuns: action === "pause" ? [original] : [], overrides: {
+        listTeamRuns: async () => {
+          if (blocked) throw Object.assign(new Error("Fixture private read rejected"), { status: change === "access denied" ? 403 : 0 });
+          return { runs: structuredClone(f.runs) };
+        },
+        executeAgentTeam: () => new Promise(resolve => { release = () => resolve({ run: original }); }),
+        controlTeamRun: () => new Promise(resolve => { release = () => resolve({ run: { ...original, status: "paused" } }); }),
+      } });
+      await flush(); f.ui.select("team:team-a");
+      const pending = action === "start" ? f.ui.startTask("private fixture task", { onAccepted: () => accepted++ }) : f.ui.controlRun(original, "pause");
+      await flush(); blocked = true;
+      if (change === "access denied") await f.ui.refresh();
+      else f.update({ contentRevision: 1, events: [] });
+      release(); await pending; await flush();
+      assert.equal(f.ui.activeRun(), undefined, "an accepted old reply cannot restore fenced private data");
+      assert.equal(f.document.body.querySelectorAll(".team-run-row").length, 0);
+      if (action === "start") { assert.equal(accepted, 1); assert.equal(f.ui.pendingStart(), false); }
+      blocked = false; f.runs = [{ ...original, status: "stopped" }]; await f.ui.refresh();
+      assert.equal(f.document.body.querySelectorAll(".team-run-row").length, 1, "a later authorized read may expose current safe records again");
+    });
+  }
+}
+
+test("an exact retry alone cannot lift a preceding authoritative access refusal", async () => {
+  let tries = 0, denied = false;
+  const original = startedRun("old-private-record");
+  const f = fixture({ initialRuns: [original], overrides: {
+    listTeamRuns: async () => { if (denied) throw Object.assign(Error("denied"), { status: 403 }); return { runs: [original] }; },
+    controlTeamRun: async () => { if (++tries === 1) throw Error("lost ACK"); return { run: { ...original, status: "paused" } }; },
+  } }); await flush(); await assert.rejects(f.ui.controlRun(original, "pause")); await flush();
+  denied = true; await f.ui.refresh(); await f.ui.recover(); await flush();
+  assert.equal(tries, 2); assert.equal(f.ui.activeRun(), undefined);
+  assert.equal(f.document.body.querySelectorAll(".team-run-row").length, 0);
+  denied = false; await f.ui.refresh(); assert.equal(f.ui.activeRun().id, original.id);
+});
+
+for (const action of ["Test", "Save"]) {
+  test(`a delayed ${action} ACK cannot replace a same-revision passed stamp observed by GET while the next GET is offline`, async () => {
+    let release, offline = false;
+    const f = fixture({ initial: [team()], overrides: {
+      listAgentTeams: async () => { if (offline) throw Error("offline library"); return { teams: structuredClone(f.teams), modules: [] }; },
+      executeAgentTeam: () => new Promise(resolve => { release = () => resolve({ run: { ...startedRun("probe-before-pass"), purpose: "test" } }); }),
+      saveAgentTeam: async (id, body) => {
+        const accepted = team(id, { revision: 2, draft: structuredClone(body.draft) }); f.teams = [accepted];
+        return new Promise(resolve => { release = () => resolve({ team: accepted }); });
+      },
+    } }); await open(f);
+    if (action === "Save") editInput(f.el("team-name"), "Saved before a successful remote test");
+    f.el(action === "Test" ? "team-test" : "team-save").click(); await flush();
+    f.teams = f.teams.map(saved => ({ ...saved, test_status: "passed", tested_revision: saved.revision, test_run_id: "probe-before-pass" }));
+    await f.ui.refresh(); offline = true; release(); await flush();
+    assert.equal(f.el("team-test").textContent, "Successfully connected"); assert.equal(f.el("team-test").disabled, true);
+    assert.equal(f.el("team-enable").disabled, false, "passed metadata survives the delayed receipt even without a successful follow-up GET");
+    offline = false; await f.ui.refresh(); assert.equal(f.el("team-test").textContent, "Successfully connected");
+  });
+}
+
+for (const missing of ["connection", "model", "effort", "cloud revision"]) {
+  test(`a missing saved ${missing} remains visibly selected and unavailable without changing the exact target`, async () => {
+    const original = team();
+    if (missing === "cloud revision") original.draft.nodes[0].target = { kind: "cloud", provider: "fixture", model: "fixture-model", profile_id: "api-a", api_config_revision: "old", include_code: false };
+    const f = fixture({ initial: [original] }); await open(f);
+    f.document.body.querySelector("[data-node-id='node-a']").click();
+    if (missing === "connection") f.update({ runtimes: [] });
+    else if (missing === "cloud revision") f.update({ cloudProfiles: [{ id: "api-a", provider: "fixture", model: "fixture-model", api_config_revision: "new", available: true }] });
+    else f.update({ runtimes: [{ id: "runtime-a", userId: "alice", deviceId: "device-a", purpose: "execution", harness: "codex", status: "online",
+      executionProfiles: [{ provider: "fixture", model: missing === "model" ? "different-model" : "fixture-model", reasoningEfforts: missing === "effort" ? ["low"] : ["high"] }] }] });
+    for (const id of missing === "connection" ? ["agent", "model", "reasoning-effort"] : missing === "effort" ? ["reasoning-effort"] : ["model"]) {
+      const select = f.el(`team-selection-${id}`), option = select.children.find(item => item.value === select.value);
+      assert.ok(option, `${id} keeps its exact saved selection`); assert.equal(option.disabled, true); assert.match(option.textContent, /Unavailable/u);
+    }
+    assert.equal(f.el("team-save").disabled, true, "catalog changes cannot edit the saved target");
+  });
+}
+
+test("Team Stop remains available during realtime replay and checks current control authorization", async () => {
+  const f = fixture({ initialRuns: [startedRun("http-stoppable")] }); await flush(); f.hostButton.click(); await flush();
+  f.update({ writable: false, controlWritable: true });
+  assert.equal(f.button("Stop").disabled, false); assert.equal(f.button("Pause").disabled, true);
+  f.button("Stop").click(); await flush(); assert.equal(f.calls[0][3].action, "stop");
+  f.runs = [startedRun("no-longer-authorized")]; await f.ui.refresh(); f.update({ controlWritable: false });
+  assert.equal(f.button("Stop").disabled, true, "current authorization remains distinct from transport replay");
+});
+
+test("successful exact recovery clears only that dialog error and language changes cannot revive it", async () => {
+  let tries = 0;
+  const f = fixture({ initialRuns: [startedRun("recover-error")], overrides: {
+    controlTeamRun: async () => { if (++tries === 1) throw Error("lost receipt"); return { run: startedRun("recover-error", "paused") }; },
+  } }); await flush(); await assert.rejects(f.ui.controlRun(f.ui.activeRun(), "pause")); await flush();
+  assert.match(f.document.body.querySelector(".form-error").textContent, /unconfirmed/u);
+  await f.ui.recover(); await flush(); assert.equal(f.document.body.querySelector(".form-error").textContent, "");
+  f.document.documentElement.lang = "zh-CN"; f.ui.refreshLanguage();
+  assert.equal(f.document.body.querySelector(".form-error").textContent, "");
+});
+
+test("a recovered earlier intent cannot clear a newer unrelated dialog error", async () => {
+  let release;
+  const f = fixture({ initialRuns: [startedRun("older-control"), startedRun("newer-control")], overrides: {
+    controlTeamRun: async (_session, id) => {
+      if (id === "older-control") return new Promise(resolve => { release = () => resolve({ run: startedRun(id, "paused") }); });
+      throw Object.assign(Error("denied newer action"), { status: 409, code: "agent_team_clarification_required" });
+    },
+  } }); await flush(); const older = f.ui.controlRun(startedRun("older-control"), "pause"); await flush();
+  await assert.rejects(f.ui.controlRun(startedRun("newer-control"), "resume")); const before = f.document.body.querySelector(".form-error").textContent;
+  release(); await older; await flush(); assert.equal(f.document.body.querySelector(".form-error").textContent, before);
+});
+
+for (const exhausted of ["calls", "time"]) {
+  test(`a timed-out task with exhausted ${exhausted} hides Continue, retains Stop and explains starting anew`, async () => {
+    const run = { ...pausedRun("agent_timeout"), ...(exhausted === "calls" ? { calls_used: 12 } : { deadline_at: "2020-01-01T00:00:00Z" }) };
+    const f = fixture({ initialRuns: [run] }); await flush(); f.hostButton.click(); await flush();
+    assert.equal(f.button("Continue"), undefined); assert.ok(f.button("Stop"));
+    assert.match(f.document.body.querySelector(".team-run-advice").textContent, /start a new task/u);
+    f.runs = [{ ...run, error_code: "user_paused" }]; await f.ui.refresh();
+    assert.ok(f.button("Resume"), "ordinary Resume can settle an already completed retained result without a further Agent call");
+  });
+}
+
+for (const initialStatus of ["not_tested", "failed"]) {
+  test(`an unchanged ${initialStatus} GET predating Test acceptance cannot unlock duplicate probes when the next GET fails`, async () => {
+    let release, offline = false;
+    const f = fixture({ initial: [team("team-a", { test_status: initialStatus, test_run_id: initialStatus === "failed" ? "previous-failed" : undefined })], overrides: {
+      listAgentTeams: async () => { if (offline) throw Error("offline"); return { teams: structuredClone(f.teams), modules: [] }; },
+      executeAgentTeam: () => new Promise(resolve => { release = () => resolve({ run: { ...startedRun("accepted-new-probe"), purpose: "test" } }); }),
+    } }); await open(f); f.el("team-test").click(); await flush(); await f.ui.refresh();
+    offline = true; release(); await flush();
+    assert.equal(f.el("team-test").disabled, true); assert.equal(f.el("team-test").textContent, "Test running…");
+  });
+}
+
+for (const action of ["Test", "Save"]) {
+  test(`an exact ${action} retry cannot downgrade a passed stamp observed before that retry when GET stays offline`, async () => {
+    let tries = 0, offline = false, accepted;
+    const f = fixture({ initial: [team()], overrides: {
+      listAgentTeams: async () => { if (offline) throw Error("offline"); return { teams: structuredClone(f.teams), modules: [] }; },
+      executeAgentTeam: async () => { if (++tries === 1) throw Error("lost ACK"); return { run: { ...startedRun("verified-probe"), purpose: "test", status: "completed" }, replayed: true }; },
+      saveAgentTeam: async (id, body) => {
+        if (++tries === 1) { accepted = team(id, { revision: 2, draft: structuredClone(body.draft) }); f.teams = [accepted]; throw Error("lost ACK"); }
+        return { team: accepted, replayed: true };
+      },
+    } }); await open(f);
+    if (action === "Save") editInput(f.el("team-name"), "Accepted before verified stamp");
+    f.el(action === "Test" ? "team-test" : "team-save").click(); await flush();
+    f.teams = f.teams.map(saved => ({ ...saved, test_status: "passed", tested_revision: saved.revision, test_run_id: "verified-probe" }));
+    await f.ui.refresh(); offline = true; await f.ui.recover(); await flush();
+    assert.equal(tries, 2); assert.equal(f.el("team-test").textContent, "Successfully connected"); assert.equal(f.el("team-enable").disabled, false);
+    assert.equal(f.el("team-save").disabled, true);
+  });
+}
+
+function twoNodeTeam() {
+  const saved = team(); saved.draft.nodes.push({ ...structuredClone(module), id: "node-b", label: "Researcher", x: 350, y: 60 });
+  saved.draft.edges = [{ id: "edge-a-b", source: "node-a", target: "node-b", direction: "one_way" }]; return saved;
+}
+const graphControl = (f, kind) => kind === "edge" ? f.document.body.querySelector("[data-edge-id='edge-a-b']")
+  : f.document.body.querySelector("[data-node-id='node-a']").querySelector(kind === "module" ? ".team-node-drag" : "[data-port='out']");
+
+for (const kind of ["module", "port", "edge"]) {
+  test(`a real library revision refresh preserves the focused canvas ${kind} by stable graph identity`, async () => {
+    const f = fixture({ initial: [twoNodeTeam()] }); await open(f); const oldControl = graphControl(f, kind); oldControl.focus();
+    const remote = structuredClone(f.teams[0]); remote.revision = 2; remote.draft.nodes[0].label = "Renamed remotely";
+    f.teams = [remote]; await f.ui.refresh(); const replacement = graphControl(f, kind);
+    assert.notEqual(replacement, oldControl, "the production library path really rebuilt the canvas");
+    assert.equal(f.document.activeElement, replacement); assert.equal(replacement.isConnected, true);
+    assert.equal(f.el("team-save").disabled, true, "loading the remote revision cannot create a local edit");
+  });
+  test(`remote deletion of a focused canvas ${kind} recovers focus to the viewport through the library refresh`, async () => {
+    const f = fixture({ initial: [twoNodeTeam()] }); await open(f); graphControl(f, kind).focus();
+    const remote = structuredClone(f.teams[0]); remote.revision = 2;
+    if (kind === "edge") remote.draft.edges = [];
+    else { remote.draft.nodes = remote.draft.nodes.filter(node => node.id !== "node-a"); remote.draft.entry_node_id = "node-b"; remote.draft.edges = []; }
+    f.teams = [remote]; await f.ui.refresh();
+    assert.equal(f.document.activeElement, f.document.body.querySelector(".team-canvas-viewport"));
+    assert.equal(f.document.activeElement.isConnected, true);
+  });
+}
+
+test("a remote library revision does not rebuild a dirty graph or overwrite its local inspector or CAS base", async () => {
+  const f = fixture({ initial: [twoNodeTeam()] }); await open(f);
+  f.document.body.querySelector("[data-node-id='node-a']").click();
+  editInput(f.el("team-identity-node-a"), "Unsaved local responsibility");
+  const control = graphControl(f, "module"); control.focus();
+  const remote = structuredClone(f.teams[0]); remote.revision = 2; remote.draft.nodes[0].role = "Remote responsibility";
+  f.teams = [remote]; await f.ui.refresh();
+  assert.equal(graphControl(f, "module"), control); assert.equal(f.document.activeElement, control);
+  assert.equal(f.el("team-identity-node-a").value, "Unsaved local responsibility");
+  f.api.saveAgentTeam = async (_id, body) => {
+    assert.equal(body.expected_revision, 1, "a dirty editor cannot adopt a revision it never loaded");
+    throw Object.assign(Error("conflict"), { status: 409, code: "conflict" });
+  };
+  f.el("team-save").click(); await flush();
+  assert.equal(f.el("team-identity-node-a").value, "Unsaved local responsibility");
+  assert.match(f.document.body.querySelector(".form-error").textContent, /configuration changed/u);
+});
+
+test("a delayed Delete ACK cannot remove a recreated higher revision or supersede its newer pending Save", async () => {
+  let releaseDelete, releaseSave, offline = false;
+  const f = fixture({ initial: [team()], overrides: {
+    listAgentTeams: async () => { if (offline) throw Error("offline library"); return { teams: structuredClone(f.teams), modules: [] }; },
+    deleteTeamItem: () => new Promise(resolve => { releaseDelete = () => resolve({ deleted: true, replayed: false }); }),
+    saveAgentTeam: async (id, body) => {
+      const accepted = team(id, { revision: 4, draft: structuredClone(body.draft) }); f.teams = [accepted];
+      return new Promise(resolve => { releaseSave = () => resolve({ team: accepted, replayed: false }); });
+    },
+  } }); await open(f); f.button("Back to Teams").click(); f.button("Delete").click(); await flush();
+  f.teams = [team("team-a", { revision: 3, draft: { ...team().draft, name: "Recreated on another device" } })];
+  await f.ui.refresh(); f.document.body.querySelector(".team-library-list").children[0].children[0].click();
+  editInput(f.el("team-name"), "Edit of the recreated Team"); f.el("team-save").click(); await flush();
+  offline = true; releaseDelete(); await flush();
+  assert.equal(f.ui.selected(), undefined, "the test has not selected a composer Team");
+  assert.ok(f.document.body.querySelector(".team-library-list").children.some(row => row.querySelector("strong")?.textContent === "Recreated on another device"),
+    "an old deletion receipt cannot discard a later observed incarnation while refresh is offline");
+  releaseSave(); await flush();
+  assert.equal(f.el("team-name").value, "Edit of the recreated Team");
+  assert.equal(f.el("team-save").disabled, true, "the old deletion cannot supersede the newer Save receipt");
+});
+
+test("a newer graph validation error survives localization and recovery of an older uncertain operation", async () => {
+  let attempts = 0;
+  const f = fixture({ initial: [twoNodeTeam()], initialRuns: [startedRun("validation-order")], overrides: {
+    controlTeamRun: async () => { if (++attempts === 1) throw Error("lost ACK"); return { run: startedRun("validation-order", "paused") }; },
+  } }); await open(f); await assert.rejects(f.ui.controlRun(f.ui.activeRun(), "pause")); await flush();
+  f.document.body.querySelector("[data-edge-id='edge-a-b']").click();
+  const source = f.el("team-selection-source"); source.value = "node-b"; source.dispatch("change");
+  assert.match(f.document.body.querySelector(".form-error").textContent, /route already exists/u);
+  f.document.documentElement.lang = "zh-CN"; f.ui.refreshLanguage();
+  assert.match(f.document.body.querySelector(".form-error").textContent, /连线|起点|终点|线路/u);
+  assert.doesNotMatch(f.document.body.querySelector(".form-error").textContent, /未确认/u);
+  await f.ui.recover(); await flush();
+  assert.notEqual(f.document.body.querySelector(".form-error").textContent, "", "an older recovery cannot clear the newer local validation");
+});
+
+for (const removal of ["Unfavorite", "Delete"]) for (const replacement of ["different snapshot", "identical snapshot"]) {
+  test(`a delayed ${removal} receipt cannot remove a canonically observed recreated favorite with an ${replacement}`, async () => {
+    let releaseDelete, offline = false;
+    const original = { id: "favorite-recreated", created_at: "2026-10-20T00:00:00.000Z", module: structuredClone(module) };
+    const f = fixture({ initial: [team()], modules: [original], overrides: {
+      listAgentTeams: async () => { if (offline) throw Error("offline library"); return { teams: structuredClone(f.teams), modules: structuredClone(f.favorites) }; },
+      deleteTeamItem: () => new Promise(resolve => { releaseDelete = () => resolve({ deleted: true, replayed: false }); }),
+    } }); await open(f); f.document.body.querySelector("[data-node-id='node-a']").click();
+    if (removal === "Delete") { f.el("team-add-favorite").click(); f.button("Delete", f.document.body.querySelector(".team-secondary-dialog")).click(); }
+    else f.button("Unfavorite").click();
+    await flush();
+    const recreated = structuredClone(original);
+    if (replacement === "different snapshot") recreated.module.label = "A recreated saved module";
+    f.favorites = [recreated]; await f.ui.refresh();
+    offline = true; releaseDelete(); await flush();
+    if (removal !== "Delete") f.el("team-add-favorite").click();
+    const labels = f.document.body.querySelector(".team-secondary-dialog").querySelectorAll(".team-row-edit").map(node => node.textContent);
+    assert.deepEqual(labels, [recreated.module.label], "created_at can be identical within one clock tick; the next canonical GET must decide deletion");
+    offline = false; f.favorites = []; await f.ui.refresh();
+    assert.equal(f.el("team-add-favorite").disabled, true, "a later readable snapshot can confirm that no favorite remains");
+  });
+}
+
+test("a delayed original favorite creation and deletion receipt cannot roll a recreated snapshot back to its old contents", async () => {
+  let releaseCreation, releaseDelete, offline = false;
+  const f = fixture({ initial: [team()], overrides: {
+    listAgentTeams: async () => { if (offline) throw Error("offline library"); return { teams: structuredClone(f.teams), modules: structuredClone(f.favorites) }; },
+    saveTeamModule: async (id, body) => {
+      const accepted = { id, created_at: "2026-10-20T00:00:00.000Z", module: structuredClone(body.module) }; f.favorites = [accepted];
+      return new Promise(resolve => { releaseCreation = () => resolve({ favorite: accepted, replayed: false }); });
+    },
+    deleteTeamItem: () => new Promise(resolve => { releaseDelete = () => resolve({ deleted: true, replayed: false }); }),
+  } }); await open(f); f.document.body.querySelector("[data-node-id='node-a']").click(); f.button("Favorite").click(); await flush();
+  await f.ui.refresh(); f.el("team-add-favorite").click(); f.button("Delete", f.document.body.querySelector(".team-secondary-dialog")).click(); await flush();
+  const recreated = { ...f.favorites[0], module: { ...structuredClone(module), label: "The new canonical template" } };
+  f.favorites = [recreated]; await f.ui.refresh(); offline = true;
+  releaseDelete(); await flush(); releaseCreation(); await flush();
+  const labels = f.document.body.querySelector(".team-secondary-dialog").querySelectorAll(".team-row-edit").map(node => node.textContent);
+  assert.deepEqual(labels, [recreated.module.label]);
+  assert.equal(f.button("Check the previous action").hidden, true, "both original receipts settle without dispatching replacement writes");
+});
+
+test("canonical favorite refresh updates an open picker and preserves a visible keyboard target", async () => {
+  const first = { id: "favorite-a", module: structuredClone(module) }, second = { id: "favorite-b", module: { ...structuredClone(module), label: "Second template" } };
+  const f = fixture({ initial: [team()], modules: [first, second] }); await open(f); f.el("team-add-favorite").click();
+  const secondary = f.document.body.querySelector(".team-secondary-dialog");
+  let remove = secondary.querySelectorAll("[data-team-favorite-control]").find(node => node.dataset.teamFavoriteControl === "delete:favorite-b"); remove.focus();
+  f.favorites = [first, { ...second, module: { ...second.module, label: "Renamed saved template" } }]; await f.ui.refresh();
+  const replacement = secondary.querySelectorAll("[data-team-favorite-control]").find(node => node.dataset.teamFavoriteControl === "delete:favorite-b");
+  assert.notEqual(replacement, remove); assert.equal(f.document.activeElement, replacement);
+  assert.match(secondary.textContent + secondary.querySelectorAll(".team-row-edit").map(node => node.textContent).join(" "), /Renamed saved template/u);
+  remove = replacement; f.favorites = [first]; await f.ui.refresh();
+  assert.equal(remove.isConnected, false); assert.equal(f.document.activeElement, secondary.querySelector("header").querySelector("button"));
+});
+
+test("an exact favorite-deletion retry retains its canonical observation fence when the library becomes unavailable", async () => {
+  let attempts = 0, offline = false;
+  const original = { id: "favorite-same-tick", created_at: "2026-10-20T00:00:00.000Z", module: structuredClone(module) };
+  const f = fixture({ initial: [team()], modules: [original], overrides: {
+    listAgentTeams: async () => { if (offline) throw Error("offline library"); return { teams: structuredClone(f.teams), modules: structuredClone(f.favorites) }; },
+    deleteTeamItem: async () => { if (++attempts === 1) throw Error("lost deletion ACK"); return { deleted: true, replayed: true }; },
+  } }); await open(f); f.document.body.querySelector("[data-node-id='node-a']").click(); f.button("Unfavorite").click(); await flush();
+  f.favorites = [{ ...original, module: { ...original.module, label: "Recreated between retries" } }]; await f.ui.refresh();
+  offline = true; await f.ui.recover(); await flush(); f.el("team-add-favorite").click();
+  const labels = f.document.body.querySelector(".team-secondary-dialog").querySelectorAll(".team-row-edit").map(node => node.textContent);
+  assert.deepEqual(labels, ["Recreated between retries"]); assert.equal(attempts, 2);
+});
+
+test("a picker opened while Unfavorite is pending cannot retain the deleted snapshot after the ACK", async () => {
+  let releaseDelete;
+  const f = fixture({ initial: [team()], modules: [{ id: "favorite-pending", module: structuredClone(module) }], overrides: {
+    deleteTeamItem: () => new Promise(resolve => { releaseDelete = () => { f.favorites = []; resolve({ deleted: true, replayed: false }); }; }),
+  } }); await open(f); f.document.body.querySelector("[data-node-id='node-a']").click(); f.button("Unfavorite").click(); await flush();
+  f.el("team-add-favorite").click(); const secondary = f.document.body.querySelector(".team-secondary-dialog");
+  assert.equal(secondary.querySelectorAll(".team-row-edit").length, 1); releaseDelete(); await flush();
+  assert.equal(secondary.querySelectorAll(".team-row-edit").length, 0, "both the ACK and an equal later GET must not leave an insertable deleted module");
+  assert.equal(secondary.open, true, "updating its content must not close or reopen the user's current dialog");
+});

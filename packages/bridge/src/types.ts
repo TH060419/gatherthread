@@ -257,7 +257,11 @@ export interface CollaborationApi {
   appendEvent(sessionId: string, event: AppendEventInput): Promise<CanonicalEvent>;
   registerRuntime(runtime: RuntimeRegistration): Promise<RegisteredRuntime>;
   heartbeatRuntime?(runtimeId: string): Promise<RegisteredRuntime>;
-  claimAgentRequest(sessionId: string, requestId: string, runtimeId: string): Promise<AgentRequestClaim>;
+  claimAgentRequest(sessionId: string, requestId: string, runtimeId: string, executionControlVersion?: 1): Promise<AgentRequestClaim>;
+  /** Read exact execution authority without renewing its lease or claiming work. */
+  readAgentExecution?(sessionId: string, requestId: string, runtimeId: string, claimAttempt: number): Promise<{ active: boolean }>;
+  /** Only acknowledge after the owned native turn/process actually terminated. */
+  acknowledgeAgentExecutionStopped?(sessionId: string, requestId: string, runtimeId: string, claimAttempt: number): Promise<void>;
   appendAgentProgress?(
     sessionId: string,
     requestId: string,
@@ -283,7 +287,7 @@ export interface HarnessExecutionInput {
   /** Optional server-authorized derived context frozen before this request. Raw history remains available. */
   historyContext?: HistoryContext;
   runtime: RegisteredRuntime;
-  /** Privacy revocation, independent of progress uploads. Stop the owned turn before returning. */
+  /** Claim cancellation or privacy revocation. Stop the owned turn before returning. */
   signal?: AbortSignal;
   publishProgress?: (update: HarnessProgressUpdate) => Promise<boolean | void>;
 }
@@ -296,6 +300,7 @@ export interface HarnessExecutionResult {
 }
 
 export interface HarnessExecutor {
+  /** Indeterminate native ownership must reject with HarnessExecutionUnconfirmedError, never an exit acknowledgment. */
   execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult>;
   shouldExecute?(request: CanonicalEvent, runtime: RegisteredRuntime): Promise<boolean> | boolean;
   /**

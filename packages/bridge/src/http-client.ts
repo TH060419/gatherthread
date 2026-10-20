@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { HISTORY_SUMMARY_MAX_CONTEXT_BYTES } from "@gatherthread/protocol";
+import { HISTORY_SUMMARY_MAX_CONTEXT_BYTES, AgentExecutionStateInputSchema, AgentExecutionStateSchema } from "@gatherthread/protocol";
 import { AgentSharesResponseSchema, AgentShareJobsResponseSchema, AgentShareJobClaimResponseSchema,
   AgentShareJobLeaseResponseSchema, AgentShareJobEventResponseSchema, AgentShareJobResponseSchema,
   AgentShareAvailabilityResponseSchema, AgentShareJobLeaseInputSchema, AgentShareJobProgressInputSchema,
@@ -253,10 +253,12 @@ export class HttpCollaborationClient implements CollaborationApi {
     sessionId: string,
     requestId: string,
     runtimeId: string,
+    executionControlVersion?: 1,
   ): Promise<AgentRequestClaim> {
     const body = requiredObject(await this.#request(`/sessions/${encodeURIComponent(sessionId)}/agent-requests/${encodeURIComponent(requestId)}/claim`, {
       method: "POST",
-      body: JSON.stringify({ runtime_id: runtimeId }),
+      body: JSON.stringify({ runtime_id: runtimeId,
+        ...(executionControlVersion === undefined ? {} : { execution_control_version: executionControlVersion }) }),
     }));
     if (body.status !== "claimed" && body.status !== "completed" && body.status !== "paused") {
       throw new Error("Collaboration API omitted claim.status");
@@ -265,6 +267,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       ? 1
       : requiredNumber(body.attempt_count, "claim.attempt_count");
     if (attemptCount < 1) throw new Error("Collaboration API omitted claim.attempt_count");
+    if (body.request_event_id !== requestId || body.runtime_id !== runtimeId) throw new Error("Collaboration API claim scope mismatch");
     const status = body.status;
     return {
       claimed: status === "claimed",
@@ -294,6 +297,24 @@ export class HttpCollaborationClient implements CollaborationApi {
       }),
     }));
     return fromWireEvent(body.event ?? body);
+  }
+
+  async readAgentExecution(sessionId: string, requestId: string, runtimeId: string, claimAttempt: number): Promise<{ active: boolean }> {
+    const input = AgentExecutionStateInputSchema.parse({ runtime_id: runtimeId, claim_attempt: claimAttempt });
+    const query = new URLSearchParams({ runtime_id: input.runtime_id, claim_attempt: String(input.claim_attempt) });
+    const body = await this.#request(`/sessions/${encodeURIComponent(sessionId)}/agent-requests/${encodeURIComponent(requestId)}/execution?${query}`);
+    const parsed = AgentExecutionStateSchema.safeParse(body);
+    if (!parsed.success) throw new CollaborationHttpError(409, "Invalid native execution authority response", "agent_execution_state_invalid");
+    return parsed.data;
+  }
+
+  async acknowledgeAgentExecutionStopped(sessionId: string, requestId: string, runtimeId: string, claimAttempt: number): Promise<void> {
+    const input = AgentExecutionStateInputSchema.parse({ runtime_id: runtimeId, claim_attempt: claimAttempt });
+    const body = await this.#request(`/sessions/${encodeURIComponent(sessionId)}/agent-requests/${encodeURIComponent(requestId)}/execution/stopped`, {
+      method: "POST", body: JSON.stringify(input),
+    });
+    const parsed = AgentExecutionStateSchema.safeParse(body);
+    if (!parsed.success || parsed.data.active !== false) throw new Error("Invalid native execution stop acknowledgment");
   }
 
   async appendAgentProgress(

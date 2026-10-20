@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { describeTeamActionError, formatTeamRunIssue, isTeamActionUncertain } from "../src/agent-team-diagnostics.js";
+import { describeTeamActionError, formatTeamRunIssue, isTeamActionUncertain, teamTimeoutContinuationAvailable } from "../src/agent-team-diagnostics.js";
 import { TEAM_ZH_CN } from "../src/agent-team-i18n.js";
 
 const zh = text => TEAM_ZH_CN[text] ?? text;
@@ -12,7 +12,7 @@ for (const code of [
   "agent_share_request_cancelled", "agent_share_busy", "agent_share_source_capacity", "agent_share_execution_failed", "agent_share_locked",
   "agent_share_context_too_large", "agent_share_output_too_large", "agent_share_progress_limit", "agent_share_storage_full",
   "agent_team_deadline", "agent_team_call_limit", "agent_team_authorization_lost", "agent_team_target_unavailable", "agent_team_model_unavailable",
-  "agent_team_runtime_offline", "agent_team_runtime_revoked", "agent_team_storage_full", "agent_team_prompt_too_large", "agent_team_plan_too_large",
+  "agent_team_runtime_offline", "agent_team_runtime_revoked", "agent_team_native_exit_pending", "agent_team_native_hold_capacity", "agent_team_storage_full", "agent_team_prompt_too_large", "agent_team_plan_too_large",
   "agent_team_sensitive_input", "agent_share_sensitive_input", "agent_team_probe_failed", "agent_team_agent_failed", "agent_team_execution_failed",
   "runtime_offline", "runtime_revoked", "model_unavailable", "agent_share_unsupported", "access_changed", "context_changed",
   "team_directive_invalid", "team_directive_mismatch", "team_delegation_forbidden", "team_response_route_mismatch", "team_clarification_missing",
@@ -38,6 +38,17 @@ test("native execution failure does not speculate about an expired claim", () =>
   }
   const abandoned = formatTeamRunIssue(issueRun("agent_request_abandoned"), zh);
   assert.match(abandoned.reason, /执行认领已失效.*未收到最终结果/u);
+});
+
+test("native exit waits and retained-record capacity tell users how to recover without unsafe duplicate execution", () => {
+  const waiting = formatTeamRunIssue(issueRun("agent_team_native_exit_pending", "running"), zh);
+  assert.match(waiting.reason, /旧的本地执行尚未确认退出.*尚未开始/u);
+  assert.match(waiting.advice, /原设备的连接程序.*旧任务已真正停止.*请勿重复提交.*退出确认/u);
+  const ended = formatTeamRunIssue(issueRun("agent_team_native_exit_pending", "stopped"), zh);
+  assert.doesNotMatch(ended.advice, /本次调用会.*等待/u);
+  const full = formatTeamRunIssue(issueRun("agent_team_native_hold_capacity", "running"), zh);
+  assert.match(full.reason, /退出确认记录.*容量上限/u);
+  assert.match(full.advice, /确认进程退出前不要清除安全记录.*清理 Team 运行记录不会释放/u);
 });
 
 test("a shared quota failure identifies the module, quota, reset and exact configuration recovery", () => {
@@ -92,10 +103,21 @@ test("a legacy generic failure code cannot falsely mark a still-running task as 
 
 for (const code of ["agent_timeout", "provider_timeout", "container_timeout", "agent_share_timeout"])
   test(`a paused ${code} offers continuation only within original limits`, () => {
-    const diagnostic = formatTeamRunIssue(issueRun(code, "paused"), zh);
+    const diagnostic = formatTeamRunIssue({ ...issueRun(code, "paused"), error_code: "agent_timeout" }, zh);
     assert.match(diagnostic.reason, /超时.*暂停/u); assert.match(diagnostic.advice, /剩余调用次数和原任务时限/u);
     assert.match(diagnostic.advice, /开始新一轮调用/u);
   });
+
+test("cloud and shared timeout details with exhausted continuation budget give a concrete new-task recovery", () => {
+  for (const code of ["provider_timeout", "container_timeout", "agent_share_timeout"]) {
+    const run = { ...issueRun(code, "paused"), error_code: "agent_timeout", calls_used: 1, max_calls: 1,
+      deadline_at: new Date(Date.now() + 60_000).toISOString() };
+    const diagnostic = formatTeamRunIssue(run, zh);
+    assert.match(diagnostic.reason, /超时.*暂停/u);
+    assert.match(diagnostic.advice, /修改后需保存并重测，再发起任务/u);
+    assert.doesNotMatch(diagnostic.advice, /开始新一轮调用/u);
+  }
+});
 
 for (const code of ["hosted_agent_busy", "hosted_user_busy", "hosted_profile_busy", "hosted_user_rate_limit",
   "agent_team_waiting_executor", "agent_team_claim_expired", "agent_share_queued"])
@@ -191,4 +213,20 @@ test("test timeouts and restarts point to the available Test control instead of 
     assert.doesNotMatch(diagnostic.advice, /点击“继续”|点击“恢复”/u);
   }
   assert.match(formatTeamRunIssue({ ...issueRun("agent_share_daily_limit"), purpose: "test" }, zh).advice, /UTC 00:00.*再次测试/u);
+});
+
+test("timeout continuation guidance agrees with the run's authoritative state rather than its diagnostic cause alone", () => {
+  for (const status of ["failed", "stopped", "timed_out", "call_limit", "running"]) {
+    const run = { ...issueRun("provider_timeout", status), error_code: "agent_timeout", calls_used: 1, max_calls: 3,
+      deadline_at: new Date(Date.now() + 60_000).toISOString() };
+    assert.equal(teamTimeoutContinuationAvailable(run), false, `${status} has no Continue control`);
+    const diagnostic = formatTeamRunIssue(run, zh);
+    assert.doesNotMatch(diagnostic.advice, /点击“继续”/u);
+    if (status !== "running") assert.doesNotMatch(diagnostic.advice, /开始新一轮调用/u);
+    assert.doesNotMatch(diagnostic.reason, /任务已暂停/u);
+  }
+  const ordinaryPause = { ...issueRun("provider_timeout", "paused"), error_code: "user_paused", calls_used: 1, max_calls: 3,
+    deadline_at: new Date(Date.now() + 60_000).toISOString() };
+  assert.equal(teamTimeoutContinuationAvailable(ordinaryPause), false);
+  assert.match(formatTeamRunIssue(ordinaryPause, zh).advice, /点击“恢复”/u);
 });

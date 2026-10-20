@@ -25,11 +25,23 @@ export function teamPublicAnswer(event: { payload: unknown }): string {
   return "";
 }
 export function parseTeamDirective(answer: string, stepId: string): AgentTeamDirective {
-  const matches = [...answer.matchAll(/^```gatherthread-team[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/gmu)];
-  if (matches.length !== 1 || answer.slice((matches[0]?.index ?? 0) + (matches[0]?.[0].length ?? 0)).trim()
-    || (matches[0]?.[1]?.length ?? 0) > 15000) throw new ApiError(409, "team_directive_invalid", "The Agent did not return one valid final team instruction");
+  const invalid = () => new ApiError(409, "team_directive_invalid", "The Agent did not return one valid final team instruction");
+  // Scan opening and closing lines independently. Searching a whole multiline
+  // block at every unmatched opener repeatedly rescans the same public answer.
+  // Each iterator advances monotonically; only the bounded JSON body is copied.
+  const endings = answer.matchAll(/\r?\n```[ \t]*$/gmu);
+  let ending = endings.next(), block: { start: number; end: number; after: number } | undefined;
+  for (const opening of answer.matchAll(/^```gatherthread-team[ \t]*\r?\n/gmu)) {
+    if (block && opening.index < block.after) continue;
+    const start = opening.index + opening[0].length;
+    while (!ending.done && ending.value.index < start) ending = endings.next();
+    if (ending.done) break;
+    if (block || ending.value.index - start > 15000) throw invalid();
+    block = { start, end: ending.value.index, after: ending.value.index + ending.value[0].length };
+  }
+  if (!block || answer.slice(block.after).trim()) throw invalid();
   let directive: AgentTeamDirective;
-  try { directive = AgentTeamDirectiveSchema.parse(JSON.parse(matches[0]![1]!)); }
+  try { directive = AgentTeamDirectiveSchema.parse(JSON.parse(answer.slice(block.start, block.end))); }
   catch { throw new ApiError(409, "team_directive_invalid", "The Agent returned an invalid team instruction"); }
   if (directive.step_id !== stepId) throw new ApiError(409, "team_directive_mismatch", "The Agent instruction belongs to another step");
   return directive;
@@ -73,7 +85,7 @@ export class AgentTeams {
     return this.store.savePlan(actor, sessionId, plan, expectedRevision);
   }
   start(actor: Actor, sessionId: string, input: StartAgentTeamRunInput,
-    options: { purpose?: "task" | "test"; onCreated?: (run: TeamRunRow) => void } = {}) {
+    options: { purpose?: "task" | "test"; onCreated?: (run: TeamRunRow) => void; beforeCreate?: () => void } = {}) {
     const validated = StartAgentTeamRunInputSchema.parse(input);
     this.store.assertSafeInput(validated);
     this.store.authorize(actor, sessionId, true);
@@ -85,7 +97,7 @@ export class AgentTeams {
     const existing = this.store.sql.prepare("SELECT id FROM agent_team_runs WHERE session_id=? AND user_id=? AND idempotency_key=?")
       .get(sessionId, actor.user_id, validated.idempotency_key);
     if (!existing && !this.store.startReceipt(actor, sessionId, validated.idempotency_key)) this.validateTargets(actor, sessionId, validated.plan, true);
-    const receipt = this.store.create(actor, sessionId, validated, options.purpose, options.onCreated); this.wake(); return receipt;
+    const receipt = this.store.create(actor, sessionId, validated, options.purpose, options.onCreated, options.beforeCreate); this.wake(); return receipt;
   }
   list(actor: Actor, sessionId: string) { return this.store.list(actor, sessionId); }
   read(actor: Actor, sessionId: string, runId: string) { return this.store.read(actor, sessionId, runId); }

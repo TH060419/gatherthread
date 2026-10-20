@@ -609,7 +609,18 @@ export const RegisterRuntimeInputSchema = z.object({
 
 export const ClaimAgentRequestInputSchema = z.object({
   runtime_id: IdSchema,
+  execution_control_version: z.literal(1).optional(),
 });
+
+/** Exact, content-free native execution observation and exit acknowledgment. */
+export const AgentExecutionStateInputSchema = z.object({
+  runtime_id: IdSchema,
+  claim_attempt: z.number().int().positive(),
+}).strict();
+export const AgentExecutionStateQuerySchema = AgentExecutionStateInputSchema.extend({
+  claim_attempt: z.coerce.number().int().positive(),
+}).strict();
+export const AgentExecutionStateSchema = z.object({ active: z.boolean() }).strict();
 
 /**
  * Pausing carries no parameters: the request is named by the path and the actor

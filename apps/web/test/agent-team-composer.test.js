@@ -128,3 +128,60 @@ test("the Team composer localizes both disabled accessible names across English 
     }
   }
 });
+
+test("exact Team recovery clears its old composer error without changing a newer draft", async () => {
+  const f = fixture(async () => { throw Object.assign(Error("lost ACK"), { status: 0 }); });
+  await f.app.sendMessage("agent_request"); assert.match(f.app.sendError.textContent, /unconfirmed/u);
+  f.app.messageInput.value = "A newer draft";
+  f.calls[0].options.onAccepted({ run: { id: "recovered" } });
+  assert.equal(f.app.sendError.textContent, ""); assert.equal(f.app.messageInput.value, "A newer draft");
+});
+
+test("exact Team recovery cannot erase a newer composer validation error or an error in another scope", async () => {
+  const f = fixture(async () => { throw Object.assign(Error("lost ACK"), { status: 0 }); });
+  await f.app.sendMessage("agent_request");
+  f.app.messageInput.value = ""; await f.app.sendMessage("agent_request");
+  assert.equal(f.app.sendError.textContent, "Write a message first.");
+  f.calls[0].options.onAccepted({ run: { id: "recovered" } });
+  assert.equal(f.app.sendError.textContent, "Write a message first.");
+  f.app.selectedSessionGeneration++; f.app.sendError.textContent = "A new session problem";
+  f.calls[0].options.onAccepted({ run: { id: "recovered" } }); assert.equal(f.app.sendError.textContent, "A new session problem");
+});
+
+test("both production Team controls derive emergency permission independently of realtime append readiness", async () => {
+  const { canAppend } = await import("../src/domain.js");
+  const start = source.indexOf("const teamsUi = mountAgentTeams("), end = source.indexOf("\n});", start) + 4;
+  const app = vm.createContext({
+    mountAgentTeams: options => options,
+    document: {}, api: {}, element: () => ({}), createIdempotencyKey: () => "unused", window: {},
+    refreshDshRuntimes: noop, refreshHostedAgentStatus: noop, renderComposerPermissions: noop,
+    authenticationGeneration: 1, selectedSessionGeneration: 1, canAppend,
+    sharedAgentsUi: { agents: () => [], refresh: noop }, hostedAgentStatus: { profiles: [] },
+    state: { currentUser: { id: "alice" }, project: { id: "project-a" },
+      session: { id: "session-a", mode: "multi", members: [{ userId: "alice", role: "owner" }] },
+      sync: { phase: "replaying", events: [], contentRevision: 0 }, executionRuntimes: [], devices: [] },
+  });
+  vm.runInContext(source.slice(start, end).replace("const teamsUi =", "globalThis.teamOptions ="), app);
+  for (const phase of ["connecting", "replaying", "offline", "live"]) {
+    app.state.sync.phase = phase; const context = app.teamOptions.getContext();
+    assert.equal(context.writable, phase === "live"); assert.equal(context.controlWritable, true);
+  }
+  app.state.session.members[0].role = "viewer"; assert.equal(app.teamOptions.getContext().controlWritable, false);
+  const composerStart = source.indexOf("const agentRequestControl = mountAgentRequestControl("), composerEnd = source.indexOf("\n});", composerStart) + 4;
+  app.mountAgentRequestControl = options => options; app.teamsUi = { activeRun: () => ({ id: "team-a", status: "running" }) };
+  app.localizer = { t: value => value }; app.document.documentElement = { dataset: {} }; app.mobileControlLabel = value => value;
+  app.currentProjectHarness = () => "team"; app.pendingMessageSend = null; app.sendAgentButton = {}; app.sendError = {};
+  vm.runInContext(source.slice(composerStart, composerEnd).replace("const agentRequestControl =", "globalThis.composerOptions ="), app);
+  app.state.session.members[0].role = "owner"; app.state.sync.phase = "replaying";
+  assert.equal(app.composerOptions.getContext().writable, false); assert.equal(app.composerOptions.getContext().controlWritable, true);
+  app.state.session.members[0].role = "viewer"; assert.equal(app.composerOptions.getContext().controlWritable, false);
+});
+
+test("an old acceptance cannot clear a newer Team error with identical public wording", async () => {
+  const f = fixture(async () => { throw Object.assign(Error("lost ACK"), { status: 0 }); });
+  await f.app.sendMessage("agent_request"); const original = f.calls[0].options;
+  f.app.messageInput.value = "Another task"; await f.app.sendMessage("agent_request");
+  const newerText = f.app.sendError.textContent; assert.match(newerText, /unconfirmed/u);
+  original.onAccepted({ run: { id: "older-accepted" } }); assert.equal(f.app.sendError.textContent, newerText);
+  f.calls[1].options.onAccepted({ run: { id: "newer-accepted" } }); assert.equal(f.app.sendError.textContent, "");
+});

@@ -201,21 +201,25 @@ export class AgentTeamLibrary {
     const input = TestAgentTeamDefinitionSchema.parse(raw), existing = this.existingRun(actor, id, sessionId, input.idempotency_key, "test", input);
     if (existing) return existing;
     const team = this.checked(actor, id, input.expected_revision), plan = this.plan(team);
-    if (team.test_run_id && team.test_status !== "passed") {
-      const existing = this.sql.prepare("SELECT idempotency_key FROM agent_team_runs WHERE id=?").get(team.test_run_id);
-      if (existing && existing.idempotency_key !== input.idempotency_key) this.teams.stopPrivateTest(actor, team.test_run_id);
-    }
-    return this.teams.start(actor, sessionId, { plan, entry_node_id: plan.entry_node_id ?? plan.nodes[0]!.id,
+    let oldTest: string | undefined;
+    const result = this.teams.start(actor, sessionId, { plan, entry_node_id: plan.entry_node_id ?? plan.nodes[0]!.id,
       content: `Connectivity test for ${id} revision ${team.revision}; probe every module, then transfer source probe receipts along every configured direction.`,
       max_calls: plan.nodes.length + new Set(plan.edges.flatMap(edge => [edge.target,
         ...(edge.direction === "bidirectional" ? [edge.source] : [])])).size,
       max_duration_minutes: 12, idempotency_key: input.idempotency_key,
-      content_revision: input.content_revision, solo_transfer_ack: input.solo_transfer_ack }, { purpose: "test", onCreated: run => {
+      content_revision: input.content_revision, solo_transfer_ack: input.solo_transfer_ack }, { purpose: "test", beforeCreate: () => {
+      const current = this.checked(actor, id, input.expected_revision);
+      if (current.test_status !== "passed") oldTest = this.fenceTest(actor, current.test_run_id);
+    }, onCreated: run => {
       this.checked(actor, id, input.expected_revision);
       this.bindRun(run.id, id, input.expected_revision, input);
       this.sql.prepare("UPDATE agent_team_definitions SET enabled=0,tested_revision=NULL,test_run_id=?,test_session_id=? WHERE id=?")
         .run(run.id, sessionId, id);
     } });
+    // Physical cleanup may publish a cancellation event. Do it only after the
+    // replacement and old durable fence have committed together.
+    if (oldTest) this.teams.stopPrivateTest(actor, oldTest);
+    return result;
   }
   start(actor: Actor, id: string, sessionId: string, raw: unknown) {
     const input = StartSavedAgentTeamSchema.parse(raw), existing = this.existingRun(actor, id, sessionId, input.idempotency_key, "task", input);
