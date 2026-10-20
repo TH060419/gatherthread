@@ -22,6 +22,10 @@ export function sharedCapsule(): AgentShareExecutionCapsule {
       created_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 720000).toISOString(), finished_at: null, error_code: null, cleanup_pending: false } };
 }
 
+function stoppedAcknowledgment(capsule: AgentShareExecutionCapsule) {
+  return { job: { ...capsule.job, status: "cancelled", cleanup_pending: false }, replayed: false };
+}
+
 test("shared context authenticates the canonical scope and digest without owner's native history", () => {
   const capsule = sharedCapsule(); assert.match(buildSharedAgentPrompt(capsule), /CURRENT AUTHORIZED TASK/);
   assert.throws(() => buildSharedAgentPrompt({ ...capsule, context_digest: "a".repeat(64) }), /digest/);
@@ -137,7 +141,7 @@ test("native restart withdraws old grants and READY requires an owner manual re-
   const api = { async reportSourceAvailability(_project: string, _runtime: string, state: string) { if (state !== "ready") enabled = false; },
     async reportAvailability() {}, async listShares() { return { shares: [{ ...share, enabled }] }; },
     async listJobs() { return { jobs: [{ ...capsule.job, status: "queued" }] }; },
-    async claim() { return { job: capsule.job, capsule, replayed: false }; }, async abortAck() {} } as unknown as SharedAgentControlApi;
+    async claim() { return { job: capsule.job, capsule, replayed: false }; }, async abortAck() { return stoppedAcknowledgment(capsule); } } as unknown as SharedAgentControlApi;
   const executor: SharedAgentExecutor = { async preflight() { return undefined; }, async execute(_input, signal) { calls++;
     await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true })); signal.throwIfAborted();
     return { content: "public", observedModel: "test-model" }; } };
@@ -154,7 +158,7 @@ test("withdrawal aborts native work and acknowledges cleanup only after executor
   const api = { async listShares() { return { shares: [{ ...share, enabled }] }; }, async listJobs() { return { jobs: [{ ...capsule.job, status: "queued" as const }] }; },
     async reportSourceAvailability() {}, async reportAvailability() {}, async claim() { return { job: capsule.job, capsule, replayed: false }; },
     async renewLease() { return { job: capsule.job, lease_expires_at: capsule.lease_expires_at, deadline_at: capsule.deadline_at }; },
-    async complete() { throw new Error("withdrawn must not publish"); }, async abortAck() { assert.equal(stopped, true); acknowledgments++; } } as unknown as SharedAgentControlApi;
+    async complete() { throw new Error("withdrawn must not publish"); }, async abortAck() { assert.equal(stopped, true); acknowledgments++; return stoppedAcknowledgment(capsule); } } as unknown as SharedAgentControlApi;
   const executor: SharedAgentExecutor = { async preflight() { return undefined; }, async execute(_input, signal) { calls++;
     await new Promise<void>(resolve => signal.addEventListener("abort", () => setTimeout(() => { stopped = true; resolve(); }, 10), { once: true }));
     signal.throwIfAborted(); return { content: "must not publish", observedModel: "test-model" }; } };
@@ -171,7 +175,7 @@ test("independent local watchdog stops execution while control HTTP remains stal
   const share = { id: "share", project_id: "project", owner_device_id: "device-a", source_runtime_id: "runtime-a", revision: 1, enabled: true, available: true } as AgentShare;
   const api = { async listShares() { if (stalled) await new Promise<void>(resolve => { release = resolve; entered.resolve(); }); return { shares: [share] }; },
     async listJobs() { return { jobs: [{ ...capsule.job, status: "queued" as const }] }; }, async reportSourceAvailability() {}, async reportAvailability() {},
-    async claim() { return { job: capsule.job, capsule, replayed: false }; }, async abortAck() {} } as unknown as SharedAgentControlApi;
+    async claim() { return { job: capsule.job, capsule, replayed: false }; }, async abortAck() { return stoppedAcknowledgment(capsule); } } as unknown as SharedAgentControlApi;
   const executor: SharedAgentExecutor = { async preflight() { return undefined; }, async execute(_input, signal) {
     await new Promise<void>(resolve => signal.addEventListener("abort", () => { aborted = true; resolve(); }, { once: true }));
     signal.throwIfAborted(); return { content: "late", observedModel: "test-model" }; } };
@@ -188,7 +192,7 @@ test("an accepted job can claim and renew while its own reservation makes new re
   const api = { async listShares() { return { shares: [share] }; }, async listJobs() { return { jobs: [{ ...capsule.job, status: "queued" as const }] }; },
     async reportSourceAvailability() {}, async reportAvailability() {}, async claim() { return { job: capsule.job, capsule, replayed: false }; },
     async renewLease() { renewals++; return { job: capsule.job, lease_expires_at: capsule.lease_expires_at, deadline_at: capsule.deadline_at }; },
-    async abortAck() {} } as unknown as SharedAgentControlApi;
+    async abortAck() { return stoppedAcknowledgment(capsule); } } as unknown as SharedAgentControlApi;
   const executor: SharedAgentExecutor = { async preflight() { return undefined; }, async execute(_input, signal) { calls++;
     await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true })); signal.throwIfAborted();
     return { content: "public", observedModel: "test-model" }; } };
@@ -202,7 +206,7 @@ test("simultaneous shutdown callers await the same native cleanup barrier", asyn
   const share = { id: "share", project_id: "project", owner_device_id: "device-a", source_runtime_id: "runtime-a", revision: 1,
     enabled: true, available: true } as AgentShare;
   const api = { async listShares() { return { shares: [share] }; }, async listJobs() { return { jobs: [{ ...capsule.job, status: "queued" as const }] }; },
-    async reportSourceAvailability() {}, async reportAvailability() {}, async claim() { return { job: capsule.job, capsule, replayed: false }; }, async abortAck() {} } as unknown as SharedAgentControlApi;
+    async reportSourceAvailability() {}, async reportAvailability() {}, async claim() { return { job: capsule.job, capsule, replayed: false }; }, async abortAck() { return stoppedAcknowledgment(capsule); } } as unknown as SharedAgentControlApi;
   const executor: SharedAgentExecutor = { async preflight() { return undefined; }, async execute(_input, signal) {
     await new Promise<void>(resolve => { release = () => { exited = true; resolve(); }; }); signal.throwIfAborted();
     return { content: "late", observedModel: "test-model" }; } };
@@ -219,7 +223,7 @@ test("shutdown racing an accepted claim acknowledges the never-started native jo
   const api = { async reportSourceAvailability() {}, async reportAvailability() {}, async listShares() { return { shares: [share] }; },
     async listJobs() { return { jobs: [{ ...capsule.job, status: "queued" }] }; }, async claim() {
       await new Promise<void>(resolve => { finishClaim = resolve; }); return { job: capsule.job, capsule, replayed: false };
-    }, async abortAck() { acknowledgments++; } } as unknown as SharedAgentControlApi;
+    }, async abortAck() { acknowledgments++; return stoppedAcknowledgment(capsule); } } as unknown as SharedAgentControlApi;
   const executor: SharedAgentExecutor = { async preflight() { return undefined; }, async execute() { calls++; throw new Error("Must not start"); } };
   const controller = new SharedAgentJobController({ projectId: "project", sourceRuntimeId: "runtime-a", ownerDeviceId: "device-a", api, executor,
     signal: rootAbort.signal, availability: async () => "ready" });
@@ -239,7 +243,7 @@ test("a connection interruption during an in-flight claim prevents execution bef
     async reportAvailability() {}, async listShares() { return { shares: [{ ...share, enabled }] }; },
     async listJobs() { return { jobs: [{ ...capsule.job, status: "queued" }] }; }, async claim() {
       entered.resolve(); await release.promise; return { job: capsule.job, capsule, replayed: false };
-    }, async abortAck() { acknowledgments++; } } as unknown as SharedAgentControlApi;
+    }, async abortAck() { acknowledgments++; return stoppedAcknowledgment(capsule); } } as unknown as SharedAgentControlApi;
   const executor: SharedAgentExecutor = { async preflight() { return undefined; }, async execute() { calls++; throw new Error("Must not execute after connection loss"); } };
   const controller = new SharedAgentJobController({ projectId: "project", sourceRuntimeId: "runtime-a", ownerDeviceId: "device-a", api, executor,
     now: () => now });
@@ -258,7 +262,7 @@ test("durable stopped receipts retry after reconnect without exposing context or
   const api = { async reportSourceAvailability() {}, async reportAvailability() {}, async listShares() { return { shares: [{ ...share, enabled }] }; },
     async listJobs() { return { jobs: [{ ...capsule.job, status: connected ? "cancelled" : "queued", cleanup_pending: true }] }; },
     async claim() { return { job: capsule.job, capsule, replayed: false }; }, async abortAck() {
-      assert.equal(stopped, true); if (!connected) throw new Error("Disconnected"); acknowledged++;
+      assert.equal(stopped, true); if (!connected) throw new Error("Disconnected"); acknowledged++; return stoppedAcknowledgment(capsule);
     } } as unknown as SharedAgentControlApi;
   const executor: SharedAgentExecutor = { async preflight() { return undefined; }, async execute(_input, signal) { calls++;
     await new Promise<void>(resolve => signal.addEventListener("abort", () => { stopped = true; resolve(); }, { once: true }));

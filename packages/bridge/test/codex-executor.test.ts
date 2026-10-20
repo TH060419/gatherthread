@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   CodexCliExecutor,
+  HarnessExecutionTerminatedError,
   parseCodexAppServerItems,
   type CanonicalEvent,
   type RegisteredRuntime,
@@ -141,7 +142,12 @@ writeFileSync(process.env.STARTED,JSON.stringify({pid:process.pid}));
   const abort = new AbortController();
   const turn = executor.execute({ request: canonical(1, "agent_request", { content: "fictional test" }), canonicalHistory: [],
     runtime: registeredRuntime(), signal: abort.signal });
-  const rejected = assert.rejects(turn, /fixture canceled/);
+  const rejected = assert.rejects(turn, (error: unknown) => {
+    assert.ok(error instanceof HarnessExecutionTerminatedError);
+    assert.equal(error.failureCode, "codex_execution_cancelled");
+    assert.match(String(error.cause), /fixture canceled/);
+    return true;
+  });
   const deadline = Date.now() + 3000;
   while (!(await readFile(started, "utf8").catch(() => ""))) {
     assert.ok(Date.now() < deadline); await new Promise((resolve) => setTimeout(resolve, 5));

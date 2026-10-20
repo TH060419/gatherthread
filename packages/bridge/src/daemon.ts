@@ -31,7 +31,7 @@ export class BridgeDaemon {
   }
 
   async run(): Promise<void> {
-    await this.#bridge.connect();
+    await this.#bridge.connect(this.#executor);
     const heartbeatStop = new AbortController();
     const heartbeatSignal = this.#signal
       ? AbortSignal.any([this.#signal, heartbeatStop.signal])

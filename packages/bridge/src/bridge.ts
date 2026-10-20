@@ -89,9 +89,9 @@ export class LocalBridge {
     return this.#runtime;
   }
 
-  async connect(): Promise<RegisteredRuntime> {
+  async connect(executor?: HarnessExecutor): Promise<RegisteredRuntime> {
+    await this.#recoverStoppedExecutions(executor);
     this.#runtime = await this.#api.registerRuntime(this.#runtimeConfig);
-    await this.#flushStoppedExecutions();
     return this.#runtime;
   }
 
@@ -149,10 +149,12 @@ export class LocalBridge {
             }
           } catch (error) {
             if (!isTerminalAgentRequestClaimConflict(error)) throw error;
-            if (!executor.projectCanonicalEvents) {
+            const canonicallyClosed = error instanceof CollaborationHttpError
+              && (error.code === "agent_request_failed" || error.code === "agent_request_already_completed");
+            if (!executor.projectCanonicalEvents && !canonicallyClosed) {
               throw new Error("Agent request was claimed by another runtime but this executor cannot project the canonical request safely");
             }
-            await executor.projectCanonicalEvents([event], runtime);
+            await executor.projectCanonicalEvents?.([event], runtime);
           }
         } else if (executor.projectCanonicalEvents) {
           await executor.projectCanonicalEvents([event], runtime);
@@ -299,16 +301,23 @@ export class LocalBridge {
     const runtime = this.#requireRuntime();
     this.#assertRuntimeSession(request.sessionId);
     this.#assertRuntimeFidelity("harness_transcript");
-    await this.#flushStoppedExecutions();
-    const claim = await this.#api.claimAgentRequest(request.sessionId, request.id, runtime.id, 1);
-    if (!claim.claimed) return { claimed: false, completed: [] };
+    const team = request.payload !== null && typeof request.payload === "object" && "agent_team" in request.payload;
+    const executionControlVersion = team ? executor.executionControlVersion : undefined;
+    if (team && (executionControlVersion !== 1 || !this.#api.readAgentExecution || !this.#api.acknowledgeAgentExecutionStopped)) {
+      throw new CollaborationHttpError(409, "This executor cannot safely run native Teams; update its execution control and recovery support", "connector_update_required");
+    }
+    await this.#recoverStoppedExecutions(executor);
+    const claim = await this.#api.claimAgentRequest(request.sessionId, request.id, runtime.id, executionControlVersion);
+    if (!claim.claimed) {
+      if (claim.status === "completed" || claim.status === "paused") await executor.acknowledgeCanonicalCompletion?.(request, runtime, claim.attemptCount ?? 1);
+      return { claimed: false, completed: [] };
+    }
     const claimAttempt = claim.attemptCount ?? 1;
     let watch: ReturnType<typeof setInterval> | undefined;
     let executionWatch: ReturnType<typeof createAgentExecutionWatch> | undefined;
     const controller = new AbortController();
     let executionStopped = false;
     // Only Team claims reserve the separate native-execution capacity hold.
-    const team = request.payload !== null && typeof request.payload === "object" && "agent_team" in request.payload;
     try {
     const canonicalHistory = await this.#readCanonicalHistory(request.sessionId, request.sequence);
     const authoritativeRequest = canonicalHistory.find((event) => event.id === request.id);
@@ -376,6 +385,7 @@ export class LocalBridge {
         canonicalHistory,
         ...(historyContext === undefined ? {} : { historyContext }),
         runtime,
+        claimAttempt,
         signal: controller.signal,
         ...(this.#api.appendAgentProgress === undefined ? {} : {
           publishProgress: async (update) => {
@@ -430,6 +440,7 @@ export class LocalBridge {
           source_harness: runtime.harness,
         },
       });
+      await executor.acknowledgeCanonicalCompletion?.(request, runtime, claimAttempt);
       return { claimed: true, completed: [failure] };
     }
     if (this.#api.readContext) {
@@ -467,6 +478,7 @@ export class LocalBridge {
       ...(execution.observedModel === undefined ? {} : { observedModel: execution.observedModel }),
       ...(execution.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: execution.observedReasoningEffort }),
     }));
+    await executor.acknowledgeCanonicalCompletion?.(request, runtime, claimAttempt);
     return { claimed: true, completed };
     } finally {
       if (watch) clearInterval(watch);
@@ -480,18 +492,42 @@ export class LocalBridge {
         if (!receipts.some((item) => JSON.stringify(item) === JSON.stringify(receipt))) receipts.push(receipt);
         if (receipts.length > 1000) throw new Error("Native execution stop receipt capacity exhausted");
         await this.#cursorStore.save({ ...state, stoppedExecutions: receipts });
-        await this.#flushStoppedExecutions();
+        await this.#flushStoppedExecutions(executor);
       }
     }
   }
 
-  async #flushStoppedExecutions(): Promise<void> {
+  async #recoverStoppedExecutions(executor?: HarnessExecutor): Promise<void> {
+    const previous = (await this.#cursorStore.load()).stoppedExecutions ?? [];
+    // A verified cursor receipt is independent of an unrelated uncertain native
+    // journal. Finish that cleanup before consulting any new native ownership.
+    await this.#flushStoppedExecutions();
+    if (this.#api.acknowledgeAgentExecutionStopped) for (const receipt of previous) {
+      try { await executor?.acknowledgeExecutionExit?.(receipt); }
+      catch { /* The exact server ACK is known; an uncertain journal stays unchanged. */ }
+    }
+    if (this.#api.acknowledgeAgentExecutionStopped && executor?.readStoppedExecutions) {
+      const stopped = await executor.readStoppedExecutions();
+      if (!Array.isArray(stopped) || stopped.length > 1000 || stopped.some((receipt) => !receipt || typeof receipt !== "object"
+        || Object.keys(receipt).length !== 4 || ![receipt.sessionId, receipt.requestId, receipt.runtimeId].every((id) => typeof id === "string" && id.length > 0 && id.length <= 200)
+        || !Number.isSafeInteger(receipt.claimAttempt) || receipt.claimAttempt < 1)) throw new Error("Invalid native execution stop receipts");
+      const state = await this.#cursorStore.load(), receipts = state.stoppedExecutions ?? [];
+      for (const receipt of stopped) if (!receipts.some((item) => item.sessionId === receipt.sessionId && item.requestId === receipt.requestId
+        && item.runtimeId === receipt.runtimeId && item.claimAttempt === receipt.claimAttempt)) receipts.push(receipt);
+      if (receipts.length > 1000) throw new Error("Native execution stop receipt capacity exhausted");
+      if (stopped.length > 0) await this.#cursorStore.save({ ...state, stoppedExecutions: receipts });
+    }
+    await this.#flushStoppedExecutions(executor);
+  }
+
+  async #flushStoppedExecutions(executor?: HarnessExecutor): Promise<void> {
     if (!this.#api.acknowledgeAgentExecutionStopped) return;
     while (true) {
       const state = await this.#cursorStore.load();
       if (!state.stoppedExecutions?.length) return;
       const receipt = state.stoppedExecutions[0]!;
       await this.#api.acknowledgeAgentExecutionStopped(receipt.sessionId, receipt.requestId, receipt.runtimeId, receipt.claimAttempt);
+      await executor?.acknowledgeExecutionExit?.(receipt);
       const latest = await this.#cursorStore.load();
       await this.#cursorStore.save({ ...latest, stoppedExecutions: latest.stoppedExecutions?.filter((item) =>
         item.sessionId !== receipt.sessionId || item.requestId !== receipt.requestId

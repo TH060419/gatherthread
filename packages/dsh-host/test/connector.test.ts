@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type {
   AgentRequestClaim,
@@ -10,10 +13,11 @@ import type {
   SessionSummary,
   HistoryContext,
 } from "@gatherthread/bridge";
-import { CollaborationHttpError, HarnessExecutionUnconfirmedError, HarnessExecutionTerminatedError } from "@gatherthread/bridge";
+import { CollaborationHttpError, HarnessExecutionUnconfirmedError, HarnessExecutionTerminatedError, SharedStoppedReceiptOutbox } from "@gatherthread/bridge";
 import { buildDshCanonicalPrompt } from "../src/canonical-prompt.js";
 import { parseDshHostConfig, type EnabledDshHostConfig } from "../src/config.js";
 import { DshHostConnector } from "../src/connector.js";
+import { createDshHostFacade } from "../src/dsh-compat.js";
 import { MemoryConnectorStateStore } from "../src/state-store.js";
 import type {
   ConnectorState,
@@ -707,6 +711,108 @@ test("DSH retries a lost native exit ACK after restart without another prompt", 
   await second.stop();
 });
 
+async function stoppedDshRestartFixture() {
+  const cfg = config(), api = new FakeApi(), persistence = freshPersistence(), store = new MemoryConnectorStateStore();
+  const event = request(1); event.payload = { ...(event.payload as object), agent_team: { run_id: "pre-start-cleanup" } }; api.events.push(event);
+  const receipts: unknown[][] = [], accepted = new Set<string>(), order: string[] = [];
+  let beforeReply: (() => Promise<void>) | undefined;
+  const control: DshCollaborationApi = Object.assign(api, { async readAgentExecution() { return { active: true }; },
+    async acknowledgeAgentExecutionStopped(...receipt: [string, string, string, number]) {
+      order.push("stop-ack"); receipts.push(receipt); accepted.add(JSON.stringify(receipt));
+      if (receipts.length === 1) throw Error("the accepted stop ACK was lost");
+      await beforeReply?.();
+    } });
+  const first = new DshHostConnector({ config: cfg, api: control, host: new FakeHost(cfg.dshSessionId, persistence), stateStore: store });
+  await first.start({ schedule: false, runImmediately: false }); await assert.rejects(first.pollOnce(), /stop ACK was lost/u); await first.stop();
+  const stored = (await store.load())!; assert.equal(stored.stoppedExecutions?.length, 1); order.length = 0;
+  return { cfg, api, control, persistence, store, receipts, accepted, order, stored,
+    beforeReply(callback: () => Promise<void>) { beforeReply = callback; } };
+}
+
+for (const blocker of ["session deleted", "permission revoked", "Host unavailable", "registration conflict"] as const) {
+  test(`DSH replays an exact confirmed stop receipt before ${blocker} can prevent restart`, async () => {
+    const f = await stoppedDshRestartFixture(), host = new FakeHost(f.cfg.dshSessionId, f.persistence);
+    const before = structuredClone(f.stored);
+    const list = f.api.listProjectSessions.bind(f.api), opening = host.open.bind(host), registering = f.api.registerRuntime.bind(f.api);
+    f.api.listProjectSessions = async () => { f.order.push("session-read");
+      if (blocker === "session deleted") throw new CollaborationHttpError(404, "session deleted", "not_found");
+      if (blocker === "permission revoked") throw new CollaborationHttpError(403, "permission revoked", "forbidden");
+      return list(); };
+    host.open = async () => { f.order.push("host-open"); if (blocker === "Host unavailable") throw Error("Host unavailable"); return opening(); };
+    f.api.registerRuntime = async input => { f.order.push("runtime-register");
+      if (blocker === "registration conflict") throw new CollaborationHttpError(409, "registration conflict", "agent_team_native_exit_pending"); return registering(input); };
+    const second = new DshHostConnector({ config: f.cfg, api: f.control, host, stateStore: f.store });
+    await assert.rejects(second.start({ schedule: false, runImmediately: false }), new RegExp(blocker));
+    assert.equal(f.order[0], "stop-ack", "private confirmed cleanup precedes history, native Host acquisition and runtime registration");
+    assert.equal(f.receipts.length, 2); assert.deepEqual(f.receipts[1], f.receipts[0]); assert.equal(f.accepted.size, 1, "an ACK lost after acceptance repeats the same exact identity");
+    assert.equal(f.persistence.prompts.length, 1, "cleanup never starts or resumes a native model turn");
+    assert.deepEqual(await f.store.load(), { ...before, stoppedExecutions: [] }, "only the acknowledged receipt changes even when normal startup fails");
+    const third = new DshHostConnector({ config: f.cfg, api: f.control, host: new FakeHost(f.cfg.dshSessionId, f.persistence), stateStore: f.store });
+    // Stop before normal startup can proceed; a cleared receipt is not replayed again.
+    f.api.listProjectSessions = async () => { throw Error("restart remains blocked"); };
+    await assert.rejects(third.start({ schedule: false, runImmediately: false }), /restart remains blocked/u);
+    assert.equal(f.receipts.length, 2); await second.stop(); await third.stop();
+  });
+}
+
+test("DSH early cleanup removes only the exact receipt from freshly loaded state", async () => {
+  const f = await stoppedDshRestartFixture(); let latest: ConnectorState | undefined;
+  f.beforeReply(async () => { latest = { ...(await f.store.load())!, automaticUpload: false, contentRevision: 2, localOnlySessionIds: ["retired-local-session"] }; await f.store.save(latest); });
+  f.api.listProjectSessions = async () => { throw new CollaborationHttpError(404, "session deleted", "not_found"); };
+  const second = new DshHostConnector({ config: f.cfg, api: f.control, host: new FakeHost(f.cfg.dshSessionId, f.persistence), stateStore: f.store });
+  await assert.rejects(second.start({ schedule: false, runImmediately: false }), /session deleted/u);
+  assert.equal(f.receipts.length, 2); assert.deepEqual(await f.store.load(), { ...latest, stoppedExecutions: [] }); await second.stop();
+});
+
+for (const field of ["projectId", "sessionId", "dshSessionId"] as const) {
+  test(`DSH refuses a mismatched stored ${field} before replaying stop metadata or accessing the Host`, async () => {
+    const f = await stoppedDshRestartFixture(), foreign = { ...f.stored, binding: { ...f.stored.binding, [field]: "another-binding" } };
+    await f.store.save(foreign); const host = new FakeHost(f.cfg.dshSessionId, f.persistence);
+    f.api.listProjectSessions = async () => { assert.fail("a mismatched local binding cannot access cloud history"); };
+    const second = new DshHostConnector({ config: f.cfg, api: f.control, host, stateStore: f.store });
+    await assert.rejects(second.start({ schedule: false, runImmediately: false }), /different binding/u);
+    assert.equal(f.receipts.length, 1); assert.equal(host.openCount, 0); assert.deepEqual(await f.store.load(), foreign); await second.stop();
+  });
+}
+
+test("DSH cannot turn an unconfirmed active request into an early stop acknowledgment", async () => {
+  const f = await stoppedDshRestartFixture(), pending = { ...f.stored, stoppedExecutions: [] };
+  assert.ok(pending.activeRequest); await f.store.save(pending);
+  f.api.listProjectSessions = async () => { throw new CollaborationHttpError(404, "session deleted", "not_found"); };
+  const host = new FakeHost(f.cfg.dshSessionId, f.persistence), second = new DshHostConnector({ config: f.cfg, api: f.control, host, stateStore: f.store });
+  await assert.rejects(second.start({ schedule: false, runImmediately: false }), /session deleted/u);
+  assert.equal(f.receipts.length, 1); assert.equal(host.openCount, 0); assert.deepEqual(await f.store.load(), pending); await second.stop();
+});
+
+test("DSH early shared cleanup survives a deleted source, lost ACK and unavailable session without opening the Host", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gt-dsh-shared-startup-"));
+  try {
+    const cfg = config({ statePath: path.join(directory, "dsh.json") }), api = new FakeApi(), store = new MemoryConnectorStateStore();
+    const receipt = { version: 1 as const, jobId: "deleted-source-shared-job", claimAttempt: 3, sourceRuntimeId: "deleted-source-runtime",
+      projectId: cfg.projectId, ownerDeviceId: cfg.deviceId };
+    const outbox = new SharedStoppedReceiptOutbox(path.join(directory, "shared-control", receipt.sourceRuntimeId)); await outbox.put(receipt);
+    const order: string[] = [], acknowledgments: unknown[][] = [], accepted = new Set<string>();
+    const control = Object.assign(api, { agentSharingApi: () => ({ async abortAck(jobId: string, input: unknown) {
+      order.push("shared-stop-ack"); acknowledgments.push([jobId, structuredClone(input)]); accepted.add(JSON.stringify([jobId, input]));
+      if (acknowledgments.length === 1) throw Error("shared stop ACK lost after acceptance");
+      return { job: { id: receipt.jobId, project_id: cfg.projectId, share_id: "deleted-share", share_revision: 1,
+        session_id: cfg.sessionId, request_event_id: "deleted-source-request", status: "cancelled", requester_user_id: "borrower", requester_display_name: "Borrower",
+        execution_profile: { harness: "deepseek-harness", provider: cfg.provider, model: cfg.model }, created_at: now,
+        deadline_at: null, finished_at: now, error_code: "owner_offline", cleanup_pending: false }, replayed: true };
+    } }) }) as unknown as DshCollaborationApi;
+    api.listProjectSessions = async () => { order.push("session-read"); throw new CollaborationHttpError(404, "session deleted", "not_found"); };
+    const firstHost = new FakeHost(cfg.dshSessionId, freshPersistence()), first = new DshHostConnector({ config: cfg, api: control, host: firstHost, stateStore: store });
+    await assert.rejects(first.start({ schedule: false, runImmediately: false }), /shared stop ACK lost/u);
+    assert.deepEqual(await outbox.list(receipt), [receipt]); assert.equal(firstHost.openCount, 0); assert.deepEqual(order, ["shared-stop-ack"]);
+    const secondHost = new FakeHost(cfg.dshSessionId, freshPersistence()), second = new DshHostConnector({ config: cfg, api: control, host: secondHost, stateStore: store });
+    await assert.rejects(second.start({ schedule: false, runImmediately: false }), /session deleted/u);
+    assert.deepEqual(order, ["shared-stop-ack", "shared-stop-ack", "session-read"]);
+    assert.deepEqual(acknowledgments[1], acknowledgments[0]); assert.equal(accepted.size, 1); assert.deepEqual(await outbox.list(receipt), []);
+    assert.equal(secondHost.openCount, 0); assert.equal(api.registrations.length, 0); assert.equal(await store.load(), undefined);
+    await first.stop(); await second.stop();
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("DSH refuses an indeterminate native writer without acknowledging that writer as stopped", async () => {
   const cfg = config(), api = new FakeApi(), persistence = freshPersistence(), store = new MemoryConnectorStateStore();
   const event = request(1); event.payload = { ...(event.payload as object), agent_team: { run_id: "run-1" } };
@@ -752,6 +858,56 @@ test("a DSH abort during Host preparation supplies no physical native-exit ackno
   assert.ok((await store.load())!.activeRequest);
   await connector.stop();
 });
+
+for (const lostAck of [false, true]) {
+  test(`the real DSH facade preserves native-idle evidence across a flush failure${lostAck ? " and a lost stop ACK" : ""}`, async () => {
+    const cfg = config(), api = new FakeApi(), store = new MemoryConnectorStateStore();
+    const event = request(1); event.payload = { ...(event.payload as object), agent_team: { run_id: "real-facade-run" } }; api.events.push(event);
+    const events: DshSessionEventRecord[] = [], listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    let exists = false, prompts = 0, nativeIdle = false, failFlush = true, acknowledgments = 0;
+    const emit = (name: string, ...args: unknown[]) => { for (const listener of listeners.get(name) ?? []) listener(...args); };
+    const session = { id: cfg.dshSessionId, header: { version: 2, cwd: cfg.workspacePath }, get seq() { return events.length; },
+      snapshotEvents(from = 0) { return events.slice(from); },
+      append(type: string, data: unknown) { const added = { type, seq: events.length, time: eventTime, data }; events.push(added); emit("session/event", session, added); return added; } };
+    const agent = { id: cfg.dshSessionId, ctx: {}, session, status: "idle",
+      followup(message: unknown) { prompts++; nativeIdle = false; this.status = "running"; session.append("user/message", message); session.append("turn/start", { turn: prompts }); },
+      async whenIdle() { session.append("assistant/message", { message: { content: [{ type: "text", text: "A bounded public answer" }] } });
+        session.append("turn/end", { turn: prompts, reason: { kind: "completed" } }); this.status = "idle"; nativeIdle = true; },
+      cancel() {},
+    };
+    const handle = { agent, async dispose() {} }, services = {
+      agents: { async create() { exists = true; return handle; }, async resume() { return handle; } },
+      sessionPersistence: { async stat() { return exists ? { header: { id: cfg.dshSessionId } } : undefined; } },
+      sessions: { async flush() { if (nativeIdle && failFlush) { failFlush = false; throw Error("PRIVATE_REAL_FACADE_FLUSH_EXCEPTION"); } } },
+      llm: { async resolveModelInfo(provider: string, model: string) { return { provider, id: model }; } },
+    };
+    const context = { get(name: string) { return services[name as keyof typeof services]; },
+      on(name: string, listener: (...args: unknown[]) => void) { const set = listeners.get(name) ?? new Set(); set.add(listener); listeners.set(name, set); return () => set.delete(listener); },
+      effect() { return () => undefined; } };
+    const newHost = () => createDshHostFacade({ context, sessionId: cfg.dshSessionId, workspacePath: cfg.workspacePath, provider: cfg.provider, model: cfg.model,
+      messageFactory: text => ({ role: "user", source: { kind: "user" }, content: [{ type: "text", text }] }),
+      moduleImporter: async () => ({ freezeMessage: (message: unknown) => structuredClone(message) }), modelSelectionInstaller: () => () => {},
+    });
+    const control: DshCollaborationApi = Object.assign(api, { async readAgentExecution() { return { active: true }; },
+      async acknowledgeAgentExecutionStopped() { assert.equal(nativeIdle, true); assert.equal(agent.status, "idle"); acknowledgments++;
+        if (lostAck && acknowledgments === 1) throw Error("fixture stop ACK lost"); } });
+    const first = new DshHostConnector({ config: cfg, api: control, host: newHost(), stateStore: store });
+    await first.start({ schedule: false, runImmediately: false });
+    await assert.rejects(first.pollOnce(), error => {
+      if (lostAck) assert.match((error as Error).message, /stop ACK lost/u);
+      else { assert.ok(error instanceof HarnessExecutionTerminatedError); assert.doesNotMatch(error.message, /PRIVATE_REAL_FACADE/u); }
+      return true;
+    });
+    assert.equal(prompts, 1); assert.equal(acknowledgments, 1, "the real facade's idle proof must reach connector's ACK path despite failed postprocessing");
+    assert.equal((await store.load())!.stoppedExecutions?.length, lostAck ? 1 : 0);
+    await first.stop();
+    const second = new DshHostConnector({ config: cfg, api: control, host: newHost(), stateStore: store });
+    await second.start({ schedule: false, runImmediately: false });
+    assert.equal(prompts, 1, "recovery must use the existing durable completed turn rather than rerun the model");
+    assert.equal(acknowledgments, lostAck ? 2 : 1); assert.deepEqual((await store.load())!.stoppedExecutions, []);
+    assert.equal(api.completions.length, 1); await second.stop();
+  });
+}
 
 test("DSH Team preparation failure does not acknowledge a possibly older native owner", async () => {
   const cfg = config(), api = new FakeApi(), persistence = freshPersistence(), store = new MemoryConnectorStateStore();

@@ -28,6 +28,7 @@ export async function runBridgeCli(env: NodeJS.ProcessEnv = process.env): Promis
     });
     const executor = new SubprocessHarnessExecutor({
       ...config.adapter,
+      executionStatePath: `${config.cursorPath}.execution.json`,
       harness: config.runtime.harness,
       signal: shutdown.signal,
       env,

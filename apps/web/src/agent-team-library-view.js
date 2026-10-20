@@ -90,7 +90,7 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   let scope = "", generation = 0, epoch = 0, readBusy = false, refreshTimer, teams = [], favorites = [], runs = [], testRuns = [], runRefreshFailed = false, hadTaskActivity = false,
     editId = null, draft = null, budgets = null, baseRevision = null, baseline = null, dirty = false, draftVersion = 0, selectedKey = "", returnFocus, catalogSignature = "", writableState, secondaryMode = "", refreshFavoriteControl = null;
   const intents = new Map();
-  const actionKinds = new WeakMap(), problemIntents = new WeakMap(), testReads = new Map();
+  const actionKinds = new WeakMap(), problemIntents = new WeakMap(), problemFences = new WeakMap(), obsoleteProblems = new WeakSet(), testReads = new Map();
   let runAuthority = 0, runAccessBlocked = false, observedContentRevision;
   let displayedProblem = null, displayedProblemText = null;
   const canvas = mountTeamCanvas({ document: doc, host: graphHost, t, makeId: makeKey, getDraft: () => draft,
@@ -106,6 +106,10 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     // This also fences receipts for runs not yet observed in this tab. A late
     // acceptance remains a receipt, but cannot restore erased/unauthorized data.
     runAuthority++; runs = []; testRuns = []; testReads.clear(); runAccessBlocked = blocked;
+    // A rendered server diagnostic is another private cache. Do not retain its
+    // old module label across an authorization/history fence or a locale refresh.
+    // Fixed local validation copy belongs to the current editor and stays intact.
+    if (displayedProblem) { displayedProblem = null; error.textContent = ""; }
   }
   function observeTeams(values, acceptedIntent) {
     for (const intent of intents.values()) if (intent !== acceptedIntent && ["save", "control", "test"].includes(intent.kind)) {
@@ -150,9 +154,24 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       && item.payload?.agent_team?.start_idempotency_key === pending.input.idempotency_key
       && item.payload?.agent_team?.task_content === pending.input.content)?.payload.agent_team.run_id;
   }
+  function isObsoleteError(problem) {
+    const fence = problemFences.get(problem);
+    return obsoleteProblems.has(problem) || Boolean(fence && (!current(fence.generation)
+      || fence.authority !== runAuthority || fence.contentRevision !== (context().contentRevision ?? 0)));
+  }
+  function describeError(problem, action) {
+    if (isObsoleteError(problem)) return "";
+    // The composer can retain the same public problem after this dialog closes.
+    // Keep its original authority fence so a later refresh cannot revive a
+    // private module label through localization or another caller's catch.
+    if (problem && typeof problem === "object" && !problemFences.has(problem)) problemFences.set(problem,
+      { generation, authority: runAuthority, contentRevision: context().contentRevision ?? 0 });
+    return describeTeamActionError(problem, actionKinds.get(problem) ?? action, t);
+  }
   function showError(problem) {
+    if (isObsoleteError(problem)) return;
     displayedProblem = problem; displayedProblemText = null;
-    error.textContent = describeTeamActionError(problem, actionKinds.get(problem), t);
+    error.textContent = describeError(problem);
   }
   function showLocalError(message) {
     displayedProblem = null; displayedProblemText = message; error.textContent = t(message);
@@ -302,6 +321,19 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
         if (intent.superseded) { intents.delete(intent.slot); return; }
         if (!isTeamActionUncertain(problem)) intents.delete(intent.slot);
         else intent.uncertain = true;
+        const historyChanged = contentRevision !== (context().contentRevision ?? 0)
+          || intent.contentRevision !== (context().contentRevision ?? 0);
+        if (authority !== runAuthority || runAccessBlocked || historyChanged) {
+          // Settle the original exact-key intent using its real outcome, but
+          // never let its obsolete private error cross this boundary. Outer
+          // click handlers and the composer can recognize the neutral failure
+          // without replacing a newer validation or reviving a label on locale change.
+          const neutral = Object.assign(new Error(historyChanged ? "Shared history changed; review the current conversation."
+            : "Team access changed; review your current permissions."),
+          { status: historyChanged ? 409 : 403, code: historyChanged ? "context_changed" : "forbidden" });
+          obsoleteProblems.add(neutral); actionKinds.set(neutral, intent.kind); problemIntents.set(neutral, intent);
+          throw neutral;
+        }
         if (problem && typeof problem === "object") { actionKinds.set(problem, intent.kind); problemIntents.set(problem, intent); }
         if (["start", "run", "test"].includes(intent.kind) && [401, 403, 404].includes(problem?.status)) clearPrivateRuns(true);
         showError(problem); throw problem;
@@ -634,7 +666,7 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
       for (const [action, label] of available) {
         const controlButton = button(label, () => void controlRun(run, action).catch(showError), action === "stop" ? "team-glass team-danger" : "team-glass");
         controlButton.dataset.teamControl = `run:${run.id}:${action}`;
-        controlButton.disabled = !(action === "stop" ? canControl() : context().writable) || Boolean(intents.get(`run-${action}:${run.id}`)?.busy); actions.append(controlButton);
+        controlButton.disabled = !(["pause", "stop"].includes(action) ? canControl() : context().writable) || Boolean(intents.get(`run-${action}:${run.id}`)?.busy); actions.append(controlButton);
       }
       if (terminal(run) && api.forgetTeamRun) {
         const slot = `forget:${run.id}`, clear = button("Clear private record", () => {
@@ -742,7 +774,7 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     t, choices: () => teams.filter(team => team.enabled && canEnable(team)).map(team => ({ key: `team:${team.id}`, label: team.draft.name, team })),
     selected: () => teams.find(team => `team:${team.id}` === selectedKey), select(key) { selectedKey = key; }, selectionKey: () => selectedKey,
     startTask, pendingStart: () => intents.has("start-task"), activeRun, recover: recoverActions, runNotice,
-    describeError: (problem, action) => describeTeamActionError(problem, actionKinds.get(problem) ?? action, t),
+    describeError, isObsoleteError,
     openRunRecords() { if (!dialog.open) { returnFocus = doc.activeElement; dialog.showModal(); }
       records.open = true; renderRuns(); recordTitle.focus({ preventScroll: true }); void refresh(); },
     controlRun, stopActive: () => { const run = activeRun(); return run ? controlRun(run, "stop") : Promise.resolve(); },

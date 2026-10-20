@@ -804,6 +804,8 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     let disposeSelection: (() => void) | undefined;
     let selectionRef: DshModelSelectionRef | undefined;
     let abortPrompt: (() => void) | undefined;
+    let nativeIdle = false;
+    const selectionSignal = signal ? AbortSignal.any([lifecycleAbort.signal, signal]) : lifecycleAbort.signal;
     try {
       if (requestedExecutionId === undefined) await open();
       throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
@@ -816,8 +818,9 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         const selection = await resolveDshExecutionSelection(
           context,
           requestedSelection,
-          lifecycleAbort.signal,
+          selectionSignal,
         );
+        selectionSignal.throwIfAborted();
         throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
         const install = options.modelSelectionInstaller ?? await loadModelSelectionInstaller();
         selectionRef = { current: selection, assembled: undefined };
@@ -859,9 +862,11 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
       try { await agent.whenIdle(); }
       catch (error) {
         if (agent.status !== "idle") throw new HarnessExecutionUnconfirmedError("DSH native prompt stopped responding before an idle acknowledgment");
+        nativeIdle = true;
         throw new HarnessExecutionTerminatedError("dsh_native_execution_stopped", "The native DSH execution stopped before a response.", { cause: error });
       }
       if (agent.status !== "idle") throw new HarnessExecutionUnconfirmedError("DSH native prompt returned without an idle acknowledgment");
+      nativeIdle = true;
       if (signal?.aborted) throw new HarnessExecutionTerminatedError("dsh_native_execution_cancelled", "The native DSH execution stopped after cancellation.");
       throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
       await sessions.flush(agent.session);
@@ -872,15 +877,25 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         toSequence,
         events: snapshotFrom(fromSequence, requestedExecutionId),
       };
+    } catch (cause) {
+      // Native idleness is independent of persistence/publication success.
+      // Preserve exact physical-exit evidence even when response assembly fails;
+      // preparation and unknown native ownership must never acquire that proof.
+      if (nativeIdle && !(cause instanceof HarnessExecutionTerminatedError)) throw new HarnessExecutionTerminatedError(
+        "dsh_native_execution_postprocessing_failed", "The native DSH execution stopped, but its response could not be finalized.", { cause });
+      throw cause;
     } finally {
       if (abortPrompt) signal?.removeEventListener("abort", abortPrompt);
       if (selectionRef !== undefined) {
         selectionRef.current = undefined;
         selectionRef.assembled = undefined;
       }
-      disposeSelection?.();
-      livePrompt = undefined;
-      promptActive = false;
+      try { disposeSelection?.(); }
+      catch (cause) {
+        if (nativeIdle) throw new HarnessExecutionTerminatedError("dsh_native_execution_cleanup_failed",
+          "The native DSH execution stopped, but its model selection cleanup failed.", { cause });
+        throw cause;
+      } finally { livePrompt = undefined; promptActive = false; }
     }
   };
 

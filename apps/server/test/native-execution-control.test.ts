@@ -14,6 +14,7 @@ import { AgentSharing } from "../src/agent-sharing.js";
 
 const dropNativeCaptureTriggers = `DROP TRIGGER IF EXISTS agent_native_exit_hold_session_capture;
   DROP TRIGGER IF EXISTS agent_native_exit_hold_runtime_capture; DROP TRIGGER IF EXISTS agent_native_exit_hold_claim_capture;
+  DROP TRIGGER IF EXISTS agent_native_exit_hold_event_capture;
   DROP INDEX IF EXISTS agent_request_claims_native_pending_idx;`;
 
 function fixture(path = ":memory:") {
@@ -253,8 +254,8 @@ test("detached native hold capture rolls back with refused session deletion and 
 test("native hold storage admits no new Team hold at capacity while ordinary execution and exact cleanup remain available", async () => {
   const f = fixture(); try {
     const insert = f.db.sqlite.prepare(`INSERT INTO agent_native_exit_holds
-      (request_event_id,runtime_id,claim_attempt,owner_user_id,owner_device_id,project_id,session_id,harness,created_at)
-      VALUES(?,?,1,?,?,?,?,?,?)`);
+      (request_event_id,runtime_id,claim_attempt,owner_user_id,owner_device_id,project_id,session_id,harness,created_at,origin_verified)
+      VALUES(?,?,1,?,?,?,?,?,?,1)`);
     f.db.sqlite.exec("BEGIN IMMEDIATE");
     for (let index = 0; index < 1000; index++) insert.run(`detached-cap-${index}`, `detached-runtime-${index}`, f.actor.user_id,
       f.actor.device_id, f.session.project_id, f.session.id, "codex", new Date().toISOString());

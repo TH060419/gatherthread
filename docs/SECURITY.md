@@ -288,6 +288,11 @@ Reconnect/startup commits OFF before READY;
 READY and old idempotent READY receipts never re-enable grants. Capacity limits
 retain emergency Stop capacity and a persistent source barrier when availability
 receipts are full.
+Confirmed cleanup receipts are replayed before source-availability and startup
+permission checks, including when the original source/history no longer exists.
+Recovery validates bounded private storage, exact project/device/source scope and
+the cleanup response; malformed, foreign or unknown native work cannot acquire a
+receipt. This cleanup grants no new execution or history access.
 
 The private capsule contains only the authorized public derived context; private
 history and raw native tool/hidden-reasoning content are excluded. The requester
@@ -410,10 +415,22 @@ old holds are never evicted to admit new work. A failed preparation, writer-lock
 refusal, uncertain host-idle result or arbitrary exception is not exit evidence
 and cannot clear another invocation's hold. Durable receipt and cursor updates
 merge current state after network waits instead of restoring stale snapshots.
+Runtime refresh cannot move an unresolved hold to another session or purpose.
+Legacy detached holds without a verifiable original request fence their owning
+device/harness across projects, rather than trusting a later runtime route.
+CLI/subprocess exit proof covers the owned POSIX process group, including
+descendants. Their private execution journals retain exact attempt identities,
+input fingerprints and local outcomes for crash recovery; they are never shared
+as diagnostics. A missing PID, stale lock or generic exception cannot establish
+exit. The Windows subprocess fallback therefore declines Team execution control.
+DSH preparation observes the request's cancellation signal; cleanup failures
+after verified host idle retain exit proof, while uncertain idle never does.
 Codex cancellation also covers automatic context compaction. Verified turn
 identity and terminal evidence permit exact interruption without stopping
 unrelated threads; if identity or terminal evidence cannot be obtained, the
 owned-process fallback may interrupt other threads in that same process.
+On Windows, that fallback alone cannot prove descendant exit and leaves the
+attempt unconfirmed; a matching native terminal remains valid evidence.
 Team control-block extraction uses bounded, linear scanning before parsing the
 small candidate JSON; a malformed but size-legal reply cannot trigger unbounded
 cross-line backtracking. Long public answers may retain a short valid control block.

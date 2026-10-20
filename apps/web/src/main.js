@@ -3150,6 +3150,13 @@ function renderCloudStatus() {
   element("settings-cloud-status").textContent = cloudStatusText(profile);
 }
 
+function clearStaleTeamComposerProblem() {
+  const problem = sendError.teamProblemIntent;
+  if (!problem?.problem || !teamsUi.isObsoleteError?.(problem.problem)) return;
+  if (sendError.textContent === problem.text) sendError.textContent = "";
+  delete sendError.teamProblemIntent;
+}
+
 function renderComposerPermissions() {
   if (pendingMessageSend && !pendingMessageSend()) {
     pendingMessageSend.restore();
@@ -3160,6 +3167,7 @@ function renderComposerPermissions() {
   cloudGithubUi.updateContext();
   sharedAgentsUi.updateContext();
   teamsUi.updateContext();
+  clearStaleTeamComposerProblem();
   const common = { session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase };
   const chat = canAppend({ ...common, kind: "human_chat" });
   const harness = currentProjectHarness();
@@ -3301,7 +3309,8 @@ async function sendMessage(kind) {
   renderComposerPermissions();
   button.textContent = "Sending…";
   let sharedAttempt = null;
-  const teamProblem = {};
+  const teamProblem = { text: sendError.textContent };
+  if (kind === "team_agent") sendError.teamProblemIntent = teamProblem;
   try {
     const leading = messageInput.value.length - messageInput.value.trimStart().length;
     const input = { content, idempotencyKey: createIdempotencyKey(kind), replyTo: metadata.replyTo,
@@ -3371,9 +3380,13 @@ async function sendMessage(kind) {
     }
   } catch (error) {
     if (kind === "shared_agent" && pendingSharedAgentIntent === sharedAttempt && error.status >= 400 && error.status < 500) pendingSharedAgentIntent = null;
-    if (isCurrent() && !sharedAttempt?.accepted) {
+    const currentTeamProblem = kind !== "team_agent" || (!teamsUi.isObsoleteError?.(error)
+      && contentRevision === (state.sync.contentRevision ?? 0)
+      && sendError.teamProblemIntent === teamProblem && sendError.textContent === teamProblem.text);
+    if (isCurrent() && !sharedAttempt?.accepted && currentTeamProblem) {
       sendError.textContent = kind === "team_agent" ? teamsUi.describeError(error, "start") : error.message ?? "The event was not accepted.";
       teamProblem.text = sendError.textContent;
+      teamProblem.problem = error;
       sendError.teamProblemIntent = kind === "team_agent" ? teamProblem : null;
     }
   } finally {
@@ -3387,7 +3400,16 @@ async function sendMessage(kind) {
 
 element("team-agent-recover").addEventListener("click", async () => {
   const isCurrent = captureWorkspaceScope();
-  try { await teamsUi.recover(); } catch (error) { if (isCurrent()) { delete sendError.teamProblemIntent; sendError.textContent = teamsUi.describeError(error, "recover"); } }
+  const contentRevision = state.sync.contentRevision ?? 0;
+  const previousProblem = sendError.teamProblemIntent, previousText = sendError.textContent;
+  try { await teamsUi.recover(); } catch (error) {
+    if (isCurrent() && !teamsUi.isObsoleteError?.(error) && contentRevision === (state.sync.contentRevision ?? 0)
+      && sendError.teamProblemIntent === previousProblem && sendError.textContent === previousText) {
+      sendError.textContent = teamsUi.describeError(error, "recover");
+      const problem = previousProblem ?? {};
+      problem.text = sendError.textContent; problem.problem = error; sendError.teamProblemIntent = problem;
+    }
+  }
   if (isCurrent()) renderComposerPermissions();
 });
 

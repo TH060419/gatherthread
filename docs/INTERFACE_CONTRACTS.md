@@ -179,6 +179,12 @@ Native Team claims require `execution_control_version:1` in the claim input;
 older native clients receive 409 `agent_execution_control_required` before work
 is admitted. Ordinary non-Team claims retain their previous compatibility.
 Updated bridges and DSH must be installed together with this preview server.
+The bridge advertises this capability only when its selected executor explicitly
+implements it. Official POSIX CLI/subprocess entries require a configured durable
+execution journal and verify that the owned process group has exited; merely
+observing the parent process close is insufficient. Their Windows process
+fallback does not advertise Team execution control and refuses Team work before
+claiming it; ordinary request compatibility is unchanged.
 `GET /v1/sessions/:session_id/agent-requests/:request_id/execution` takes strict
 `runtime_id,claim_attempt` query fields and returns `{ data:{ active:boolean } }`.
 It observes current authority, context, lease and Team control without renewing
@@ -193,6 +199,15 @@ session or revoked runtime/membership without gaining read, execution or write p
 Deletion of a session, project, runtime or claim preserves an outstanding native
 hold in a separate content-free identity record. The original active device can
 acknowledge that exact identity even after its history resources are gone.
+Cleanup and pool scope use the original canonical request envelope. A runtime
+with an unresolved hold cannot change session or purpose (409
+`agent_team_native_exit_pending`); same-route metadata refresh remains allowed.
+Detached holds carry additive `origin_verified` metadata. Existing rows are
+repaired only from a surviving canonical request; if that origin is unavailable,
+the original device/harness is conservatively held across projects. Exact
+original-device acknowledgment of such an unverified legacy row does not treat
+its old session URL as proof of origin; all other exact attempt fields still
+match. Verified rows require the original session as well.
 Missing and unauthorized identities receive the same content-free no-op reply,
 without modifying another device's hold or revealing whether a claim exists.
 A generic HTTP 404 is never interpreted as exit confirmation by a client.
@@ -218,6 +233,22 @@ no surviving local exit receipt cannot be cleared merely by reconnecting or
 waiting; the owning exact device must confirm the old attempt's actual exit.
 Content-free pending exit receipts are persisted locally and retried on reconnect
 without rerunning a turn. These APIs remain connector-only, outside user MCP.
+Official CLI entries use `${statePath}.execution.json`; subprocess adapter
+entries use `${cursorPath}.execution.json`; App Server Team execution uses
+`${statePath}.native-execution.json` alongside its existing projection journal.
+These private bounded journals bind
+the exact session/runtime/request/attempt and an input fingerprint, with prepared,
+started and settled states for CLI/subprocess work; App Server retains native
+turn-start tracking in its existing projection journal. Only settled native work
+can produce cleanup receipts. For these bridge executors, receipt persistence
+and retry precede a new runtime registration, so
+deletion or rebinding cannot block old cleanup. Lost completion acknowledgments
+replay the settled outcome instead of launching another process. Prepared or
+started ownership is never reclaimed merely because a PID is absent; unknown
+exit requires operator verification. Evidence is not evicted to admit new work.
+DSH likewise replays confirmed private exit receipts before session reads,
+host startup or registration, after verifying its persisted project/session/native
+binding. Unknown active requests and snapshots never supply exit proof.
 
 ## Snapshot and visible-history boundary
 
@@ -464,6 +495,13 @@ revocation cannot free an unconfirmed execution slot. The browser bounds reads
 and mutation acknowledgments independently; unknown acceptance retains the same
 body/key for explicit recovery before another request. Emergency disable remains
 available during an uncertain enable.
+Confirmed shared-stop outboxes also drain independently of current source
+availability or registration. Startup recovery reads only the bounded private
+control directory for the exact project/device, validates original source and
+attempt identities, and removes a receipt only after a verified terminal cleanup
+acknowledgment. Codex may locate an existing managed workspace by its exact
+server/project marker before project discovery; it does not guess a deleted
+project's workspace or inspect unrelated native conversations.
 
 Web sharing reads, sends, recovery and cancel operations each bound the whole
 HTTP exchange (including the response body) to eight seconds and abort their
@@ -577,6 +615,10 @@ deleted favorite. Access denial and content-revision invalidation also fence
 pending Start/control cache writes, including runs never previously listed.
 Receipt acceptance may still settle the original composer intent without
 restoring invalid private data. Reauthorization requires a fresh authorized read.
+The same authority/content-revision fences apply to delayed failures and already
+displayed diagnostics, including later locale rerenders. A stale failure cannot
+restore an old module label or overwrite a newer validation message or draft;
+an unknown transport result still retains its original retry body and key.
 At equal definition revision, delayed Save/Test acknowledgments cannot replace
 newer observed test metadata; a new exact recovery may read current state.
 A new exact-key recovery attempt can read the current receipt.
@@ -584,6 +626,9 @@ Pause/Stop fence execution before acknowledging. If native cancellation fails
 after that durable transition, same-state receipt recovery, startup and bounded
 coordinator retries repair the outstanding claim; they do not reopen the run,
 consume another call or let an old Pause receipt cancel resumed work.
+Web Pause and Stop use current control authority independently of WebSocket
+replay readiness; Resume, Continue and new work still require normal writable
+state. A pending Pause transport cannot block the independent Stop path.
 
 Run summaries may add a strict `issue` object containing `code`, nullable
 `node_id`, `node_label`, `target_kind:local|shared|cloud` and `retry_at` (ISO

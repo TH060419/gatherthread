@@ -59,14 +59,14 @@ function harness(names, overrides = {}) {
     location: { hash: "" }, URLSearchParams, initials: () => "U", localizer: { t: (value) => value },
     renderProjectSelect: noop, renderSessionList: noop, maybeOpenPendingDshPairing: noop,
     renderCurrentAvatar: noop, applyAvatarProfiles: noop,
-    renderMembers: noop, renderTimeline: noop, renderComposerPermissions: noop,
+    renderMembers: noop, renderTimeline: noop, renderComposerPermissions: noop, sendError: element(),
     renderSessionDeliveryControls: noop, announce: noop,
     memberRefreshInFlight: false, avatarProfilesRefreshInFlight: null, stopMemberRefresh: noop, stopSnapshotPolling: noop,
     sync: { disconnect: noop }, resetWorkspaceToAuth: noop,
     ...overrides,
     api: { getAccountAvatar: async () => ({ user_id: "u1", avatar_id: null }), listAvatarProfiles: async () => [], ...overrides.api },
   });
-  vm.runInContext([...new Set(["captureWorkspaceScope", "applyAccountAvatar", "refreshAccountAvatar", "refreshAvatarProfiles", ...names])]
+  vm.runInContext([...new Set(["captureWorkspaceScope", "applyAccountAvatar", "refreshAccountAvatar", "refreshAvatarProfiles", "clearStaleTeamComposerProblem", ...names])]
     .map(functionSource).join("\n"), context);
   return context;
 }

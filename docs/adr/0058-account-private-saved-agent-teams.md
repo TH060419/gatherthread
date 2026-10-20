@@ -76,7 +76,12 @@ foreign keys. Exact original-device exit receipts can retire them after deletion
 while absent or foreign acknowledgments are indistinguishable no-ops. New Team
 hold admission has account/global bounds and cannot evict unconfirmed old work.
 Native claim compatibility and the metadata-only control transport are defined
-in Interface contracts. A failed native
+in Interface contracts. Capability is executor-specific: process-backed entries
+must durably prove physical group settlement before exporting cleanup receipts;
+unsupported platforms refuse Team claims. Cleanup scope is immutable and old
+settled receipts drain before runtime registration. Ambiguous legacy origin or
+native ownership remains held, never guessed from current routing or PID reuse.
+A failed native
 cancellation remains repairable after the run ends or resumes onto a new step:
 startup and bounded coordinator retries inspect fenced outstanding claims,
 without dispatching another call or changing the run's outcome. A nullable

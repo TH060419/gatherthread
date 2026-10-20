@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { AgentShareExecutionCapsuleSchema, type AgentShare, type AgentShareJob, type AgentShareExecutionCapsule,
   type AgentShareJobLeaseInput, type AgentShareJobProgressInput, type CompleteAgentShareJobInput, type AbortAgentShareJobInput } from "@gatherthread/protocol";
 import { SharedExecutorCleanupUnconfirmedError, type SharedAgentExecutor } from "./shared-agent-executor.js";
-import { SharedStoppedReceiptOutbox, type SharedStoppedReceipt } from "./shared-stop-receipts.js";
+import { assertSharedStoppedAcknowledgment, SharedStoppedReceiptOutbox, type SharedStoppedReceipt } from "./shared-stop-receipts.js";
 
 export type SharedAgentAvailability = "ready" | "locked" | "offline" | "unsupported";
 export type SharedAgentAvailabilityProbe = () => Promise<SharedAgentAvailability>;
@@ -114,6 +114,9 @@ export class SharedAgentJobController {
   }
   async #tickOnce(): Promise<void> {
     await this.#loadOutbox();
+    // Exact stopped receipts remain valid after their source/session/project is
+    // removed. Report failures must not prevent that independent cleanup.
+    await this.#flushStopped();
     const availabilityRevision = this.#availabilityRevision;
     const state = await this.#probe();
     if (this.#rootAbort.signal.aborted) return;
@@ -125,7 +128,6 @@ export class SharedAgentJobController {
       this.#reportedSource = reportState;
     }
     if (this.#rootAbort.signal.aborted) return;
-    await this.#flushStopped();
     const { shares } = await this.#options.api.listShares(this.#options.projectId);
     if (this.#rootAbort.signal.aborted) return;
     this.#shares = shares.filter(share => share.source_runtime_id === this.#options.sourceRuntimeId
@@ -233,8 +235,8 @@ export class SharedAgentJobController {
     await this.#outbox?.remove(receipt); this.#cleanup.delete(receipt.jobId);
   }
   async #ackStopped(receipt: SharedStoppedReceipt): Promise<void> {
-    await this.#options.api.abortAck(receipt.jobId, { claim_attempt: receipt.claimAttempt, executor_stopped: true,
-      idempotency_key: `shared-abort:${receipt.jobId}:${receipt.claimAttempt}` }); await this.#forgetStopped(receipt);
+    assertSharedStoppedAcknowledgment(receipt, await this.#options.api.abortAck(receipt.jobId, { claim_attempt: receipt.claimAttempt, executor_stopped: true,
+      idempotency_key: `shared-abort:${receipt.jobId}:${receipt.claimAttempt}` })); await this.#forgetStopped(receipt);
   }
   async #flushStopped(): Promise<void> {
     for (const receipt of this.#cleanup.values()) if (receipt.jobId !== this.#active?.capsule.job.id) await this.#ackStopped(receipt);

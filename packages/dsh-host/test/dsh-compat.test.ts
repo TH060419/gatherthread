@@ -1291,7 +1291,8 @@ test("Host facade disposal interrupts an active prompt before flush or result pu
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   await bounded(facade.dispose(), 500);
-  await assert.rejects(bounded(prompt, 500), /disposed during prompt/);
+  await assert.rejects(bounded(prompt, 500), (error: unknown) => error instanceof HarnessExecutionTerminatedError
+    && error.cause instanceof Error && /disposed during prompt/.test(error.cause.message));
   assert.equal(f.calls.dispose, 1);
   assert.equal(f.calls.flush, 0);
   assert.equal(f.listenerCount(), 0);
@@ -1320,6 +1321,66 @@ test("Host facade emits cancellation exit evidence only after the real native id
   await rejected;
   assert.equal(f.agent.status, "idle"); assert.equal(f.calls.flush, 0);
   await facade.dispose();
+});
+
+for (const cancel of ["request", "host"] as const) {
+  test(`Host model preparation observes ${cancel} cancellation without claiming a native exit`, async () => {
+    const { f, facade } = facadeFixture(false), abort = new AbortController(), entered = deferred<void>(), release = deferred<void>();
+    Object.assign(f.agent, { cancel() {} });
+    let observed: AbortSignal | undefined;
+    Object.assign(f.context.get("llm"), { async resolveModelInfo(provider: string, model: string, signal: AbortSignal) {
+      observed = signal; entered.resolve(); await release.promise; signal.throwIfAborted(); return { provider, id: model };
+    } });
+    const prompting = facade.prompt("do not start after cancellation", { provider: "deepseek-official", model: "deepseek-reasoner" }, undefined, abort.signal);
+    const rejected = assert.rejects(prompting, error => !(error instanceof HarnessExecutionTerminatedError));
+    await entered.promise;
+    const disposing = cancel === "host" ? facade.dispose() : undefined;
+    if (cancel === "request") abort.abort(new Error("fixture request canceled"));
+    try { assert.equal(observed?.aborted, true, "the held resolver must receive both lifecycle and exact-request cancellation"); }
+    finally { release.resolve(); await rejected; await disposing; await facade.dispose(); }
+    assert.equal(f.calls.followup, 0); assert.equal(f.calls.flush, 0);
+  });
+}
+
+test("an already canceled Host prompt never begins model resolution or native followup", async () => {
+  const { f, facade } = facadeFixture(false), abort = new AbortController(); let resolutions = 0;
+  Object.assign(f.context.get("llm"), { async resolveModelInfo() { resolutions++; throw Error("must not resolve"); } });
+  abort.abort(new Error("already canceled"));
+  await assert.rejects(facade.prompt("do not run", { provider: "deepseek-official", model: "deepseek-reasoner" }, undefined, abort.signal), /already canceled/);
+  assert.equal(resolutions, 0); assert.equal(f.calls.followup, 0); await facade.dispose();
+});
+
+for (const failing of ["flush", "snapshot", "selection cleanup"] as const) {
+  test(`Host ${failing} failure after native idle retains typed exit evidence and releases its prompt barrier`, async () => {
+    const f = fixture(false); let fail = true, idleReached = false;
+    const originalIdle = f.agent.whenIdle.bind(f.agent);
+    f.agent.whenIdle = async () => { await originalIdle(); idleReached = true; };
+    if (failing === "flush") Object.assign(f.context.get("sessions"), { async flush() { if (fail && idleReached) throw Error("PRIVATE_POST_IDLE_FLUSH"); } });
+    if (failing === "snapshot") {
+      const snapshot = f.session.snapshotEvents.bind(f.session);
+      f.session.snapshotEvents = from => { if (fail && idleReached) throw Error("PRIVATE_POST_IDLE_SNAPSHOT"); return snapshot(from); };
+    }
+    const facade = createDshHostFacade({ context: f.context, sessionId: "dsh-session-1", workspacePath: "/readonly/workspace",
+      provider: "deepseek-official", model: "deepseek-v4-flash", messageFactory: text => ({ role: "user", content: [{ type: "text", text }] }),
+      modelSelectionInstaller: () => () => { if (fail && failing === "selection cleanup") throw Error("PRIVATE_POST_IDLE_DISPOSER"); },
+    });
+    const selection = failing === "selection cleanup" ? { provider: "deepseek-official", model: "deepseek-reasoner" } : undefined;
+    await assert.rejects(facade.prompt("first owned turn", selection), error => {
+      assert.equal(idleReached, true); assert.equal(f.agent.status, "idle");
+      assert.ok(error instanceof HarnessExecutionTerminatedError, "postprocessing cannot erase physical idle evidence");
+      assert.doesNotMatch(error.message, /PRIVATE_POST_IDLE/u); assert.ok(error.cause instanceof Error); return true;
+    });
+    fail = false; await facade.prompt("a later turn", selection);
+    assert.equal(f.calls.followup, 2, "even a disposer failure must release the in-memory prompt barrier"); await facade.dispose();
+  });
+}
+
+test("a whenIdle rejection with a still-running native Agent never gains typed exit evidence", async () => {
+  const { f, facade } = facadeFixture(false);
+  f.agent.whenIdle = async () => { throw Error("PRIVATE_NATIVE_CHANNEL_FAILURE"); };
+  await assert.rejects(facade.prompt("still owned by native"), error => error instanceof HarnessExecutionUnconfirmedError
+    && !(error instanceof HarnessExecutionTerminatedError));
+  assert.equal(f.calls.flush, 0); await facade.dispose();
 });
 
 test("Host facade aborts delayed create and resume without retaining a late handle", async () => {

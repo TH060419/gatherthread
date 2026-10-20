@@ -422,6 +422,12 @@ test("migration from a pre-deletion database preserves canonical IDs, foreign ke
     open = false;
     const legacy = new DatabaseSync(file);
     try {
+      // This fixture predates native-exit holds as well as message erasure.
+      // Do not retain newer triggers while rebuilding its historical events table.
+      legacy.exec(`DROP TRIGGER IF EXISTS agent_native_exit_hold_session_capture;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_runtime_capture;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_claim_capture;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_event_capture`);
       for (const [table, column] of [["events", "deleted_at"], ["events", "deleted_reason"], ["events", "content_revision"],
         ["sessions", "content_revision"], ["runtimes", "context_deletion_version"], ["snapshot_requests", "content_revision"]]) {
         legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
@@ -434,6 +440,7 @@ test("migration from a pre-deletion database preserves canonical IDs, foreign ke
     } finally { legacy.close(); }
     database = new CollaborationDatabase(file, options);
     open = true;
+    assert.equal(database.sqlite.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='trigger' AND name LIKE 'agent_native_exit_hold_%'").get()?.n, 4);
     assert.equal(database.getEvent(session.id, source.id).sequence, source.sequence);
     database.deleteMessage(actor, session.id, source.id, "migration-delete");
     assert.equal(database.requireSession(session.id).content_revision, 1);

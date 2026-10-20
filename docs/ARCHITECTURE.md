@@ -225,6 +225,11 @@ independent of history resources, so session deletion cannot free a still-runnin
 executor. Connectors persist content-free exit receipts across reconnects and
 only acknowledge verified settlement; preparation or ownership uncertainty keeps
 the hold. Both ordinary native and shared dispatch respect detached pool holds.
+The pool is frozen to canonical request scope; runtime metadata refresh cannot
+rebind an unresolved hold. CLI/subprocess executors persist physical settlement
+before bridge receipt delivery, and reconnect drains exact cleanup before new
+registration. Executor-specific capability admission and legacy-origin migration
+are defined by the native lifecycle contract in Interface contracts.
 
 A connectivity run is a separate `purpose:test` snapshot. Its first phase probes
 every module with an execution-specific marker. The second calls each destination

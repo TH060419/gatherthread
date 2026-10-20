@@ -8,8 +8,12 @@ import type {
   HarnessExecutionInput,
   HarnessExecutionResult,
   HarnessExecutor,
+  NativeExecutionExitReceipt,
 } from "./types.js";
 import { withoutGatherThreadCredentials } from "./executor.js";
+import { HarnessExecutionTerminatedError, HarnessExecutionUnconfirmedError } from "./bridge.js";
+import { ProcessExecutionState } from "./process-execution-state.js";
+import { stopOwnedProcess, terminateOwnedProcessGroup } from "./owned-process.js";
 
 export type CodexSandboxMode = "read-only" | "workspace-write";
 
@@ -61,6 +65,7 @@ const DEFAULT_MAX_TOOL_OUTPUT_BYTES = 32 * 1024;
  * event after the last locally completed Codex turn.
  */
 export class CodexCliExecutor implements HarnessExecutor {
+  get executionControlVersion(): 1 | undefined { return process.platform === "win32" ? undefined : 1; }
   readonly #workspacePath: string;
   readonly #statePath: string;
   readonly #model: string;
@@ -74,6 +79,7 @@ export class CodexCliExecutor implements HarnessExecutor {
   readonly #shareToolEvents: boolean;
   readonly #signal: AbortSignal | undefined;
   readonly #env: NodeJS.ProcessEnv;
+  readonly #executionState: ProcessExecutionState;
 
   constructor(options: CodexCliExecutorOptions) {
     if (!options.workspacePath.trim()) throw new Error("Codex workspace path must be non-empty");
@@ -102,6 +108,7 @@ export class CodexCliExecutor implements HarnessExecutor {
     this.#shareToolEvents = options.shareToolEvents !== false;
     this.#signal = options.signal;
     this.#env = withoutGatherThreadCredentials(options.env ?? process.env);
+    this.#executionState = new ProcessExecutionState(`${this.#statePath}.execution.json`, this.#maxOutputBytes);
   }
 
   async preflight(): Promise<{ version: string; authentication: string; workspacePath: string }> {
@@ -132,6 +139,18 @@ export class CodexCliExecutor implements HarnessExecutor {
   }
 
   async execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult> {
+    const team = input.request.payload !== null && typeof input.request.payload === "object" && "agent_team" in input.request.payload;
+    return team ? this.#executionState.execute(input, (started) => this.#execute(input, started)) : this.#execute(input);
+  }
+
+  async acknowledgeCanonicalCompletion(request: CanonicalEvent, runtime: HarnessExecutionInput["runtime"], claimAttempt: number): Promise<void> {
+    if (request.payload !== null && typeof request.payload === "object" && "agent_team" in request.payload) await this.#executionState.completed(request, runtime, claimAttempt);
+  }
+
+  async readStoppedExecutions(): Promise<NativeExecutionExitReceipt[]> { return this.#executionState.stopped(); }
+  async acknowledgeExecutionExit(receipt: NativeExecutionExitReceipt): Promise<void> { await this.#executionState.acknowledgeExit(receipt); }
+
+  async #execute(input: HarnessExecutionInput, started?: (pid: number) => Promise<void>): Promise<HarnessExecutionResult> {
     if (input.runtime.harness !== "codex") {
       throw new Error("Codex executor can only run a codex runtime");
     }
@@ -156,15 +175,15 @@ export class CodexCliExecutor implements HarnessExecutor {
     const signals = [this.#signal, input.signal].filter((signal): signal is AbortSignal => signal !== undefined);
     const signal = signals.length ? AbortSignal.any(signals) : undefined;
     signal?.throwIfAborted();
-    const result = await this.#runCodex(prompt, state?.threadId, workspacePath, signal);
-    signal?.throwIfAborted();
-    await this.#saveState({
+    const result = await this.#runCodex(prompt, state?.threadId, workspacePath, signal, started);
+    if (signal?.aborted) throw new HarnessExecutionTerminatedError("codex_execution_cancelled", "Codex execution aborted after its process exited.", { cause: signal.reason });
+    try { await this.#saveState({
       version: 1,
       gatherThreadSessionId: input.request.sessionId,
       workspacePath,
       threadId: result.threadId,
       coveredThroughSequence: input.request.sequence,
-    });
+    }); } catch (cause) { throw new HarnessExecutionTerminatedError("codex_state_save_failed", "Codex process exited, but its local session state could not be saved.", { cause }); }
     return {
       events: result.events,
       localSessionId: result.threadId,
@@ -176,6 +195,7 @@ export class CodexCliExecutor implements HarnessExecutor {
     threadId: string | undefined,
     workspacePath: string,
     signal?: AbortSignal,
+    started?: (pid: number) => Promise<void>,
   ): Promise<CodexRunResult> {
     const args = threadId
       ? [
@@ -197,12 +217,13 @@ export class CodexCliExecutor implements HarnessExecutor {
       timeoutMs: this.#timeoutMs,
       maxOutputBytes: this.#maxOutputBytes,
       signal,
+      ...(started === undefined ? {} : { started }),
     });
-    return parseCodexJsonl(output.stdout, {
+    try { return parseCodexJsonl(output.stdout, {
       expectedThreadId: threadId,
       shareToolEvents: this.#shareToolEvents,
       maxToolOutputBytes: this.#maxToolOutputBytes,
-    });
+    }); } catch (cause) { throw new HarnessExecutionTerminatedError("codex_output_invalid", "Codex CLI process exited without a valid completed response.", { cause }); }
   }
 
   async #loadState(
@@ -773,6 +794,7 @@ function runProcess(options: {
   timeoutMs: number;
   maxOutputBytes: number;
   signal: AbortSignal | undefined;
+  started?: (pid: number) => Promise<void>;
 }): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {
@@ -784,15 +806,19 @@ function runProcess(options: {
       env: options.env,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let outputBytes = 0;
     let settled = false;
-    let terminationError: Error | undefined;
+    let terminationError: HarnessExecutionTerminatedError | undefined;
+    let startupError: Error | undefined;
+    let preparation: Promise<void> | undefined;
+    let terminationAttempt: Promise<void> | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
     const timeout = setTimeout(() => {
-      terminateChild(new Error("Codex execution timed out"));
+      terminateChild(new HarnessExecutionTerminatedError("codex_execution_timeout", "Codex execution timed out and its process exited."));
     }, options.timeoutMs);
     timeout.unref();
 
@@ -806,56 +832,60 @@ function runProcess(options: {
       else resolve(result ?? { stdout: "", stderr: "" });
     };
     const abort = () => {
-      terminateChild(options.signal?.reason instanceof Error ? options.signal.reason : new Error("Codex execution aborted"));
+      terminateChild(new HarnessExecutionTerminatedError("codex_execution_cancelled", "Codex execution aborted after its process exited.", { cause: options.signal?.reason }));
     };
     options.signal?.addEventListener("abort", abort, { once: true });
     child.stdout.on("data", collect(stdout));
     child.stderr.on("data", collect(stderr));
-    child.once("error", () => finish(new Error("Codex CLI could not be started; install Codex and confirm `codex login status`")));
-    child.once("close", (code, signal) => {
+    child.once("error", (error) => { startupError = error; });
+    child.once("close", async (code, signal) => {
+      await preparation;
+      await terminationAttempt;
+      if (process.platform !== "win32" && child.pid) {
+        try { await terminateOwnedProcessGroup(child.pid); }
+        catch { finish(new HarnessExecutionUnconfirmedError("Codex CLI process-group exit could not be confirmed")); return; }
+      }
       if (terminationError) { finish(terminationError); return; }
+      if (startupError) { finish(new HarnessExecutionTerminatedError("codex_start_failed", "Codex CLI could not be started; no process remains active.", { cause: startupError })); return; }
       const result = {
         stdout: Buffer.concat(stdout).toString("utf8").trim(),
         stderr: Buffer.concat(stderr).toString("utf8").trim(),
       };
       if (code !== 0) {
-        finish(new Error(
-          `Codex CLI exited unsuccessfully (${signal ?? code ?? "unknown"})${safeStderrSuffix(result.stderr)}`,
-        ));
+        finish(new HarnessExecutionTerminatedError("codex_execution_failed", `Codex CLI exited unsuccessfully (${signal ?? code ?? "unknown"}).`));
         return;
       }
       finish(undefined, result);
     });
     child.stdin.once("error", () => undefined);
-    child.stdin.end(options.stdin);
+    child.once("spawn", () => {
+      preparation = (async () => {
+        try {
+          if (options.started && child.pid) await options.started(child.pid);
+          if (options.signal?.aborted) abort();
+          if (!terminationError && !settled) child.stdin.end(options.stdin);
+        } catch (cause) { terminateChild(new HarnessExecutionTerminatedError("codex_preparation_failed", "Codex CLI preparation failed; its process exited.", { cause })); }
+      })();
+    });
 
     function collect(target: Buffer[]): (chunk: Buffer) => void {
       return (chunk) => {
         outputBytes += chunk.length;
         if (outputBytes > options.maxOutputBytes) {
-          terminateChild(new Error("Codex output exceeded the configured limit"));
+          terminateChild(new HarnessExecutionTerminatedError("codex_output_limit", "Codex output exceeded the configured limit; its process exited."));
           return;
         }
         target.push(chunk);
       };
     }
-    function terminateChild(error: Error) {
-      if (terminationError) return;
+    function terminateChild(error: HarnessExecutionTerminatedError) {
+      if (terminationError || settled) return;
       terminationError = error;
-      child.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      terminationAttempt = stopOwnedProcess(child, "SIGTERM").catch(() => undefined);
+      forceKillTimer = setTimeout(() => { void stopOwnedProcess(child, "SIGKILL").catch(() => undefined); }, 5_000);
       forceKillTimer.unref();
     }
   });
-}
-
-function safeStderrSuffix(stderr: string): string {
-  if (!stderr) return "";
-  const safe = redactText(stderr)
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\b(?:gta|gtb|gti|gtd)_[A-Za-z0-9_-]{16,}\b/g, "[REDACTED]")
-    .slice(0, 400);
-  return `: ${safe}`;
 }
 
 function isCodexSessionState(value: unknown): value is CodexSessionState {

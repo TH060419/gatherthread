@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import vm from "node:vm";
 import { mountAgentTeams } from "../src/agent-team-library-view.js";
 
 class Element {
@@ -1576,10 +1578,30 @@ for (const missing of ["connection", "model", "effort", "cloud revision"]) {
 test("Team Stop remains available during realtime replay and checks current control authorization", async () => {
   const f = fixture({ initialRuns: [startedRun("http-stoppable")] }); await flush(); f.hostButton.click(); await flush();
   f.update({ writable: false, controlWritable: true });
-  assert.equal(f.button("Stop").disabled, false); assert.equal(f.button("Pause").disabled, true);
+  assert.equal(f.button("Stop").disabled, false); assert.equal(f.button("Pause").disabled, false);
   f.button("Stop").click(); await flush(); assert.equal(f.calls[0][3].action, "stop");
   f.runs = [startedRun("no-longer-authorized")]; await f.ui.refresh(); f.update({ controlWritable: false });
   assert.equal(f.button("Stop").disabled, true, "current authorization remains distinct from transport replay");
+});
+
+test("Pause uses current HTTP control authority while replaying, deduplicates itself and never blocks independent Stop", async () => {
+  let releasePause;
+  const run = startedRun("replay-pause-stop");
+  const f = fixture({ initialRuns: [run], overrides: {
+    controlTeamRun: async (session, id, input) => {
+      f.calls.push(["run-control", session, id, structuredClone(input)]);
+      if (input.action === "pause") return new Promise(resolve => { releasePause = () => resolve({ run: { ...run, status: "paused" } }); });
+      f.runs = [{ ...run, status: "stopped" }]; return { run: structuredClone(f.runs[0]) };
+    },
+  } }); await flush(); f.hostButton.click(); await flush(); f.update({ writable: false, controlWritable: true });
+  const pause = f.button("Pause"); assert.equal(pause.disabled, false); pause.click(); pause.click(); await flush();
+  assert.equal(f.calls.length, 1); assert.equal(f.button("Pause").disabled, true); assert.equal(f.button("Stop").disabled, false);
+  f.button("Stop").click(); await flush(); assert.equal(f.calls.length, 2); assert.equal(f.calls[1][3].action, "stop");
+  releasePause(); await flush(); assert.equal(f.ui.activeRun(), undefined, "the old Pause receipt cannot undo confirmed Stop");
+  f.runs = [{ ...run, status: "paused", error_code: null }]; await f.ui.refresh();
+  assert.equal(f.button("Resume").disabled, true, "replay does not authorize a new execution");
+  f.update({ controlWritable: false }); assert.equal(f.button("Stop").disabled, true);
+  f.runs = [run]; await f.ui.refresh(); assert.equal(f.button("Pause").disabled, true);
 });
 
 test("successful exact recovery clears only that dialog error and language changes cannot revive it", async () => {
@@ -1808,3 +1830,190 @@ test("a picker opened while Unfavorite is pending cannot retain the deleted snap
   assert.equal(secondary.querySelectorAll(".team-row-edit").length, 0, "both the ACK and an equal later GET must not leave an insertable deleted module");
   assert.equal(secondary.open, true, "updating its content must not close or reopen the user's current dialog");
 });
+
+async function delayedDiagnosticAction(action) {
+  let resolve, reject, response, reads = "allowed", attempts = 0, publicError, accepted = 0;
+  const initial = twoNodeTeam();
+  if (action !== "Test") Object.assign(initial, { test_status: "passed", tested_revision: initial.revision, enabled: action === "Start" });
+  const run = startedRun("diagnostic-old-view"), hold = value => { response = value; return new Promise((yes, no) => { resolve = yes; reject = no; }); };
+  const f = fixture({ initial: [initial], initialRuns: ["Control", "Recovery"].includes(action) ? [run] : [], overrides: {
+    listTeamRuns: async () => {
+      if (reads === "denied") throw Object.assign(Error("access denied"), { status: 403, code: "forbidden" });
+      if (reads === "offline") throw Error("network offline");
+      return { runs: structuredClone(f.runs) };
+    },
+    executeAgentTeam: async (_session, id, _input, testing) => hold({ run: { ...run, definition_id: id, purpose: testing ? "test" : "task" } }),
+    saveAgentTeam: async (id, body) => hold({ team: team(id, { revision: 2, draft: structuredClone(body.draft) }) }),
+    controlAgentTeam: async (_session, id, body) => hold({ team: { ...structuredClone(initial), id, revision: 2, enabled: body.enabled, tested_revision: 2 } }),
+    controlTeamRun: async () => {
+      if (action === "Recovery" && ++attempts === 1) throw Error("the first receipt was lost");
+      return hold({ run: { ...run, status: "paused" } });
+    },
+  } }); await open(f);
+  let pending;
+  if (action === "Start") { f.ui.select("team:team-a"); pending = f.ui.startTask("The original task", { onAccepted: () => accepted++ }).catch(error => { publicError = error; }); }
+  else if (action === "Control") pending = f.ui.controlRun(run, "pause").catch(error => { publicError = error; });
+  else if (action === "Recovery") { await assert.rejects(f.ui.controlRun(run, "pause")); await flush(); pending = f.ui.recover(); }
+  else {
+    if (action === "Save") editInput(f.el("team-name"), "Saved in the original view");
+    f.el(action === "Test" ? "team-test" : action === "Save" ? "team-save" : "team-enable").click();
+  }
+  await flush(); assert.ok(resolve, `${action} reached its actual API boundary`);
+  return { f, get publicError() { return publicError; }, accepted: () => accepted,
+    async invalidate(boundary) {
+      if (boundary === "access denied") { reads = "denied"; await f.ui.refresh(); }
+      else if (boundary === "history changed") { reads = "offline"; f.update({ contentRevision: 1, events: [] }); }
+      else {
+        f.teams = [twoNodeTeam()]; f.runs = [];
+        f.update({ scope: "another-account:project-b:session-b", userId: "another-account", projectId: "project-b", sessionId: "session-b" });
+        await open(f);
+      }
+      // This validation belongs to the current visible editor. An old outcome
+      // must not replace it, even through an outer click-handler catch or locale refresh.
+      f.document.body.querySelector("[data-edge-id='edge-a-b']").click();
+      const source = f.el("team-selection-source"); source.value = "node-b"; source.dispatch("change");
+      assert.match(f.document.body.querySelector(".form-error").textContent, /route already exists/u);
+    },
+    async settle(outcome) {
+      if (outcome === "success") resolve(response);
+      else reject(Object.assign(Error("SYNTHETIC_PRIVATE_EXCEPTION"), { status: 409, code: "agent_team_target_unavailable",
+        details: { node_id: "node-a", node_label: "OLD_PRIVATE_MODULE_DIAGNOSTIC", target_kind: "local" } }));
+      await pending; await flush();
+    },
+  };
+}
+
+for (const action of ["Start", "Test", "Save", "Enable", "Control", "Recovery"]) {
+  for (const boundary of ["access denied", "history changed", "scope changed"]) for (const outcome of ["success", "failure"]) {
+    test(`a delayed ${action} ${outcome} after ${boundary} cannot replace the current validation or disclose an old diagnostic`, async () => {
+      const scenario = await delayedDiagnosticAction(action), { f } = scenario;
+      await scenario.invalidate(boundary); await scenario.settle(outcome);
+      const message = f.document.body.querySelector(".form-error");
+      assert.match(message.textContent, /route already exists/u);
+      assert.doesNotMatch(message.textContent, /OLD_PRIVATE_MODULE_DIAGNOSTIC|SYNTHETIC_PRIVATE_EXCEPTION/u);
+      f.document.documentElement.lang = "zh-CN"; f.ui.refreshLanguage();
+      assert.match(message.textContent, /连线|起点|终点|线路/u);
+      assert.doesNotMatch(message.textContent, /OLD_PRIVATE_MODULE_DIAGNOSTIC|SYNTHETIC_PRIVATE_EXCEPTION/u);
+      if (outcome === "failure" && ["Start", "Control"].includes(action) && boundary !== "scope changed") {
+        assert.ok(scenario.publicError, "the original caller receives a settled public failure");
+        assert.equal(scenario.publicError.details, undefined);
+        assert.equal(f.ui.isObsoleteError(scenario.publicError), true);
+        assert.equal(scenario.publicError.code, boundary === "history changed" ? "context_changed" : "forbidden");
+      }
+      if (action === "Start") {
+        assert.equal(f.ui.pendingStart(), false, "a definite original rejection or accepted receipt retires its intent");
+        assert.equal(scenario.accepted(), outcome === "success" && boundary !== "scope changed" ? 1 : 0);
+      }
+    });
+  }
+}
+
+test("invalidating history also clears a previously rendered private action diagnostic before language refresh", async () => {
+  const f = fixture({ initialRuns: [startedRun("cached-private-error")], overrides: {
+    controlTeamRun: async () => { throw Object.assign(Error("PRIVATE_EXCEPTION"), { status: 409, code: "agent_team_target_unavailable",
+      details: { node_label: "PREVIOUS_PRIVATE_LABEL", node_id: "node-a", target_kind: "local" } }); },
+  } }); await flush(); await assert.rejects(f.ui.controlRun(f.ui.activeRun(), "pause")); await flush();
+  assert.match(f.document.body.querySelector(".form-error").textContent, /PREVIOUS_PRIVATE_LABEL/u);
+  f.update({ contentRevision: 1, events: [] }); f.document.documentElement.lang = "zh-CN"; f.ui.refreshLanguage();
+  assert.doesNotMatch(f.document.body.querySelector(".form-error").textContent, /PREVIOUS_PRIVATE_LABEL/u);
+});
+
+for (const boundary of ["access denied", "history changed", "scope changed"]) {
+  test(`a previously returned action problem becomes obsolete after ${boundary} and cannot be described again`, async () => {
+    let denied = false, problem;
+    const f = fixture({ initialRuns: [startedRun("returned-private-error")], overrides: {
+      listTeamRuns: async () => { if (denied) throw Object.assign(Error("denied"), { status: 403, code: "forbidden" }); return { runs: structuredClone(f.runs) }; },
+      controlTeamRun: async () => { throw Object.assign(Error("PRIVATE_PROVIDER_DETAIL"), { status: 409, code: "agent_team_target_unavailable",
+        details: { node_id: "node-a", node_label: "RETURNED_PRIVATE_MODULE", target_kind: "local" } }); },
+    } }); await flush();
+    await assert.rejects(f.ui.controlRun(f.ui.activeRun(), "pause"), error => { problem = error; return true; });
+    assert.equal(f.ui.isObsoleteError(problem), false); assert.match(f.ui.describeError(problem, "run"), /RETURNED_PRIVATE_MODULE/u);
+    if (boundary === "access denied") { denied = true; await f.ui.refresh(); }
+    else if (boundary === "history changed") f.update({ contentRevision: 1, events: [] });
+    else f.update({ scope: "bob:project-b:session-b", userId: "bob", projectId: "project-b", sessionId: "session-b" });
+    f.document.documentElement.lang = "zh-CN"; f.ui.refreshLanguage();
+    assert.equal(f.ui.isObsoleteError(problem), true, "the actual error already returned to main retains its original diagnostic fence");
+    assert.equal(f.ui.describeError(problem, "run"), "");
+    assert.doesNotMatch(f.document.body.querySelector(".form-error").textContent, /RETURNED_PRIVATE_MODULE|PRIVATE_PROVIDER_DETAIL/u);
+  });
+}
+
+test("the current action's own permission rejection remains visible instead of being mistaken for an obsolete error", async () => {
+  let problem;
+  const f = fixture({ initialRuns: [startedRun("current-forbidden")], overrides: {
+    controlTeamRun: async () => { throw Object.assign(Error("PRIVATE_FORBIDDEN_EXCEPTION"), { status: 403, code: "forbidden" }); },
+  } }); await flush();
+  await assert.rejects(f.ui.controlRun(f.ui.activeRun(), "pause"), error => { problem = error; return true; }); await flush();
+  assert.equal(f.ui.isObsoleteError(problem), false);
+  assert.match(f.ui.describeError(problem, "run"), /permissions/u);
+  assert.match(f.document.body.querySelector(".form-error").textContent, /permissions/u);
+  assert.doesNotMatch(f.document.body.querySelector(".form-error").textContent, /PRIVATE_FORBIDDEN_EXCEPTION/u);
+});
+
+test("a late unknown Start outcome keeps its frozen recovery key even when its diagnostic is obsolete", async () => {
+  let reject, problem, accepted = 0;
+  const initial = twoNodeTeam(); Object.assign(initial, { enabled: true, test_status: "passed", tested_revision: initial.revision });
+  const f = fixture({ initial: [initial], overrides: {
+    executeAgentTeam: async (session, id, input) => {
+      f.calls.push(["execute", session, id, structuredClone(input)]);
+      if (f.calls.length === 1) return new Promise((_resolve, no) => { reject = no; });
+      throw Object.assign(Error("The old context no longer exists"), { status: 409, code: "context_changed" });
+    },
+  } }); await open(f); f.ui.select("team:team-a");
+  const starting = f.ui.startTask("A frozen request", { onAccepted: () => accepted++ }).catch(error => { problem = error; }); await flush();
+  f.update({ contentRevision: 1, events: [] });
+  f.document.body.querySelector("[data-edge-id='edge-a-b']").click();
+  const source = f.el("team-selection-source"); source.value = "node-b"; source.dispatch("change");
+  reject(Object.assign(Error("PRIVATE_NETWORK_EXCEPTION"), { status: 0, code: "request_timeout" })); await starting; await flush();
+  assert.equal(f.ui.isObsoleteError(problem), true); assert.equal(problem.details, undefined);
+  assert.equal(f.ui.pendingStart(), true, "a neutral public 409 must not incorrectly settle the original unknown transport outcome");
+  assert.match(f.document.body.querySelector(".form-error").textContent, /route already exists/u);
+  await f.ui.recover(); await flush();
+  assert.equal(f.calls.length, 2); assert.deepEqual(f.calls[1], f.calls[0], "recovery sends only the original accepted-or-unknown intent and key");
+  assert.equal(f.ui.pendingStart(), false, "the exact-key recovery's definite rejection settles the original intent"); assert.equal(accepted, 0);
+  assert.match(f.document.body.querySelector(".form-error").textContent, /route already exists/u);
+});
+
+const composerMainSource = (await readFile(new URL("../src/main.js", import.meta.url), "utf8")).replace(/\r\n?/gu, "\n");
+function composerFunctionSource(name) {
+  const start = composerMainSource.search(new RegExp(`^(?:async )?function ${name}\\(`, "m")); assert.notEqual(start, -1, name);
+  const tail = composerMainSource.slice(start), end = tail.indexOf("\n}\n") + 2; assert.ok(end > 1, name); return tail.slice(0, end);
+}
+
+for (const boundary of ["access denied", "history changed"]) for (const foreground of ["original draft", "new validation"]) {
+  test(`the real composer and mounted Team UI reject a delayed private failure after ${boundary} while preserving ${foreground}`, async () => {
+    let reject, denied = false, sent = 0, executeCalls = 0;
+    const initial = team("team-a", { enabled: true, test_status: "passed", tested_revision: 1 });
+    const f = fixture({ initial: [initial], overrides: {
+      listTeamRuns: async () => { if (denied) throw Object.assign(Error("access denied"), { status: 403, code: "forbidden" }); return { runs: [] }; },
+      executeAgentTeam: async () => { executeCalls++; return new Promise((_resolve, no) => { reject = no; }); },
+    } }); await open(f); f.ui.select("team:team-a");
+    // Composer nodes are separate from the mounted Team dialog, as in main.
+    const node = () => ({ value: "", textContent: "", disabled: false, childNodes: [], focus() {}, replaceChildren(...children) { this.childNodes = children; } });
+    const raw = "An original Team request", app = vm.createContext({
+      authenticationGeneration: 1, selectedSessionGeneration: 1,
+      state: { currentUser: { id: "alice" }, project: { id: "project-a" }, session: { id: "session-a", mode: "multi" },
+        settings: { composer: { confirmAgentRequest: false } }, sync: { contentRevision: 0 } },
+      messageInput: { ...node(), value: raw }, sendAgentButton: node(), sendChatButton: node(), sendError: node(),
+      pendingMessageSend: null, currentProjectHarness: () => "team", agentRequestControl: { action: () => "request" },
+      createIdempotencyKey: () => "composer-key", renderComposerPermissions() {}, localizer: { t: value => value }, window: { confirm: () => true },
+      api: { appendAgentRequest() { assert.fail("A Team task cannot bypass its service"); } },
+      messageActions: { metadata: () => ({ replyTo: null, mentions: [] }), sent() { sent++; } }, teamsUi: f.ui,
+    });
+    vm.runInContext(["captureWorkspaceScope", "sendMessage"].map(composerFunctionSource).join("\n"), app);
+    const sending = app.sendMessage("agent_request"); await flush(); assert.equal(executeCalls, 1); assert.equal(typeof reject, "function");
+    if (boundary === "access denied") { denied = true; await f.ui.refresh(); }
+    else { app.state.sync.contentRevision = 1; f.update({ contentRevision: 1, events: [] }); }
+    let expected = "";
+    if (foreground === "new validation") { app.messageInput.value = ""; await app.sendMessage("agent_request"); expected = "Write a message first."; app.messageInput.value = "A newer draft"; }
+    const draft = app.messageInput.value;
+    reject(Object.assign(Error("PRIVATE_PROVIDER_EXCEPTION"), { status: 409, code: "agent_team_target_unavailable",
+      details: { node_id: "node-a", node_label: "LATE_COMPOSER_PRIVATE_LABEL", target_kind: "local" } }));
+    await sending; await flush();
+    assert.equal(app.sendError.textContent, expected); assert.equal(app.messageInput.value, draft); assert.equal(sent, 0);
+    assert.equal(f.ui.pendingStart(), false, "the real rejected intent is settled despite suppressing its obsolete diagnostic");
+    assert.equal(app.pendingMessageSend, null); assert.equal(executeCalls, 1);
+    f.document.documentElement.lang = "zh-CN"; f.ui.refreshLanguage();
+    assert.doesNotMatch(app.sendError.textContent + f.document.body.querySelector(".form-error").textContent, /LATE_COMPOSER_PRIVATE_LABEL|PRIVATE_PROVIDER_EXCEPTION/u);
+  });
+}

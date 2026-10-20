@@ -1085,25 +1085,46 @@ export class CollaborationDatabase {
       owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       owner_device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
       project_id TEXT NOT NULL, session_id TEXT NOT NULL, harness TEXT NOT NULL, created_at TEXT NOT NULL,
+      origin_verified INTEGER NOT NULL DEFAULT 0 CHECK(origin_verified IN (0,1)),
       PRIMARY KEY(request_event_id,runtime_id,claim_attempt)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS agent_native_exit_holds_pool_idx ON agent_native_exit_holds(owner_device_id,project_id,harness);
     CREATE INDEX IF NOT EXISTS agent_native_exit_holds_owner_idx ON agent_native_exit_holds(owner_user_id);
     CREATE INDEX IF NOT EXISTS agent_request_claims_native_pending_idx ON agent_request_claims(runtime_id) WHERE execution_pending=1;`);
+    this.transaction(() => {
+      if (!this.sqlite.prepare("PRAGMA table_info(agent_native_exit_holds)").all().some(row => row.name === "origin_verified")) {
+        this.sqlite.exec("ALTER TABLE agent_native_exit_holds ADD COLUMN origin_verified INTEGER NOT NULL DEFAULT 0 CHECK(origin_verified IN (0,1))");
+      }
+      // Older captures followed a mutable runtime binding. Only a surviving
+      // canonical request can verify/repair that origin; missing history never
+      // lends its guessed project authority to another execution.
+      this.sqlite.exec(`UPDATE agent_native_exit_holds AS h SET origin_verified=1,
+        session_id=(SELECT e.session_id FROM events e WHERE e.id=h.request_event_id),
+        project_id=(SELECT s.project_id FROM events e JOIN sessions s ON s.id=e.session_id WHERE e.id=h.request_event_id)
+        WHERE h.origin_verified=0 AND EXISTS(SELECT 1 FROM events e JOIN sessions s ON s.id=e.session_id
+          WHERE e.id=h.request_event_id AND e.type='agent_request' AND e.actor_user_id=h.owner_user_id)`);
+    });
     const captureNativeHolds = (predicate: string) => `INSERT OR IGNORE INTO agent_native_exit_holds
-      (request_event_id,runtime_id,claim_attempt,owner_user_id,owner_device_id,project_id,session_id,harness,created_at)
-      SELECT c.request_event_id,c.runtime_id,c.attempt_count,r.user_id,r.device_id,s.project_id,s.id,r.harness,c.claimed_at
-      FROM agent_request_claims c JOIN runtimes r ON r.id=c.runtime_id JOIN sessions s ON s.id=r.session_id
+      (request_event_id,runtime_id,claim_attempt,owner_user_id,owner_device_id,project_id,session_id,harness,created_at,origin_verified)
+      SELECT c.request_event_id,c.runtime_id,c.attempt_count,r.user_id,r.device_id,s.project_id,s.id,r.harness,c.claimed_at,1
+      FROM agent_request_claims c JOIN runtimes r ON r.id=c.runtime_id JOIN events e ON e.id=c.request_event_id
+      JOIN sessions s ON s.id=e.session_id
       JOIN users u ON u.id=r.user_id JOIN devices d ON d.id=r.device_id AND d.user_id=r.user_id
-      WHERE c.execution_pending=1 AND r.purpose='execution' AND ${predicate};`;
+      WHERE c.execution_pending=1 AND e.type='agent_request' AND ${predicate};`;
     // Parent BEFORE triggers see metadata that SQLite removes before invoking
     // child FK cascades. The claim trigger also covers independent erasure.
-    this.sqlite.exec(`CREATE TRIGGER IF NOT EXISTS agent_native_exit_hold_session_capture BEFORE DELETE ON sessions BEGIN
+    this.transaction(() => this.sqlite.exec(`DROP TRIGGER IF EXISTS agent_native_exit_hold_session_capture;
+      DROP TRIGGER IF EXISTS agent_native_exit_hold_runtime_capture;
+      DROP TRIGGER IF EXISTS agent_native_exit_hold_claim_capture;
+      DROP TRIGGER IF EXISTS agent_native_exit_hold_event_capture;
+      CREATE TRIGGER agent_native_exit_hold_session_capture BEFORE DELETE ON sessions BEGIN
       ${captureNativeHolds("s.id=OLD.id")} END;
-      CREATE TRIGGER IF NOT EXISTS agent_native_exit_hold_runtime_capture BEFORE DELETE ON runtimes BEGIN
+      CREATE TRIGGER agent_native_exit_hold_runtime_capture BEFORE DELETE ON runtimes BEGIN
       ${captureNativeHolds("r.id=OLD.id")} END;
-      CREATE TRIGGER IF NOT EXISTS agent_native_exit_hold_claim_capture BEFORE DELETE ON agent_request_claims BEGIN
-      ${captureNativeHolds("c.request_event_id=OLD.request_event_id")} END;`);
+      CREATE TRIGGER agent_native_exit_hold_claim_capture BEFORE DELETE ON agent_request_claims BEGIN
+      ${captureNativeHolds("c.request_event_id=OLD.request_event_id")} END;
+      CREATE TRIGGER agent_native_exit_hold_event_capture BEFORE DELETE ON events BEGIN
+      ${captureNativeHolds("e.id=OLD.id")} END;`));
     this.sqlite.exec(AGENT_SHARING_SCHEMA);
     if (!this.sqlite.prepare("PRAGMA table_info(events)").all().some(row => row.name === "shared_execution_json")) {
       this.sqlite.exec("ALTER TABLE events ADD COLUMN shared_execution_json TEXT CHECK(shared_execution_json IS NULL OR json_valid(shared_execution_json))");
@@ -4232,7 +4253,27 @@ export class CollaborationDatabase {
     capture_fidelity: CaptureFidelity;
   }): RuntimeRecord {
     if (input.device_id !== actor.device_id) throw unauthorized("Runtime device must match the authenticated device");
+    return this.transaction(() => {
     this.assertActiveDevice(actor);
+    if ((input.purpose ?? "execution") === "snapshot_connector") this.requireReadableSessionInsideTransaction(actor, input.session_id);
+    else this.requireWritableSessionInsideTransaction(actor, input.session_id);
+    const identity = this.sqlite.prepare("SELECT * FROM runtimes WHERE device_id=? AND harness=? AND local_session_id=?")
+      .get(input.device_id, input.harness, input.local_session_id);
+    if (input.runtime_id) {
+      const requested = this.sqlite.prepare("SELECT * FROM runtimes WHERE id=?").get(input.runtime_id);
+      if (requested && (requested.user_id !== actor.user_id || requested.device_id !== input.device_id
+        || requested.harness !== input.harness || requested.local_session_id !== input.local_session_id)) throw notFound("Runtime");
+      const held = !requested ? this.sqlite.prepare("SELECT owner_user_id,owner_device_id FROM agent_native_exit_holds WHERE runtime_id=? LIMIT 1").get(input.runtime_id) : undefined;
+      if (held && (held.owner_user_id !== actor.user_id || held.owner_device_id !== actor.device_id)) throw notFound("Runtime");
+      if (held) {
+        throw new ApiError(409, "agent_team_native_exit_pending", "Confirm the previous native execution has stopped before reusing its runtime identity");
+      }
+    }
+    if (identity && (identity.session_id !== input.session_id || identity.purpose !== (input.purpose ?? "execution"))
+      && (this.sqlite.prepare("SELECT 1 FROM agent_request_claims WHERE runtime_id=? AND execution_pending=1 LIMIT 1").get(identity.id!)
+        || this.sqlite.prepare("SELECT 1 FROM agent_native_exit_holds WHERE runtime_id=? LIMIT 1").get(identity.id!))) {
+      throw new ApiError(409, "agent_team_native_exit_pending", "Confirm the previous native execution has stopped before moving its session or changing its purpose");
+    }
     const runtimeId = input.runtime_id ?? randomUUID();
     const timestamp = this.now();
     const executionProfiles = input.execution_profiles === undefined
@@ -4260,6 +4301,7 @@ export class CollaborationDatabase {
         .run(registered.id, JSON.stringify(capability), timestamp);
     } else this.sqlite.prepare("DELETE FROM agent_share_runtime_capabilities WHERE runtime_id=?").run(registered.id);
     return this.getRuntime(registered.id);
+    });
   }
 
   getRuntime(runtimeId: string): RuntimeRecord {
@@ -4380,9 +4422,12 @@ export class CollaborationDatabase {
         || event.actor_user_id !== actor.user_id || runtime.status === "revoked" || runtime.purpose !== "execution") {
         throw conflict("The request is eligible only for the initiating user's active runtime");
       }
-      if (!this.teamRequestMayExecute(requestEventId)) return { claim: {
-        request_event_id: requestEventId, runtime_id: runtimeId, status: "paused", attempt_count: 1,
-      } };
+      if (!this.teamRequestMayExecute(requestEventId)) {
+        const prior = this.sqlite.prepare("SELECT runtime_id,attempt_count FROM agent_request_claims WHERE request_event_id=?").get(requestEventId);
+        if (prior && prior.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
+        return { claim: { request_event_id: requestEventId, runtime_id: runtimeId, status: "paused",
+          attempt_count: Number(prior?.attempt_count ?? 1), content_revision: event.content_revision ?? 0 } };
+      }
       const target = agentRequestTarget(event);
       const matching = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((candidate) =>
         candidate.purpose === "execution"
@@ -4487,16 +4532,16 @@ export class CollaborationDatabase {
       // a foreign caller cannot observe whether this request was ever claimed.
       // Each write still binds the original account/device and exact attempt.
       this.sqlite.prepare(`DELETE FROM agent_native_exit_holds WHERE request_event_id=? AND runtime_id=? AND claim_attempt=?
-        AND owner_user_id=? AND owner_device_id=? AND session_id=?`)
+        AND owner_user_id=? AND owner_device_id=? AND (origin_verified=0 OR session_id=?)`)
         .run(requestEventId, runtimeId, claimAttempt, actor.user_id, actor.device_id, sessionId);
       // Even a delayed acknowledgment may clear only its exact native attempt.
       // Missing/older receipts are harmless; they never retire a newer claim.
       this.sqlite.prepare(`UPDATE agent_request_claims SET execution_pending=0
         WHERE request_event_id=? AND runtime_id=? AND attempt_count=? AND EXISTS(
           SELECT 1 FROM runtimes r JOIN events e ON e.id=agent_request_claims.request_event_id
-          WHERE r.id=agent_request_claims.runtime_id AND r.user_id=? AND r.device_id=? AND r.session_id=?
-            AND r.purpose='execution' AND e.session_id=? AND e.actor_user_id=? AND e.type='agent_request')`)
-        .run(requestEventId, runtimeId, claimAttempt, actor.user_id, actor.device_id, sessionId, sessionId, actor.user_id);
+          WHERE r.id=agent_request_claims.runtime_id AND r.user_id=? AND r.device_id=?
+            AND e.session_id=? AND e.actor_user_id=? AND e.type='agent_request')`)
+        .run(requestEventId, runtimeId, claimAttempt, actor.user_id, actor.device_id, sessionId, actor.user_id);
       return { active: false };
     });
   }
@@ -4506,8 +4551,8 @@ export class CollaborationDatabase {
     const runtime = this.sqlite.prepare(`SELECT r.user_id,r.device_id,r.harness,s.project_id FROM runtimes r
       JOIN sessions s ON s.id=r.session_id WHERE r.id=?`).get(runtimeId);
     if (!runtime) return undefined;
-    if (this.sqlite.prepare(`SELECT 1 FROM agent_native_exit_holds WHERE owner_device_id=? AND project_id=? AND harness=? LIMIT 1`)
-      .get(runtime.device_id!, runtime.project_id!, runtime.harness!)) return "agent_team_native_exit_pending";
+    if (this.sqlite.prepare(`SELECT 1 FROM agent_native_exit_holds WHERE owner_device_id=? AND harness=? AND (origin_verified=0 OR project_id=?) LIMIT 1`)
+      .get(runtime.device_id!, runtime.harness!, runtime.project_id!)) return "agent_team_native_exit_pending";
     if (forTeam && this.nativeHoldCapacityFull(String(runtime.user_id))) return "agent_team_native_hold_capacity";
     return undefined;
   }
@@ -5749,6 +5794,7 @@ export class CollaborationDatabase {
         DROP TRIGGER IF EXISTS agent_native_exit_hold_session_capture;
         DROP TRIGGER IF EXISTS agent_native_exit_hold_runtime_capture;
         DROP TRIGGER IF EXISTS agent_native_exit_hold_claim_capture;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_event_capture;
         CREATE TABLE agent_request_claims_next (
           request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
           runtime_id TEXT NOT NULL REFERENCES runtimes(id),
@@ -5795,6 +5841,7 @@ export class CollaborationDatabase {
         DROP TRIGGER IF EXISTS agent_native_exit_hold_session_capture;
         DROP TRIGGER IF EXISTS agent_native_exit_hold_runtime_capture;
         DROP TRIGGER IF EXISTS agent_native_exit_hold_claim_capture;
+        DROP TRIGGER IF EXISTS agent_native_exit_hold_event_capture;
         CREATE TABLE agent_request_claims_next (
           request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
           runtime_id TEXT NOT NULL REFERENCES runtimes(id),

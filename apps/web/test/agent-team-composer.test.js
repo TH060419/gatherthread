@@ -13,7 +13,8 @@ const functionSource = name => {
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const noop = () => {};
 const plain = value => JSON.parse(JSON.stringify(value));
-const node = () => ({ value: "", textContent: "", disabled: false, childNodes: [], focus: noop,
+const node = () => ({ value: "", textContent: "", disabled: false, childNodes: [], focus: noop, handlers: new Map(),
+  addEventListener(type, handler) { this.handlers.set(type, handler); },
   replaceChildren(...children) { this.childNodes = children; } });
 
 function fixture(start) {
@@ -185,3 +186,68 @@ test("an old acceptance cannot clear a newer Team error with identical public wo
   original.onAccepted({ run: { id: "older-accepted" } }); assert.equal(f.app.sendError.textContent, newerText);
   f.calls[1].options.onAccepted({ run: { id: "newer-accepted" } }); assert.equal(f.app.sendError.textContent, "");
 });
+
+for (const invalidation of ["history", "obsolete", "validation", "newer_problem"]) {
+  test(`late Team start failure preserves the composer after ${invalidation}`, async () => {
+    const pending = deferred(), f = fixture(() => pending.promise), before = f.metadata();
+    const sending = f.app.sendMessage("agent_request");
+    let expected = "";
+    if (invalidation === "history") f.app.state.sync.contentRevision++;
+    if (invalidation === "obsolete") f.app.teamsUi.isObsoleteError = () => true;
+    if (invalidation === "validation") {
+      f.app.messageInput.value = ""; await f.app.sendMessage("agent_request");
+      expected = "Write a message first.";
+    }
+    if (invalidation === "newer_problem") {
+      f.app.sendError.textContent = expected = "A more recent problem";
+    }
+    pending.reject(Object.assign(Error("synthetic delayed failure"), { status: 409, code: "agent_team_model_unavailable",
+      details: { node_label: "OBSOLETE_PRIVATE_MODULE" } }));
+    await sending;
+    assert.equal(f.app.sendError.textContent, expected);
+    assert.doesNotMatch(f.app.sendError.textContent, /OBSOLETE_PRIVATE_MODULE/u);
+    assert.deepEqual(f.metadata(), before); assert.equal(f.sent(), 0); assert.equal(f.app.pendingMessageSend, null);
+  });
+}
+
+for (const invalidation of ["history", "obsolete", "validation"]) {
+  test(`late Team recovery failure preserves the composer after ${invalidation}`, async () => {
+    const f = fixture(), pending = deferred();
+    f.app.teamsUi.recover = () => pending.promise;
+    const start = source.indexOf('element("team-agent-recover").addEventListener(');
+    const end = source.indexOf('\nelement("shared-agent-recover")', start);
+    assert.ok(start > 0 && end > start); vm.runInContext(source.slice(start, end), f.app);
+    const old = { text: "Earlier unknown result" };
+    f.app.sendError.textContent = old.text; f.app.sendError.teamProblemIntent = old;
+    const recovering = f.app.element("team-agent-recover").handlers.get("click")();
+    let expected = old.text;
+    if (invalidation === "history") f.app.state.sync.contentRevision++;
+    if (invalidation === "obsolete") f.app.teamsUi.isObsoleteError = () => true;
+    if (invalidation === "validation") {
+      f.app.messageInput.value = ""; await f.app.sendMessage("agent_request"); expected = "Write a message first.";
+    }
+    pending.reject(Object.assign(Error("synthetic delayed recovery"), { status: 409, code: "agent_team_model_unavailable",
+      details: { node_label: "OBSOLETE_PRIVATE_MODULE" } }));
+    await recovering;
+    assert.equal(f.app.sendError.textContent, expected);
+    assert.doesNotMatch(f.app.sendError.textContent, /OBSOLETE_PRIVATE_MODULE/u);
+    assert.equal(f.sent(), 0);
+  });
+}
+
+for (const newer of [false, true]) {
+  test(`a previously displayed Team diagnostic is removed on invalidation without clearing a newer problem (${newer})`, async () => {
+    const problem = Object.assign(Error("synthetic module unavailable"), { status: 409, code: "agent_team_model_unavailable",
+      details: { node_label: "EXPIRED_MODULE_LABEL" } });
+    const f = fixture(async () => { throw problem; }); let obsolete = false;
+    f.app.teamsUi.isObsoleteError = value => value === problem && obsolete;
+    await f.app.sendMessage("agent_request"); assert.match(f.app.sendError.textContent, /EXPIRED_MODULE_LABEL/u);
+    if (newer) f.app.sendError.textContent = "Keep this newer problem";
+    obsolete = true;
+    vm.runInContext(functionSource("clearStaleTeamComposerProblem"), f.app);
+    f.app.clearStaleTeamComposerProblem();
+    assert.equal(f.app.sendError.textContent, newer ? "Keep this newer problem" : "");
+    assert.equal(f.app.sendError.teamProblemIntent, undefined);
+    assert.equal(f.app.messageInput.value, f.raw); assert.equal(f.sent(), 0);
+  });
+}

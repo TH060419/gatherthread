@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { createLiveOutputPublisher, liveOutputPayload, redactText, redactValue } from "@gatherthread/adapters";
 import { isSessionWritableBy, parseHistoryContext, SharedAgentJobController, createAgentExecutionWatch, HarnessExecutionTerminatedError,
-  isDefinitiveAgentExecutionRejection, CollaborationHttpError, type SharedAgentExecutor } from "@gatherthread/bridge";
+  isDefinitiveAgentExecutionRejection, recoverSharedStoppedReceipts, CollaborationHttpError, type SharedAgentExecutor } from "@gatherthread/bridge";
 import type { SharedExecutionCapability } from "@gatherthread/protocol";
 import { historySummaryMarker } from "@gatherthread/protocol";
 import {
@@ -311,6 +311,17 @@ export class DshHostConnector {
     this.#started = true;
     this.#automaticPolling = options.schedule !== false;
     this.#notifyLifecycle("connecting");
+    try {
+      const cleanupState = await this.#stateStore.load();
+      if (cleanupState) this.#assertStateBinding(cleanupState);
+      await this.#recoverStoppedBeforeStartup(cleanupState);
+      if (this.#api.agentSharingApi) await recoverSharedStoppedReceipts({
+        privateControlRoot: path.join(path.dirname(this.#config.statePath), "shared-control"),
+        projectId: this.#config.projectId, ownerDeviceId: this.#config.deviceId, api: this.#api.agentSharingApi(),
+      });
+    } catch (error) {
+      this.#notifyLifecycle("error"); await this.stop(); throw this.#backgroundFatalError ?? error;
+    }
     if (this.#host.onLiveOutput !== undefined) {
       this.#listenerDisposers.push(this.#host.onLiveOutput((event) => {
         const active = this.#state?.activeRequest;
@@ -377,6 +388,7 @@ export class DshHostConnector {
       this.#session = session;
       this.#notifyLifecycle("connecting");
       const storedState = await this.#stateStore.load();
+      if (storedState) this.#assertStateBinding(storedState);
       if (storedState !== undefined
         && session.latestSequence !== undefined
         && storedState.serverCursor > session.latestSequence) {
@@ -1038,6 +1050,25 @@ export class DshHostConnector {
     await this.#flushStoppedExecutions();
   }
 
+  async #recoverStoppedBeforeStartup(stored: ConnectorState | undefined): Promise<void> {
+    if (!this.#api.acknowledgeAgentExecutionStopped) return;
+    let count = 0;
+    while (stored?.stoppedExecutions?.length) {
+      if (++count > 1000) throw new Error("DSH native stop recovery exceeded its bound");
+      const receipt = stored.stoppedExecutions[0]!;
+      await this.#api.acknowledgeAgentExecutionStopped(stored.binding.sessionId, receipt.requestId, receipt.runtimeId, receipt.claimAttempt);
+      // This is only confirmed cleanup metadata. Do not reconcile cursors,
+      // inspect a native snapshot, or overwrite newer durable outbox work while
+      // the original session/Host/runtime may be unavailable.
+      const latest = await this.#stateStore.load();
+      if (!latest) throw new Error("DSH connector state disappeared during native stop recovery");
+      this.#assertStateBinding(latest);
+      if (latest.stoppedExecutions) latest.stoppedExecutions = latest.stoppedExecutions.filter(item => item.requestId !== receipt.requestId
+        || item.runtimeId !== receipt.runtimeId || item.claimAttempt !== receipt.claimAttempt);
+      await this.#stateStore.save(latest); stored = latest;
+    }
+  }
+
   async #flushStoppedExecutions(): Promise<void> {
     if (!this.#api.acknowledgeAgentExecutionStopped) return;
     const state = this.#requireState();
@@ -1445,6 +1476,14 @@ export class DshHostConnector {
     if (mode === "created") {
       throw new Error("Connector state exists without its persisted DSH Session; refusing identity reuse");
     }
+    this.#assertStateBinding(stored);
+    if (stored.publishedDshSequence > this.#host.currentSequence()) {
+      throw new Error("Persisted DSH publication cursor exceeds the native Session head");
+    }
+    return stored;
+  }
+
+  #assertStateBinding(stored: ConnectorState): void {
     const expected = JSON.stringify([
       this.#config.projectId,
       this.#config.sessionId,
@@ -1456,10 +1495,6 @@ export class DshHostConnector {
       stored.binding.dshSessionId,
     ]);
     if (actual !== expected) throw new Error("DSH connector state belongs to a different binding");
-    if (stored.publishedDshSequence > this.#host.currentSequence()) {
-      throw new Error("Persisted DSH publication cursor exceeds the native Session head");
-    }
-    return stored;
   }
 
   #assertRuntime(runtime: DshRegisteredRuntime): void {

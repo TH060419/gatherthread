@@ -13,6 +13,8 @@ import {
 } from "./codex-executor.js";
 import { withoutGatherThreadCredentials } from "./executor.js";
 import { HarnessExecutionTerminatedError, HarnessExecutionUnconfirmedError } from "./bridge.js";
+import { terminateOwnedProcessGroup } from "./owned-process.js";
+import { ProcessExecutionState } from "./process-execution-state.js";
 import { CODEX_PUBLIC_WORK_METHODS, createCodexLiveOutputMapper } from "./codex-live-output.js";
 import { updateCodexHookRegistry, type CodexHookEvent, type CodexHookRelayResult } from "./codex-hooks.js";
 import type {
@@ -33,6 +35,7 @@ import type {
   RegisteredRuntime,
   RuntimeExecutionProfile,
   SessionSummary,
+  NativeExecutionExitReceipt,
 } from "./types.js";
 
 interface JsonRpcResponse {
@@ -772,7 +775,12 @@ export class CodexAppServerClient {
       // close()/transport failure rejects pending RPCs before the child exits.
       // A failed turn without a native terminal notification must await that
       // exit before its caller can acknowledge cancellation or reuse capacity.
-      if (!settled) { await this.close(); throw new CodexNativeExecutionStoppedError(error); }
+      if (!settled) {
+        await this.close();
+        if (process.platform === "win32") throw new HarnessExecutionUnconfirmedError("Codex aborted without a matching native terminal; Windows descendant exit remains unconfirmed");
+        throw new CodexNativeExecutionStoppedError(error);
+      }
+      if (input.signal?.aborted) throw new CodexNativeExecutionStoppedError(error);
       throw error;
     } finally {
       clearTimeout(turnTimer);
@@ -933,6 +941,7 @@ export class CodexAppServerClient {
       // A matching terminal notification is enough to abandon a missing RPC
       // receipt without later timing out and killing unrelated live threads.
       receiptAbort.abort(error);
+      if (!nativeTerminal && !unsupported && process.platform === "win32") throw new HarnessExecutionUnconfirmedError("Codex compaction aborted without a matching native terminal; Windows descendant exit remains unconfirmed");
       throw new CodexNativeExecutionStoppedError(error);
     } finally {
       clearTimeout(timer);
@@ -1325,24 +1334,8 @@ export class CodexAppServerClient {
   }
 }
 
-async function terminateOwnedProcessGroup(groupId: number): Promise<void> {
-  if (!Number.isSafeInteger(groupId) || groupId < 1 || groupId === process.pid) throw new Error("Invalid isolated native process group");
-  const alive = () => {
-    try { process.kill(-groupId, 0); return true; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw new Error("Shared native process cleanup could not be verified"); }
-  };
-  if (!alive()) return;
-  try { process.kill(-groupId, "SIGTERM"); } catch { if (!alive()) return; }
-  const forceAt = Date.now() + 5000, finishAt = forceAt + 2000;
-  let forced = false;
-  while (alive()) {
-    if (!forced && Date.now() >= forceAt) { process.kill(-groupId, "SIGKILL"); forced = true; }
-    if (Date.now() >= finishAt) throw new Error("Shared native process cleanup could not be confirmed");
-    await new Promise<void>(resolve => setTimeout(resolve, 20));
-  }
-}
-
 export class CodexAppServerExecutor implements HarnessExecutor {
+  get executionControlVersion(): 1 | undefined { return this.#desktopHookOnly ? undefined : 1; }
   readonly #client: CodexAppServerClient;
   readonly #workspacePath: string;
   readonly #statePath: string;
@@ -1369,6 +1362,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   #loadedExecProcessGeneration: number | undefined;
   #desktopNativeProjectionUnavailable = false;
   #executionSignal: AbortSignal | undefined;
+  readonly #nativeExecutionState: ProcessExecutionState;
 
   constructor(options: CodexAppServerExecutorOptions) {
     if (!options.statePath.trim()) throw new Error("Codex session state path must be non-empty");
@@ -1379,6 +1373,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     this.#client = options.client;
     this.#workspacePath = path.resolve(options.workspacePath);
     this.#statePath = path.resolve(options.statePath);
+    this.#nativeExecutionState = new ProcessExecutionState(`${this.#statePath}.native-execution.json`, DEFAULT_MAX_MESSAGE_BYTES);
     this.#threadName = options.threadName.slice(0, 240);
     this.#model = options.model;
     this.#hookRegistryPath = options.hookRegistryPath;
@@ -1417,19 +1412,34 @@ export class CodexAppServerExecutor implements HarnessExecutor {
 
   async execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult> {
     if (this.#desktopHookOnly) throw new Error("Desktop-owned Codex projections cannot execute Web agent requests");
+    const team = input.request.payload !== null && typeof input.request.payload === "object" && "agent_team" in input.request.payload;
+    return team ? this.#nativeExecutionState.execute(input, () => this.#executeWithWriter(input)) : this.#executeWithWriter(input);
+  }
+
+  async readStoppedExecutions(): Promise<NativeExecutionExitReceipt[]> { return this.#desktopHookOnly ? [] : this.#nativeExecutionState.stopped(); }
+  async acknowledgeExecutionExit(receipt: NativeExecutionExitReceipt): Promise<void> { await this.#nativeExecutionState.acknowledgeExit(receipt); }
+  async acknowledgeCanonicalCompletion(request: CanonicalEvent, runtime: RegisteredRuntime, claimAttempt: number): Promise<void> {
+    if (request.payload !== null && typeof request.payload === "object" && "agent_team" in request.payload) await this.#nativeExecutionState.completed(request, runtime, claimAttempt);
+  }
+
+  async #executeWithWriter(input: HarnessExecutionInput): Promise<HarnessExecutionResult> {
     let result: HarnessExecutionResult;
+    let nativeTerminal = false;
     try {
       result = await this.#withStateWriter(async () => {
         this.#executionSignal = input.signal;
-        try { return await this.#execute(input); }
+        try { return await this.#execute(input, () => { nativeTerminal = true; }); }
         finally { this.#executionSignal = undefined; }
       });
     } catch (error) {
+      if (error instanceof HarnessExecutionUnconfirmedError) throw error;
       if (error instanceof CodexNativeExecutionStoppedError) throw new HarnessExecutionTerminatedError("codex_turn_failed",
         "The native Codex execution stopped before a response; inspect existing work before retrying.");
+      if (nativeTerminal && !(error instanceof HarnessExecutionTerminatedError)) throw new HarnessExecutionTerminatedError("codex_postprocessing_failed",
+        "The native Codex turn ended, but its response could not be processed or saved.", { cause: error });
       throw error;
     }
-    if (result.localSessionId) await this.#revealThreadIfNeeded(result.localSessionId);
+    if (result.localSessionId) await this.#revealThreadIfNeeded(result.localSessionId).catch(() => undefined);
     return result;
   }
 
@@ -2260,19 +2270,24 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     }
   }
 
-  async #execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult> {
+  async #execute(input: HarnessExecutionInput, onNativeTerminal: () => void): Promise<HarnessExecutionResult> {
     if (input.runtime.harness !== "codex" || input.runtime.purpose === "snapshot_connector" || input.request.type !== "agent_request") {
       throw new Error("Codex App Server executor requires a Codex agent_request");
     }
     const workspacePath = await validateCodexWorkspace(this.#workspacePath);
     let state = await this.#loadState(input.request.sessionId, workspacePath);
+    const team = input.request.payload !== null && typeof input.request.payload === "object" && "agent_team" in input.request.payload;
+    if (team && state && (state.executionJournal[input.request.id] || Object.values(state.executionJournal)
+      .some((entry) => entry.status === "prepared" || entry.status === "started"))) {
+      throw new HarnessExecutionUnconfirmedError("Legacy native journal ownership is indeterminate for this exact Team attempt; confirm old execution exit before recovery");
+    }
     let rebuildingExternallyClaimedProjection = false;
     const contentRevision = input.historyContext?.content_revision ?? input.request.contentRevision ?? 0;
     if (!Number.isSafeInteger(contentRevision) || contentRevision < 0
       || (state !== undefined && contentRevision < (state.contentRevision ?? 0))) {
-      throw new HarnessExecutionTerminatedError("context_changed", "Shared history changed; start a new request.");
+      throw new HarnessExecutionUnconfirmedError("Shared history changed before native execution; prior native ownership is unconfirmed");
     }
-    if (input.signal?.aborted) throw new HarnessExecutionTerminatedError("context_changed", "Shared history changed; start a new request.");
+    input.signal?.throwIfAborted();
     if (state && (contentRevision !== (state.contentRevision ?? 0) || state.contextResetRequired !== undefined)) {
       state = await this.#replaceDeletedExecutionProjection(state, contentRevision);
       rebuildingExternallyClaimedProjection = true;
@@ -2474,11 +2489,15 @@ export class CodexAppServerExecutor implements HarnessExecutor {
             },
           }),
         });
+        onNativeTerminal();
         // Authoritative completed items also reconcile an interrupted native
         // delta sequence. They do not introduce another execution or identity.
         for (const item of turn.items.slice(0, 128)) await liveMapper?.accept("item/completed", { item });
       } catch (error) {
-        if (input.signal?.aborted) {
+        if (error instanceof HarnessExecutionUnconfirmedError) throw error;
+        const terminal = error instanceof CodexTurnTerminatedError || error instanceof CodexNativeExecutionStoppedError;
+        if (terminal) onNativeTerminal();
+        if (input.signal?.aborted && terminal) {
           connectorState.executionJournal[input.request.id] = { requestId: input.request.id, status: "failed",
             turnId: connectorState.executionJournal[input.request.id]?.turnId ?? "aborted",
             contentRevision, failure: { code: "context_changed", message: "Shared history changed; start a new request." } };

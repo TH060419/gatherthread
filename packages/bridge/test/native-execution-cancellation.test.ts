@@ -3,7 +3,7 @@ import { mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CodexAppServerClient, CodexAppServerExecutor, CollaborationHttpError, LocalBridge, MemoryCursorStore,
+import { CodexAppServerClient, CodexAppServerExecutor, CollaborationHttpError, LocalBridge, MemoryCursorStore, FileCursorStore,
   type CanonicalEvent, type CollaborationApi, type RuntimeRegistration } from "../src/index.js";
 
 for (const action of ["stop", "pause", "deadline", "concurrent-stop", "deleted-session"] as const) {
@@ -28,6 +28,8 @@ for await (const line of createInterface({input:process.stdin})) {
    setTimeout(()=>{writeFileSync(process.env.STOPPED,'native stopped');send({method:'turn/completed',params:{threadId:message.params.threadId,turn:{id:message.params.turnId,status:'interrupted',items:[]}}});},60);
  } else send({id:message.id,result:{}});
 }
+
+
 
 `);
     const registration: RuntimeRegistration = { sessionId: "session-1", deviceId: "device-1", harness: "codex",
@@ -123,3 +125,45 @@ for await (const line of createInterface({input:process.stdin})) {
     assert.throws(() => process.kill(native.pid, 0), "Windows cancellation must reap the real child before returning");
   } else assert.equal(await readFile(stopped, "utf8"), "exited", "returning from cancellation must await process close");
 });
+
+for (const source of ["cursor", "journal"] as const) {
+test(`AppServer ${source} exit recovery precedes registration of a deleted session`, async (t) => {
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "gt-appserver-exit-recovery-")));
+  const fixture = path.join(root, "app-server.mjs"), calls = path.join(root, "calls.jsonl");
+  await writeFile(fixture, `
+import {appendFileSync} from 'node:fs';import {createInterface} from 'node:readline';
+const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+for await(const line of createInterface({input:process.stdin})){
+ const m=JSON.parse(line);if(m.method==='initialized')continue;appendFileSync(process.env.CALLS,JSON.stringify(m)+'\\n');
+ if(m.method==='thread/start')send({id:m.id,result:{thread:{id:'owned-thread'}}});
+ else if(m.method==='turn/start'){
+  send({id:m.id,result:{turn:{id:'owned-turn'}}});
+  send({method:'turn/completed',params:{threadId:m.params.threadId,turn:{id:'owned-turn',status:'completed',items:[{type:'agentMessage',id:'answer-1',text:'fixture answer'}]}}});
+ }else send({id:m.id,result:{}});
+}
+`);
+  const client = new CodexAppServerClient({ command: process.execPath, commandArgs: [fixture], cwd: root, env: { ...process.env, CALLS: calls } });
+  t.after(() => client.dispose());
+  const runtime = { id: "runtime-1", userId: "user-1", sessionId: "session-1", deviceId: "device-1", harness: "codex" as const,
+    provider: "openai", model: "gpt-fixture", localSessionId: "local-1", captureFidelity: "harness_transcript" as const };
+  const request: CanonicalEvent = { id: "request-1", sessionId: runtime.sessionId, actorId: runtime.userId, sequence: 1,
+    type: "agent_request", timestamp: "2026-10-20T00:00:00.000Z", payload: { text: "fictional request", agent_team: {} } };
+  const executor = () => new CodexAppServerExecutor({ client, workspacePath: root, statePath: path.join(root, "state.json"), threadName: "fixture", model: runtime.model, threadSource: "exec" });
+  await executor().execute({ request, runtime, claimAttempt: 2, canonicalHistory: [request] });
+  const store = new FileCursorStore(path.join(root, "cursor.json"));
+  if (source === "cursor") await store.save({ server: {}, local: {}, stoppedExecutions: [{ sessionId: runtime.sessionId, requestId: request.id, runtimeId: runtime.id, claimAttempt: 2 }] });
+  let acknowledgments = 0;
+  const api = {
+    async acknowledgeAgentExecutionStopped(sessionId: string, requestId: string, runtimeId: string, attempt: number) {
+      assert.deepEqual([sessionId, requestId, runtimeId, attempt], [runtime.sessionId, request.id, runtime.id, 2]); acknowledgments++;
+    },
+    async registerRuntime() { assert.equal(acknowledgments, 1); throw new CollaborationHttpError(404, "session deleted"); },
+  } as unknown as CollaborationApi;
+  const bridge = new LocalBridge({ api, cursorStore: store, runtime, transcriptRoots: {} });
+  await assert.rejects(bridge.connect(executor()), /session deleted/);
+  assert.deepEqual((await store.load()).stoppedExecutions, []);
+  assert.deepEqual(await executor().readStoppedExecutions(), []);
+  assert.equal((await readFile(calls, "utf8")).split("\n").filter((line) => line.includes('"method":"turn/start"')).length, 1,
+    "metadata-only recovery must never repeat the paid turn");
+});
+}

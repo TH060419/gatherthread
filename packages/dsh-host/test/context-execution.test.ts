@@ -334,6 +334,22 @@ test("DSH isolated model failure disposes per-request model selection and keeps 
   await f.facade.dispose();
 });
 
+test("DSH isolated post-idle flush failure retains physical-exit evidence without changing parent native history", async () => {
+  const f = fixture(); await f.facade.open();
+  const nativeBefore = structuredClone(f.stored.get("native-session").snapshotEvents());
+  const prepared = await f.facade.prepareContextExecution!(contextInput());
+  f.failNextFlush();
+  const selection = { provider: "deepseek-official", model: "deepseek-v4-flash", reasoningEffort: "high" };
+  await assert.rejects(f.facade.prompt("isolated owned turn", selection, prepared.sessionId), error => {
+    assert.ok(error instanceof HarnessExecutionTerminatedError); assert.equal(error.failureCode, "dsh_native_execution_postprocessing_failed");
+    assert.doesNotMatch(error.message + JSON.stringify(error), /simulated flush failure/u); assert.ok(error.cause instanceof Error); return true;
+  });
+  assert.equal(f.live.get(prepared.sessionId).status, "idle"); assert.equal(f.routeDisposals, 1);
+  assert.deepEqual(f.stored.get("native-session").snapshotEvents(), nativeBefore);
+  await f.facade.prompt("a later isolated turn", selection, prepared.sessionId);
+  assert.equal(f.modelInputs.length, 2); assert.equal(f.routeDisposals, 2); await f.facade.dispose();
+});
+
 test("DSH isolated identity binds the cloud server/Project/Session and never reuses another binding's history", async () => {
   const f = fixture();
   const first = await f.facade.prepareContextExecution!(contextInput());

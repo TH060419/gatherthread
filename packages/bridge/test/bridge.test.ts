@@ -313,7 +313,7 @@ test("native exit acknowledgment survives transport failure and reconnect withou
   api.acknowledgeAgentExecutionStopped = async () => { acknowledgments += 1; if (acknowledgments === 1) throw new Error("ACK transport unknown"); };
   const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
   await bridge.connect();
-  await assert.rejects(bridge.processAgentRequest(request, { async execute() {
+  await assert.rejects(bridge.processAgentRequest(request, { executionControlVersion: 1, async execute() {
     executions += 1;
     return { events: [{ localEventId: "done", harness: "codex", kind: "assistant", text: "done", captureFidelity: "harness_transcript" }] };
   } }), /ACK transport unknown/);
@@ -329,11 +329,12 @@ test("pending replay cannot resurrect a native exit receipt already acknowledged
   (api as FakeApi).history.push(request);
   let acknowledgments = 0;
   api.acknowledgeAgentExecutionStopped = async () => { acknowledgments += 1; };
+  api.readAgentExecution = async () => ({ active: false });
   api.claimAgentRequest = async () => ({ claimed: false, status: "paused", requestId: request.id, runtimeId: "runtime-1", attemptCount: 2 });
   const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
   await bridge.connect();
   await cursorStore.save({ server: {}, local: {}, stoppedExecutions: [{ sessionId: "session-1", requestId: request.id, runtimeId: "runtime-1", claimAttempt: 2 }] });
-  await bridge.processPendingAgentRequests({ async execute() { throw new Error("paused work must not execute"); } });
+  await bridge.processPendingAgentRequests({ executionControlVersion: 1, async execute() { throw new Error("paused work must not execute"); } });
   assert.equal(acknowledgments, 1);
   assert.deepEqual((await cursorStore.load()).stoppedExecutions, [], "cursor persistence must retain the newer acknowledged outbox state");
   await new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} }).connect();
@@ -406,11 +407,11 @@ test("a Team cannot start native execution without a confirmed first authority r
   api.acknowledgeAgentExecutionStopped = async () => {};
   const bridge = new LocalBridge({ api, cursorStore: new MemoryCursorStore(), runtime: runtimeRegistration(), transcriptRoots: {} });
   await bridge.connect();
-  await assert.rejects(bridge.processAgentRequest(request, { async execute() { executions += 1; throw new Error("must not start"); } }),
+  await assert.rejects(bridge.processAgentRequest(request, { executionControlVersion: 1, async execute() { executions += 1; throw new Error("must not start"); } }),
     (error: unknown) => error instanceof CollaborationHttpError && error.code === "agent_execution_unconfirmed");
   assert.equal(executions, 0);
   delete api.readAgentExecution;
-  await assert.rejects(bridge.processAgentRequest(request, { async execute() { executions += 1; throw new Error("must not start"); } }),
+  await assert.rejects(bridge.processAgentRequest(request, { executionControlVersion: 1, async execute() { executions += 1; throw new Error("must not start"); } }),
     (error: unknown) => error instanceof CollaborationHttpError && error.code === "connector_update_required");
   assert.equal(executions, 0);
 });
@@ -426,7 +427,7 @@ test("failed Team preparation retains its claim hold until the exact request act
   api.acknowledgeAgentExecutionStopped = async () => { acknowledgments += 1; };
   const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
   await bridge.connect();
-  const executor = { async execute() { executions += 1; return { events: [{ localEventId: "done", harness: "codex" as const,
+  const executor = { executionControlVersion: 1 as const, async execute() { executions += 1; return { events: [{ localEventId: "done", harness: "codex" as const,
     kind: "assistant" as const, text: "done", captureFidelity: "harness_transcript" as const }] }; } };
   await assert.rejects(bridge.processAgentRequest(request, executor), /preparation unavailable/);
   assert.equal(acknowledgments, 0); assert.equal(executions, 0); assert.equal((await cursorStore.load()).stoppedExecutions, undefined);

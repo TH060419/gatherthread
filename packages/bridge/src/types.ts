@@ -287,6 +287,8 @@ export interface HarnessExecutionInput {
   /** Optional server-authorized derived context frozen before this request. Raw history remains available. */
   historyContext?: HistoryContext;
   runtime: RegisteredRuntime;
+  /** Exact server claim generation, never inferred from a local process id. */
+  claimAttempt?: number;
   /** Claim cancellation or privacy revocation. Stop the owned turn before returning. */
   signal?: AbortSignal;
   publishProgress?: (update: HarnessProgressUpdate) => Promise<boolean | void>;
@@ -299,9 +301,21 @@ export interface HarnessExecutionResult {
   observedReasoningEffort?: string;
 }
 
+export interface NativeExecutionExitReceipt {
+  sessionId: string;
+  requestId: string;
+  runtimeId: string;
+  claimAttempt: number;
+}
+
 export interface HarnessExecutor {
+  /** Advertise only with signal cancellation, physical-exit evidence and durable exact-attempt recovery. */
+  readonly executionControlVersion?: 1 | undefined;
   /** Indeterminate native ownership must reject with HarnessExecutionUnconfirmedError, never an exit acknowledgment. */
   execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult>;
+  readStoppedExecutions?(): Promise<NativeExecutionExitReceipt[]>;
+  acknowledgeExecutionExit?(receipt: NativeExecutionExitReceipt): Promise<void>;
+  acknowledgeCanonicalCompletion?(request: CanonicalEvent, runtime: RegisteredRuntime, claimAttempt: number): Promise<void>;
   shouldExecute?(request: CanonicalEvent, runtime: RegisteredRuntime): Promise<boolean> | boolean;
   /**
    * Ensure the harness-native conversation exists and report the canonical

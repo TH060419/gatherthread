@@ -1,5 +1,5 @@
-import { constants as fsConstants } from "node:fs";
-import { chmod, lstat, mkdir, open, readFile, readdir } from "node:fs/promises";
+import { constants as fsConstants, type Stats } from "node:fs";
+import { chmod, lstat, mkdir, open, opendir, readFile, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -97,6 +97,47 @@ export async function ensureProjectWorkspace(options: EnsureProjectWorkspaceOpti
     await handle.close();
   }
   return workspacePath;
+}
+
+/** Locate only previously bound private workspaces; recovery must never guess a project name or create one. */
+export async function findExistingProjectWorkspaces(options: Pick<EnsureProjectWorkspaceOptions, "apiUrl" | "projectId" | "homeDirectory">): Promise<string[]> {
+  const root = path.resolve(options.homeDirectory ?? homedir(), PROJECTS_DIRECTORY);
+  const rootInfo = await lstat(root).catch((error: unknown) => {
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!rootInfo) return [];
+  const privateDirectory = (info: Stats) => info.isDirectory() && !info.isSymbolicLink()
+    && (process.platform === "win32" || ((info.mode & 0o077) === 0 && info.uid === process.getuid?.()));
+  if (!privateDirectory(rootInfo)) throw new Error("Existing GatherThread projects root is not a private owned directory");
+  const matches: string[] = [];
+  let examined = 0;
+  for await (const entry of await opendir(root)) {
+    if (++examined > 128) throw new Error("Existing GatherThread workspace lookup exceeds its bound");
+    if (entry.isSymbolicLink()) throw new Error("Existing GatherThread workspace lookup refuses symbolic links");
+    if (!entry.isDirectory()) continue;
+    const workspace = path.join(root, entry.name), info = await lstat(workspace);
+    if (!privateDirectory(info)) continue;
+    const markerPath = path.join(workspace, PROJECT_MARKER);
+    const markerInfo = await lstat(markerPath).catch((error: unknown) => {
+      if (isNodeError(error) && error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!markerInfo) continue;
+    if (!markerInfo.isFile() || markerInfo.isSymbolicLink()) throw new Error("Existing GatherThread project marker must be a regular file, not a symlink");
+    const marker = await open(markerPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+      const metadata = await marker.stat();
+      if (!metadata.isFile() || markerInfo.isSymbolicLink() || metadata.nlink !== 1 || metadata.size > 4096
+        || (process.platform !== "win32" && ((metadata.mode & 0o077) !== 0 || metadata.uid !== process.getuid?.()))) {
+        throw new Error("Existing GatherThread project marker is not a bounded private owned file");
+      }
+      const parsed = parseProjectMarker(await marker.readFile("utf8"));
+      if (Object.keys(parsed).length !== 4) throw new Error("Existing GatherThread project marker has unexpected fields");
+      if (parsed.apiUrl === options.apiUrl && parsed.projectId === options.projectId) matches.push(await realpath(workspace));
+    } finally { await marker.close(); }
+  }
+  return matches;
 }
 
 async function ensurePrivateDirectory(

@@ -47,7 +47,7 @@ for await (const line of createInterface({input:process.stdin})) {
   const request: CanonicalEvent = { ...history, id: "request-2", sequence: 2, type: "agent_request", payload: { text: "fictional preparation cancellation", agent_team: {} } };
   const preparing = mode === "executor" ? new CodexAppServerExecutor({ client, workspacePath: root, statePath: path.join(root, "state.json"),
     threadName: "compaction preparation fixture", model: "gpt-test", contextWindowTokens: 4096, maxInjectionItemBytes: 1024, threadSource: "exec" })
-    .execute({ request, canonicalHistory: [history, request], signal: compactAbort.signal, runtime: { id: "runtime-1", userId: "user-1", sessionId: "session-1",
+    .execute({ request, canonicalHistory: [history, request], claimAttempt: 1, signal: compactAbort.signal, runtime: { id: "runtime-1", userId: "user-1", sessionId: "session-1",
       deviceId: "device-1", harness: "codex", provider: "openai", model: "gpt-test", localSessionId: "owned-local", captureFidelity: "harness_transcript" } })
     : client.compactThread("compact-thread", compactAbort.signal);
   const compact = preparing

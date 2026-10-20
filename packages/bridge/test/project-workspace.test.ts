@@ -1,9 +1,44 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ensureProjectWorkspace, sanitizeProjectWorkspaceName } from "../src/project-workspace.js";
+import { ensureProjectWorkspace, findExistingProjectWorkspaces, sanitizeProjectWorkspaceName } from "../src/project-workspace.js";
+
+test("recovery lookup is read-only and matches exact private project bindings without guessing a current name", async () => {
+  const homeDirectory = await mkdtemp(path.join(tmpdir(), "gt-existing-projects-"));
+  const options = { apiUrl: "https://fixture.invalid/v1", projectId: "project-1", homeDirectory };
+  assert.deepEqual(await findExistingProjectWorkspaces(options), []);
+  await assert.rejects(stat(path.join(homeDirectory, "GatherThread Projects")), /ENOENT/);
+  const first = await ensureProjectWorkspace({ ...options, projectName: "Former name" });
+  const second = await ensureProjectWorkspace({ ...options, projectName: "Another old name" });
+  await ensureProjectWorkspace({ ...options, projectName: "Different project", projectId: "project-2" });
+  await ensureProjectWorkspace({ ...options, projectName: "Different server", apiUrl: "https://other.invalid/v1" });
+  assert.deepEqual((await findExistingProjectWorkspaces(options)).sort(), (await Promise.all([realpath(first), realpath(second)])).sort());
+});
+
+test("recovery lookup rejects linked, malformed, oversized, and nonprivate markers before exposing a mapping", async () => {
+  for (const invalid of ["symlink", "hardlink", "malformed", "oversized", ...(process.platform === "win32" ? [] : ["permissions"])]) {
+    const homeDirectory = await mkdtemp(path.join(tmpdir(), "gt-existing-invalid-"));
+    const options = { apiUrl: "https://fixture.invalid/v1", projectId: "project-1", homeDirectory };
+    const workspace = await ensureProjectWorkspace({ ...options, projectName: "Old name" });
+    const marker = path.join(workspace, ".gatherthread-project.json");
+    if (invalid === "symlink") {
+      await symlink(workspace, path.join(homeDirectory, "GatherThread Projects", "Linked"), process.platform === "win32" ? "junction" : "dir");
+    } else if (invalid === "hardlink") await link(marker, path.join(homeDirectory, "linked-marker"));
+    else if (invalid === "malformed") await writeFile(marker, "{");
+    else if (invalid === "oversized") await truncate(marker, 4097);
+    else await chmod(marker, 0o644);
+    await assert.rejects(findExistingProjectWorkspaces(options), /symbolic|private|invalid|bounded/);
+  }
+});
+
+test("recovery workspace discovery stops after its fixed directory-entry bound", async () => {
+  const homeDirectory = await mkdtemp(path.join(tmpdir(), "gt-existing-bounded-"));
+  const root = path.join(homeDirectory, "GatherThread Projects"); await mkdir(root, { mode: 0o700 });
+  for (let index = 0; index < 129; index++) await mkdir(path.join(root, `entry-${index}`), { mode: 0o700 });
+  await assert.rejects(findExistingProjectWorkspaces({ homeDirectory, apiUrl: "https://fixture.invalid/v1", projectId: "project-1" }), /exceeds its bound/);
+});
 
 test("project workspace names are portable and cannot escape the fixed root", () => {
   assert.equal(sanitizeProjectWorkspaceName("../../CON:<bad>|name?. "), "CON-bad-name");

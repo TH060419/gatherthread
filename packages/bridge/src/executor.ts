@@ -1,9 +1,13 @@
 import { spawn } from "node:child_process";
 import type { HarnessName, TranscriptEvent } from "@gatherthread/adapters";
+import { HarnessExecutionTerminatedError, HarnessExecutionUnconfirmedError } from "./bridge.js";
+import { ProcessExecutionState } from "./process-execution-state.js";
+import { stopOwnedProcess, terminateOwnedProcessGroup } from "./owned-process.js";
 import type {
   HarnessExecutionInput,
   HarnessExecutionResult,
   HarnessExecutor,
+  NativeExecutionExitReceipt,
 } from "./types.js";
 
 export interface SubprocessHarnessExecutorOptions {
@@ -14,6 +18,8 @@ export interface SubprocessHarnessExecutorOptions {
   maxOutputBytes?: number;
   signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
+  /** Private exact-attempt journal; required before this adapter may claim native Team work. */
+  executionStatePath?: string;
 }
 
 /**
@@ -28,6 +34,9 @@ export class SubprocessHarnessExecutor implements HarnessExecutor {
   readonly #maxOutputBytes: number;
   readonly #signal: AbortSignal | undefined;
   readonly #env: NodeJS.ProcessEnv;
+  readonly #executionState: ProcessExecutionState | undefined;
+
+  get executionControlVersion(): 1 | undefined { return this.#executionState && process.platform !== "win32" ? 1 : undefined; }
 
   constructor(options: SubprocessHarnessExecutorOptions) {
     if (!options.command.trim()) throw new Error("adapter command must be non-empty");
@@ -38,9 +47,26 @@ export class SubprocessHarnessExecutor implements HarnessExecutor {
     this.#maxOutputBytes = options.maxOutputBytes ?? 4_194_304;
     this.#signal = options.signal;
     this.#env = withoutGatherThreadCredentials(options.env ?? process.env);
+    this.#executionState = options.executionStatePath ? new ProcessExecutionState(options.executionStatePath, this.#maxOutputBytes) : undefined;
   }
 
   async execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult> {
+    const signals = [this.#signal, input.signal].filter((signal): signal is AbortSignal => signal !== undefined);
+    const signal = signals.length ? AbortSignal.any(signals) : undefined;
+    signal?.throwIfAborted();
+    const run = (started?: (pid: number) => Promise<void>) => this.#execute(input, signal, started);
+    const team = input.request.payload !== null && typeof input.request.payload === "object" && "agent_team" in input.request.payload;
+    return team && this.#executionState ? this.#executionState.execute(input, run) : run();
+  }
+
+  async acknowledgeCanonicalCompletion(request: HarnessExecutionInput["request"], runtime: HarnessExecutionInput["runtime"], claimAttempt: number): Promise<void> {
+    if (this.#executionState && request.payload !== null && typeof request.payload === "object" && "agent_team" in request.payload) await this.#executionState.completed(request, runtime, claimAttempt);
+  }
+
+  async readStoppedExecutions(): Promise<NativeExecutionExitReceipt[]> { return this.#executionState ? this.#executionState.stopped() : []; }
+  async acknowledgeExecutionExit(receipt: NativeExecutionExitReceipt): Promise<void> { await this.#executionState?.acknowledgeExit(receipt); }
+
+  async #execute(input: HarnessExecutionInput, signal: AbortSignal | undefined, started?: (pid: number) => Promise<void>): Promise<HarnessExecutionResult> {
     const stdout = await runAdapterProcess({
       command: this.#command,
       args: this.#args,
@@ -48,15 +74,17 @@ export class SubprocessHarnessExecutor implements HarnessExecutor {
       env: this.#env,
       timeoutMs: this.#timeoutMs,
       maxOutputBytes: this.#maxOutputBytes,
-      signal: this.#signal,
+      signal,
+      ...(started === undefined ? {} : { started }),
     });
     let parsed: unknown;
     try {
       parsed = JSON.parse(stdout);
     } catch {
-      throw new Error("Harness adapter returned invalid JSON");
+      throw new HarnessExecutionTerminatedError("harness_output_invalid", "Harness adapter returned invalid JSON after its process exited.");
     }
-    return validateExecutionResult(parsed, this.#harness);
+    try { return validateExecutionResult(parsed, this.#harness); }
+    catch (cause) { throw new HarnessExecutionTerminatedError("harness_output_invalid", "Harness adapter returned invalid provenance or output after its process exited.", { cause }); }
   }
 }
 
@@ -68,6 +96,7 @@ interface RunAdapterProcessOptions {
   timeoutMs: number;
   maxOutputBytes: number;
   signal: AbortSignal | undefined;
+  started?: (pid: number) => Promise<void>;
 }
 
 function runAdapterProcess(options: RunAdapterProcessOptions): Promise<string> {
@@ -80,27 +109,31 @@ function runAdapterProcess(options: RunAdapterProcessOptions): Promise<string> {
       env: options.env,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
     const chunks: Buffer[] = [];
     let outputBytes = 0;
     let settled = false;
+    let termination: HarnessExecutionTerminatedError | undefined;
+    let startupError: Error | undefined;
+    let preparation: Promise<void> | undefined;
+    let terminationAttempt: Promise<void> | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
 
     const finish = (error?: Error, output?: string) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       options.signal?.removeEventListener("abort", abort);
       if (error) reject(error);
       else resolve(output ?? "");
     };
     const abort = () => {
-      terminateChild();
-      finish(new Error("Harness adapter execution aborted"));
+      terminateChild("harness_execution_cancelled", "Harness adapter execution aborted after its process exited.", options.signal?.reason);
     };
     const timeout = setTimeout(() => {
-      terminateChild();
-      finish(new Error("Harness adapter timed out"));
+      terminateChild("harness_execution_timeout", "Harness adapter timed out and its process exited.");
     }, options.timeoutMs);
     timeout.unref();
     options.signal?.addEventListener("abort", abort, { once: true });
@@ -108,28 +141,45 @@ function runAdapterProcess(options: RunAdapterProcessOptions): Promise<string> {
     child.stdout.on("data", (chunk: Buffer) => {
       outputBytes += chunk.length;
       if (outputBytes > options.maxOutputBytes) {
-        terminateChild();
-        finish(new Error("Harness adapter output exceeded the configured limit"));
+        terminateChild("harness_output_limit", "Harness adapter output exceeded the configured limit; its process exited.");
         return;
       }
       chunks.push(chunk);
     });
     // Drain stderr so a noisy adapter cannot block. Its contents are deliberately not logged.
     child.stderr.resume();
-    child.once("error", () => finish(new Error("Harness adapter could not be started")));
-    child.once("close", (code, signal) => {
-      if (forceKillTimer) clearTimeout(forceKillTimer);
+    child.once("error", (error) => { startupError = error; });
+    child.once("close", async (code, signal) => {
+      await preparation;
+      await terminationAttempt;
+      if (process.platform !== "win32" && child.pid) {
+        try { await terminateOwnedProcessGroup(child.pid); }
+        catch { finish(new HarnessExecutionUnconfirmedError("Harness adapter process-group exit could not be confirmed")); return; }
+      }
+      if (termination) { finish(termination); return; }
+      if (startupError) { finish(new HarnessExecutionTerminatedError("harness_start_failed", "Harness adapter could not be started; no process remains active.", { cause: startupError })); return; }
       if (code !== 0) {
-        finish(new Error(`Harness adapter exited unsuccessfully (${signal ?? code ?? "unknown"})`));
+        finish(new HarnessExecutionTerminatedError("harness_execution_failed", `Harness adapter exited unsuccessfully (${signal ?? code ?? "unknown"}).`));
         return;
       }
       finish(undefined, Buffer.concat(chunks).toString("utf8").trim());
     });
-    child.stdin.end(`${JSON.stringify(options.input)}\n`);
+    child.stdin.once("error", () => undefined);
+    child.once("spawn", () => {
+      preparation = (async () => {
+        try {
+          if (options.started && child.pid) await options.started(child.pid);
+          if (options.signal?.aborted) abort();
+          if (!termination && !settled) child.stdin.end(`${JSON.stringify(options.input)}\n`);
+        } catch (cause) { terminateChild("harness_preparation_failed", "Harness adapter preparation failed; its process exited.", cause); }
+      })();
+    });
 
-    function terminateChild() {
-      child.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+    function terminateChild(code: string, message: string, cause?: unknown) {
+      if (termination || settled) return;
+      termination = new HarnessExecutionTerminatedError(code, message, { cause });
+      terminationAttempt = stopOwnedProcess(child, "SIGTERM").catch(() => undefined);
+      forceKillTimer = setTimeout(() => { void stopOwnedProcess(child, "SIGKILL").catch(() => undefined); }, 5_000);
       forceKillTimer.unref();
     }
   });
