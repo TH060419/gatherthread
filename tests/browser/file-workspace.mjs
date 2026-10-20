@@ -165,6 +165,41 @@ try {
       await page.locator("#mobile-members-dialog > [data-mobile-close]").click();
       await page.locator("#mobile-members-dialog[open]").waitFor({ state: "hidden" });
       await page.locator("#open-files-button").click(); await page.locator("#mobile-members-dialog[open]").waitFor();
+      await page.locator('.fw-tree [data-path="README.md"]').click({ button: "right" });
+      const actionMenu = workspace.locator(".fw-actions-menu");
+      async function assertActionsFit(label, viewportBottom) {
+        await page.waitForFunction((bottom) => {
+          const menu = document.querySelector(".fw-actions-menu"), pane = document.querySelector(".fw-files-pane");
+          const bounds = menu?.getBoundingClientRect(), clip = pane?.getBoundingClientRect();
+          return bounds && bounds.height > 40 && bounds.top >= Math.max(0, clip.top) - 1
+            && bounds.bottom <= Math.min(bottom, clip.bottom) + 1;
+        }, viewportBottom);
+        const result = await actionMenu.evaluate((menu) => {
+          menu.scrollTop = menu.scrollHeight;
+          const last = menu.lastElementChild, rect = last.getBoundingClientRect(), bounds = menu.getBoundingClientRect();
+          return { scrollable: getComputedStyle(menu).overflowY === "auto", withinMenu: rect.top >= bounds.top && rect.bottom <= bounds.bottom + 1,
+            hit: last.contains(document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)) };
+        });
+        assert.equal(result.scrollable && result.withinMenu && result.hit, true, `${label}: the final file action is visible after scrolling`);
+        await page.screenshot({ path: resolve(output, `mobile-actions-${label.replaceAll(" ", "-")}.png`) });
+        await actionMenu.getByRole("button", { name: "Download", exact: true }).focus();
+        assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Download", `${label}: the final action retains keyboard focus`);
+      }
+      await assertActionsFit("portrait", 844);
+      await page.setViewportSize({ width: 844, height: 390 });
+      await assertActionsFit("landscape", 390);
+      await page.setViewportSize({ width: 390, height: 844 });
+      // A software keyboard can shrink only the visual viewport, leaving the
+      // dialog/layout viewport unchanged. Exercise that resize independently.
+      await page.evaluate(() => {
+        Object.defineProperty(window.visualViewport, "height", { configurable: true, value: 320 });
+        window.visualViewport.dispatchEvent(new Event("resize"));
+      });
+      await assertActionsFit("keyboard-short visual viewport", 320);
+      await actionMenu.getByRole("button", { name: "Download", exact: true }).focus();
+      const download = page.waitForEvent("download"); await page.keyboard.press("Enter");
+      assert.equal((await download).suggestedFilename(), "README.md");
+      await page.evaluate(() => { delete window.visualViewport.height; window.visualViewport.dispatchEvent(new Event("resize")); });
     }
     await page.screenshot({ path: resolve(output, mobile ? "mobile-files.png" : "desktop-files.png") });
     const chromeStyle = await workspace.evaluate((node) => {

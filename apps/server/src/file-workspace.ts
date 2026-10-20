@@ -1,6 +1,6 @@
 import {
   FileBranchesInputSchema, FileChangesInputSchema, FileContentInputSchema, FileHistoryInputSchema,
-  FileMutationInputSchema, FileOperationSchema, FileTreeInputSchema,
+  CLOUD_CODE_SYNC_LIMITS, FileMutationInputSchema, FileOperationSchema, FilePathSchema, FileTreeInputSchema,
   type CodeFile, type FileBranchesInput, type FileBranchesResult, type FileChangesInput, type FileChangesResult,
   type FileContentInput, type FileContentResult, type FileHistoryInput, type FileHistoryResult,
   type FileMutationInput, type FileMutationResult, type FileOperation, type FileTreeInput, type FileTreeResult,
@@ -79,33 +79,60 @@ function assertLayout(files: CodeFile[]): void {
   }
 }
 
-/** Pure sequential file operations; callers validate final provider limits and persist atomically. */
+function fileBytes(file: Pick<CodeFile, "content_base64">): number {
+  const encoded = file.content_base64;
+  return encoded.length * 3 / 4 - (encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0);
+}
+function assertCloudBudget(count: number, bytes: number, fileSize = 0): void {
+  if (count > CLOUD_CODE_SYNC_LIMITS.maxFiles || bytes > CLOUD_CODE_SYNC_LIMITS.maxSnapshotBytes
+    || fileSize > CLOUD_CODE_SYNC_LIMITS.maxFileBytes) {
+    throw new ApiError(507, "code_storage_quota_exceeded", "Code storage, branch, or checkpoint quota exceeded");
+  }
+}
+
+/** Bound each sequential cloud tree before expanding it; callers persist atomically. */
 export function applyFileOperations(original: CodeFile[], operations: FileOperation[]): CodeFile[] {
+  assertCloudBudget(original.length, 0);
+  let bytes = 0;
+  for (const file of original) {
+    const size = fileBytes(file);
+    bytes += size;
+    assertCloudBudget(original.length, bytes, size);
+  }
   let files = original.map((file) => ({ ...file }));
   assertLayout(files);
   for (const raw of operations) {
     const operation = FileOperationSchema.parse(raw);
     if (operation.type === "write") {
       const previous = files.find((file) => file.path === operation.path);
+      const size = fileBytes(operation);
+      const nextBytes = bytes - (previous ? fileBytes(previous) : 0) + size;
+      assertCloudBudget(files.length + (previous ? 0 : 1), nextBytes, size);
       files = files.filter((file) => file.path !== operation.path);
       files.push({ path: operation.path, content_base64: operation.content_base64,
         executable: operation.executable ?? previous?.executable ?? false });
+      bytes = nextBytes;
     } else {
       const source = files.filter((file) => file.path === operation.path || file.path.startsWith(`${operation.path}/`));
       if (!source.length) throw notFound("File or folder");
       if (operation.type === "delete") {
         const deleted = new Set(source.map((file) => file.path));
         files = files.filter((file) => !deleted.has(file.path));
+        bytes -= source.reduce((sum, file) => sum + fileBytes(file), 0);
       } else {
         const destinationKey = portableKey(operation.destination), sourceKey = portableKey(operation.path);
         if (destinationKey === sourceKey || destinationKey.startsWith(`${sourceKey}/`)
           || files.some((file) => portableKey(file.path) === destinationKey || portableKey(file.path).startsWith(`${destinationKey}/`))) throw conflict();
-        const copied = source.map((file) => ({ ...file, path: operation.destination + file.path.slice(operation.path.length) }));
+        const nextBytes = bytes + (operation.type === "copy" ? source.reduce((sum, file) => sum + fileBytes(file), 0) : 0);
+        assertCloudBudget(files.length + (operation.type === "copy" ? source.length : 0), nextBytes);
+        const copied = source.map((file) => ({ ...file,
+          path: FilePathSchema.parse(operation.destination + file.path.slice(operation.path.length)) }));
         if (operation.type === "move") {
           const removed = new Set(source.map((file) => file.path));
           files = files.filter((file) => !removed.has(file.path));
         }
         files.push(...copied);
+        bytes = nextBytes;
       }
     }
     assertLayout(files);

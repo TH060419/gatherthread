@@ -19,6 +19,9 @@ const MAX_BROWSER_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_MUTATION_RECEIPTS = 10_000;
 const SHA = /^[a-f0-9]{40}$/u;
 const personalBranch = (projectId: string, userId: string) => `gatherthread/${hash(projectId).slice(0, 24)}/${hash(userId).slice(0, 24)}`;
+// "own" is a virtual personal selection, but is also a valid shared Git ref.
+// A colon cannot occur in a Git ref, so this read-only base ID is unambiguous.
+const baseBranchId = (branch: string) => branch === "own" ? "base:own" : branch;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const key = (path: string) => path.normalize("NFC").replace(/[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/gu, "").toLowerCase();
 const eligible = (path: string) => isCodeSyncPathAllowed(path)
@@ -63,7 +66,7 @@ export class GithubFileWorkspace implements FileWorkspaceProviderAdapter {
     if (!Array.isArray(refs) || refs.length > GITHUB_CODE_SYNC_LIMITS.maxFiles) throw limit();
     const base = await this.head(guard, guard.base_branch);
     if (!base) throw fail("github_branch_missing", "The project's shared GitHub branch is unavailable.", 404);
-    const branches: FileBranchesResult["branches"] = [{ id: guard.base_branch, name: guard.base_branch, user_id: null, head_commit: base, can_write: false }];
+    const branches: FileBranchesResult["branches"] = [{ id: baseBranchId(guard.base_branch), name: guard.base_branch, user_id: null, head_commit: base, can_write: false }];
     const seen = new Set([guard.base_branch]);
     for (const ref of refs) {
       if (typeof ref?.ref !== "string" || !ref.ref.startsWith("refs/heads/")) throw invalid();
@@ -275,7 +278,8 @@ export class GithubFileWorkspace implements FileWorkspaceProviderAdapter {
   }
   private async selection(actor: Actor, projectId: string, input: { branch_id: string; commit?: string | undefined; connection_revision?: string | number | undefined }): Promise<Selection> {
     const guard = await this.guard(actor, projectId, input.connection_revision);
-    const branch = input.branch_id === "own" ? guard.own_branch : input.branch_id;
+    const branch = input.branch_id === "own" ? guard.own_branch
+      : input.branch_id === baseBranchId(guard.base_branch) ? guard.base_branch : input.branch_id;
     const member = this.service.listProjectMembers(actor, projectId).find(item => personalBranch(projectId, item.user_id) === branch);
     if (branch !== guard.base_branch && !member) throw fail("file_branch_unavailable", "This branch is not part of the current project.", 404);
     const assertCurrent = () => {
@@ -381,14 +385,22 @@ export class GithubFileWorkspace implements FileWorkspaceProviderAdapter {
         else {
           if (key(operation.path) === key(operation.destination) || key(operation.destination).startsWith(`${key(operation.path)}/`)
             || entries.some(entry => key(entry.path) === key(operation.destination) || key(entry.path).startsWith(`${key(operation.destination)}/`))) throw conflict();
+          // Bound every intermediate tree before expanding it. A bounded batch of
+          // nested copies must not grow exponentially before the final check.
+          if (operation.type === "copy" && (entries.length + source.length > GITHUB_CODE_SYNC_LIMITS.maxFiles
+            || entries.reduce((sum, entry) => sum + entry.size, 0) + source.reduce((sum, entry) => sum + entry.size, 0)
+              > GITHUB_CODE_SYNC_LIMITS.maxSnapshotBytes)) throw limit();
           const copies = source.map(entry => ({ ...entry, path: operation.destination + entry.path.slice(operation.path.length) }));
+          if (copies.some(entry => !eligible(entry.path))) {
+            throw fail("file_unsupported", "A resulting path is private, generated, protected or too long. Choose another destination.", 422);
+          }
           if (operation.type === "move") entries = entries.filter(entry => !source.includes(entry));
           entries.push(...copies);
         }
       }
+      if (entries.length > GITHUB_CODE_SYNC_LIMITS.maxFiles || entries.reduce((sum, entry) => sum + entry.size, 0) > GITHUB_CODE_SYNC_LIMITS.maxSnapshotBytes) throw limit();
       this.layout(entries);
     }
-    if (entries.length > GITHUB_CODE_SYNC_LIMITS.maxFiles || entries.reduce((sum, entry) => sum + entry.size, 0) > GITHUB_CODE_SYNC_LIMITS.maxSnapshotBytes) throw limit();
     return entries;
   }
 }

@@ -412,6 +412,7 @@ export function mountFileWorkspace({
     tools.append(button("↻", () => refresh(), { className: "fw-icon-button", title: "Refresh files", disabled: loading || mutationBusy || Boolean(mutation) }));
     const actions = el("details", "fw-actions"); const summary = el("summary", "fw-button fw-icon-button", "…");
     summary.setAttribute("aria-label", t("File actions")); summary.title = t("File actions"); actions.append(summary);
+    actions.addEventListener("toggle", positionActionsMenu);
     const menu = el("div", "fw-actions-menu");
     for (const name of ["New file", "New folder", "Import files", "Rename", "Copy", "Cut", "Paste", "Move", "Delete", "Download"]) {
       const needsWrite = name !== "Download"; const needsSelection = ["Rename", "Copy", "Cut", "Move", "Delete", "Download"].includes(name);
@@ -445,6 +446,23 @@ export function mountFileWorkspace({
     filesPane.append(footer);
     if (focused) { searchInput.focus(); searchInput.setSelectionRange?.(selectionStart, selectionStart); }
   }
+  function positionActionsMenu() {
+    const actions = filesPane.querySelector(".fw-actions"); if (!actions?.open) return;
+    const menu = actions.querySelector(".fw-actions-menu");
+    const anchor = actions.getBoundingClientRect(), pane = filesPane.getBoundingClientRect(), bounds = root.getBoundingClientRect();
+    const viewport = window.visualViewport, viewportTop = viewport?.offsetTop ?? 0;
+    const top = Math.max(pane.top, bounds.top, viewportTop) + 8;
+    const bottom = Math.min(pane.bottom, bounds.bottom, viewportTop + (viewport?.height ?? window.innerHeight ?? bounds.bottom)) - 8;
+    const above = Math.max(0, Math.min(anchor.top - 6, bottom) - top);
+    const below = Math.max(0, bottom - Math.max(anchor.bottom + 6, top));
+    // Prefer the usual dropdown; flip only when it needs more room. The menu
+    // scrolls inside the clipped workspace and the keyboard's visual viewport.
+    const height = Math.min(menu.scrollHeight + menu.offsetHeight - menu.clientHeight, 440);
+    const opensAbove = below < height && above > below;
+    const available = opensAbove ? above : below;
+    const menuTop = opensAbove ? Math.min(anchor.top - 6, bottom) - Math.min(height, available) : Math.max(anchor.bottom + 6, top);
+    menu.style.top = `${menuTop - anchor.top}px`; menu.style.maxHeight = `${Math.min(available, 440)}px`;
+  }
   function renderTree() {
     const outline = filesPane.querySelector(".fw-tree"); if (!outline) return;
     const previousScroll = outline.scrollTop; outline.replaceChildren();
@@ -465,7 +483,7 @@ export function mountFileWorkspace({
         if (row.directory) { expanded.has(row.path) ? expanded.delete(row.path) : expanded.add(row.path); renderExplorer(); filesPane.querySelectorAll('[role="treeitem"]').forEach((node) => { if (node.dataset.path === row.path) node.focus(); }); }
         else { renderExplorer(); void openFile(row.path); }
       });
-      item.addEventListener("contextmenu", (event) => { event.preventDefault(); selectedPath = row.path; renderExplorer(); const menu = filesPane.querySelector(".fw-actions"); if (menu) { menu.open = true; menu.querySelector("button:not(:disabled)")?.focus(); } });
+      item.addEventListener("contextmenu", (event) => { event.preventDefault(); selectedPath = row.path; renderExplorer(); const menu = filesPane.querySelector(".fw-actions"); if (menu) { menu.open = true; positionActionsMenu(); menu.querySelector("button:not(:disabled)")?.focus(); } });
       item.addEventListener("keydown", (event) => treeKey(event, row, rows)); outline.append(item);
     }
     outline.scrollTop = previousScroll;
@@ -897,6 +915,11 @@ export function mountFileWorkspace({
     if (!openTabsPicker.contains(event.target)) openTabsPicker.open = false;
   }
   root.addEventListener("keydown", keydown); window.addEventListener("beforeunload", beforeUnload); window.addEventListener("pointerdown", pointerdown);
+  window.addEventListener("resize", positionActionsMenu);
+  window.visualViewport?.addEventListener("resize", positionActionsMenu);
+  window.visualViewport?.addEventListener("scroll", positionActionsMenu);
+  const actionsResizeObserver = window.ResizeObserver ? new window.ResizeObserver(positionActionsMenu) : null;
+  actionsResizeObserver?.observe(filesPane);
   function refreshLanguage() {
     root.setAttribute("aria-label", t("File workspace"));
     newTabSummary.setAttribute("aria-label", t("New tab")); newTabSummary.title = t("New tab"); openTabsSummary.setAttribute("aria-label", t("Workspace menu")); openTabsSummary.title = t("Workspace menu");
@@ -904,6 +927,9 @@ export function mountFileWorkspace({
   }
   function destroy() {
     disposed = true; clear(); root.removeEventListener("keydown", keydown); window.removeEventListener("beforeunload", beforeUnload); window.removeEventListener("pointerdown", pointerdown);
+    window.removeEventListener("resize", positionActionsMenu); actionsResizeObserver?.disconnect();
+    window.visualViewport?.removeEventListener("resize", positionActionsMenu);
+    window.visualViewport?.removeEventListener("scroll", positionActionsMenu);
     if (membersHost && memberMarker.parentNode) memberMarker.replaceWith(membersHost);
     else if (membersHost && originalMemberParent) originalMemberParent.append(membersHost);
     root.remove();

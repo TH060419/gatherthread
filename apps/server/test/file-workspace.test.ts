@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { FileBranchesResultSchema, FileChangesResultSchema, FileContentResultSchema, FileHistoryResultSchema,
+import { CLOUD_CODE_SYNC_LIMITS, FileBranchesResultSchema, FileChangesResultSchema, FileContentResultSchema, FileHistoryResultSchema,
   FileMutationResultSchema, FileTreeResultSchema, type FileMutationInput, type FileOperation } from "@gatherthread/protocol";
 import { CodeRepository } from "../src/code-repository.js";
 import { CollaborationDatabase, type Actor } from "../src/database.js";
@@ -171,4 +171,41 @@ test("pure file operations preserve executable bytes and reject HFS aliases", ()
   assert.equal(copied[1]?.executable, true);
   assert.equal(original.length, 1);
   assert.throws(() => applyFileOperations(original, [write("a\u200c.ts", "alias")]), hasCode("file_path_conflict"));
+});
+
+test("cloud operations reject expanding intermediate trees even when later deletes would fit", () => {
+  const f = fixture();
+  try {
+    const first = f.mutate(f.member, "own", f.initial, [write("a/x", "x")], "expansion-seed");
+    const operations: FileOperation[] = [];
+    for (let index = 0; index < 13; index++) {
+      operations.push({ type: "copy", path: "a", destination: `b${index}` },
+        { type: "copy", path: `b${index}`, destination: `a/n${index}` });
+    }
+    operations.push({ type: "delete", path: "a" });
+    for (let index = 0; index < 13; index++) operations.push({ type: "delete", path: `b${index}` });
+    assert.throws(() => f.mutate(f.member, first.branch_id, first.commit, operations, "expanding-cloud-tree"), hasCode("code_storage_quota_exceeded"));
+    assert.equal(f.repository.status(f.member, f.project.id).branches[0]?.head_commit, first.commit);
+    assert.equal((f.database.sqlite.prepare("SELECT COUNT(*) AS count FROM code_mutations WHERE idempotency_key='expanding-cloud-tree'").get() as { count: number }).count, 0);
+    assert.deepEqual(FileTreeResultSchema.parse(f.workspace.tree(f.member, f.project.id, { provider: "gt-cloud", branch_id: first.branch_id })).entries.map(file => file.path), ["a/x"]);
+  } finally { f.close(); }
+});
+
+test("cloud copy budgets count decoded bytes and allow the exact snapshot boundary", () => {
+  const original = [{ path: "source/file.bin", content_base64: Buffer.alloc(CLOUD_CODE_SYNC_LIMITS.maxFileBytes).toString("base64"), executable: false }];
+  const copies: FileOperation[] = ["one", "two", "three"].map(destination => ({ type: "copy", path: "source", destination }));
+  assert.equal(applyFileOperations(original, copies).length, 4);
+  assert.throws(() => applyFileOperations(original, [...copies,
+    { type: "copy", path: "source", destination: "four" }, { type: "delete", path: "four" }]), hasCode("code_storage_quota_exceeded"));
+  const moveAfterDelete: FileOperation[] = [...copies, { type: "delete", path: "one" }, { type: "move", path: "source", destination: "moved" },
+    { type: "copy", path: "moved", destination: "replacement" }];
+  assert.equal(applyFileOperations(original, moveAfterDelete).length, 4);
+});
+
+test("cloud copy and move validate expanded descendant paths before later operations", () => {
+  const original = [{ path: `source/${"n".repeat(240)}/${"f".repeat(240)}`, content_base64: encoded("source"), executable: false }];
+  const destination = "renamed-directory-with-a-long-prefix";
+  for (const type of ["copy", "move"] as const) {
+    assert.throws(() => applyFileOperations(original, [{ type, path: "source", destination }, { type: "delete", path: destination }]));
+  }
 });

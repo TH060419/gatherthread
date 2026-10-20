@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +20,7 @@ const deferred = () => { let resolve!: () => void; const promise = new Promise<v
 interface RemoteEntry { path: string; mode: string; type: string; sha: string; size?: number }
 interface RemoteCommit { sha: string; tree: { sha: string }; parents: Array<{ sha: string }>; commit: { message: string; author: { name: string; date: string } } }
 
-async function fixture() {
+async function fixture(baseBranch = "main") {
   const directory = mkdtempSync(join(tmpdir(), "gt-github-files-"));
   const database = new CollaborationDatabase(join(directory, "state.sqlite"), { authTokenPepper: "browser-github-file-fixture-pepper" });
   const service = new CollaborationService(database), actor = database.bootstrapIdentity({ display_name: "Owner", device_name: "Browser" }).actor;
@@ -46,7 +46,7 @@ async function fixture() {
     commits.set(id, { sha: id, tree: { sha: tree }, parents: parents.map(sha => ({ sha })),
       commit: { message, author: { name: "Fixture", date: "2026-10-18T00:00:00Z" } } }); return id;
   };
-  addCommit(base); refs.set("main", base);
+  addCommit(base); refs.set(baseBranch, base);
   const isAncestor = (start: string, end: string): boolean => start === end || (commits.get(end)?.parents ?? []).some(parent => isAncestor(start, parent.sha));
   const calls: Array<{ path: string; method: string; body: any; authorization?: string }> = [];
   let before: ((path: string, method: string, body: any) => Promise<void> | void) | undefined;
@@ -60,10 +60,10 @@ async function fixture() {
     calls.push({ path: path + parsed.search, method, body, authorization: String((init?.headers as Record<string, string>)?.authorization ?? "") });
     await before?.(path, method, body);
     let result: any;
-    if (path === "/login/oauth/access_token") result = { access_token: "ghu_browser_fixture", refresh_token: "ghr_browser_fixture", expires_in: 28800, refresh_token_expires_in: 100000, scope: "" };
+    if (path === "/login/oauth/access_token") result = { access_token: `ghu_${randomUUID()}`, refresh_token: `ghr_${randomUUID()}`, expires_in: 28800, refresh_token_expires_in: 100000, scope: "" };
     else if (path === "/user") result = { login: "fixture-user" };
     else if (path === "/repos/owner/project") result = { id: 123, full_name: "owner/project", permissions: { pull: true, push: canPush } };
-    else if (path === "/repos/owner/project/branches/main") result = { commit: { sha: refs.get("main") } };
+    else if (path === `/repos/owner/project/branches/${baseBranch}`) result = { commit: { sha: refs.get(baseBranch) } };
     else if (path.includes("/git/matching-refs/heads/")) {
       const prefix = path.split("/git/matching-refs/heads/")[1]!;
       result = [...refs].filter(([ref]) => ref.startsWith(prefix)).map(([ref, id]) => ({ ref: `refs/heads/${ref}`, object: { type: "commit", sha: id } }));
@@ -109,10 +109,10 @@ async function fixture() {
   const connect = async (who: Actor) => {
     const state = new URL(github.authorize(who).authorization_url).searchParams.get("state")!;
     await github.complete(who, { state, code: "fixture" });
-    await github.bind(who, project.id, { repository: "owner/project", base_branch: "main" });
+    await github.bind(who, project.id, { repository: "owner/project", base_branch: baseBranch });
   };
   await connect(actor); await connect(member);
-  const configured = service.setProjectGitHub(actor, project.id, { repository: "owner/project", base_branch: "main", enabled: true, expected_revision: null });
+  const configured = service.setProjectGitHub(actor, project.id, { repository: "owner/project", base_branch: baseBranch, enabled: true, expected_revision: null });
   const files = new GithubFileWorkspace(service, github), branch = configured.branch, memberBranch = service.getProjectGitHub(member, project.id).branch;
   calls.length = 0;
   return { directory, database, service, actor, member, project, github, agent, files, refs, trees, blobs, commits, calls, base, branch, memberBranch,
@@ -263,6 +263,60 @@ test("GitHub browser rejects stale/divergent writes, hidden paths, overwrite col
     await assert.rejects(f.files.mutate(f.actor, f.project.id, mutation(initial, [{ type: "delete", path: "README.md" }], "divergent-race-save")), error => error instanceof ApiError);
     assert.equal(f.refs.get(f.branch), sha("external-sibling")); assert.equal(f.refs.get("main"), f.base);
     assert.ok(f.calls.filter(call => call.method === "PATCH").every(call => call.body.force === false));
+  } finally { await f.close(); }
+});
+
+test("a shared GitHub base named own remains separately selectable and read-only", async () => {
+  const f = await fixture("own");
+  try {
+    const branches = await f.files.branches(f.actor, f.project.id, { provider: "github" });
+    assert.equal(new Set(branches.branches.map(branch => branch.id)).size, branches.branches.length);
+    const shared = branches.branches.find(branch => branch.user_id === null)!;
+    assert.equal(shared.name, "own"); assert.equal(shared.id, "base:own"); assert.equal(shared.can_write, false);
+    const saved = await f.files.mutate(f.actor, f.project.id, mutation(f.base, [{ type: "write", path: "personal.txt", content_base64: b64("personal") }]));
+    const base = await f.files.tree(f.actor, f.project.id, { provider: "github", branch_id: shared.id });
+    const own = await f.files.tree(f.actor, f.project.id, { provider: "github", branch_id: "own" });
+    assert.equal(base.head_commit, f.base); assert.equal(base.can_write, false);
+    assert.equal(base.entries.some(entry => entry.path === "personal.txt"), false);
+    assert.equal(own.head_commit, saved.commit); assert.equal(own.can_write, true);
+    await assert.rejects(f.files.mutate(f.actor, f.project.id, { ...mutation(f.base, [{ type: "delete", path: "README.md" }]), branch_id: shared.id }), hasCode("file_read_only"));
+    assert.equal(f.refs.get("own"), f.base);
+  } finally { await f.close(); }
+});
+
+for (const type of ["copy", "move"] as const) {
+  test(`GitHub folder ${type} rejects protected or overlong expanded destinations before any write`, async () => {
+    const f = await fixture();
+    try {
+      const initial = f.trees.get(f.treeId)!;
+      f.trees.set(f.treeId, initial.filter(entry => !entry.path.startsWith(".github/")));
+      f.trees.get(f.treeId)!.push({ path: "src/workflows/run.yml", mode: "100644", type: "blob", sha: f.addBlob(b64("workflow")), size: 8 });
+      await assert.rejects(f.files.mutate(f.actor, f.project.id, mutation(f.base, [{ type, path: "src", destination: ".github" }], `protected-folder-${type}`)), hasCode("file_unsupported"));
+      f.trees.get(f.treeId)!.push({ path: `src/${"a".repeat(250)}/${"b".repeat(240)}`, mode: "100644", type: "blob", sha: f.addBlob(""), size: 0 });
+      await assert.rejects(f.files.mutate(f.actor, f.project.id, mutation(f.base, [{ type, path: "src", destination: "newdirname" }], `overlong-folder-${type}`)), hasCode("file_unsupported"));
+      assert.equal(f.calls.some(call => call.method !== "GET"), false);
+      assert.equal(f.refs.has(f.branch), false);
+      assert.equal(f.database.sqlite.prepare("SELECT count(*) AS n FROM github_file_mutation_receipts").get()!.n, 0);
+    } finally { await f.close(); }
+  });
+}
+
+test("GitHub sequential copies enforce intermediate file and byte budgets before later cleanup", async () => {
+  const f = await fixture();
+  try {
+    f.trees.get(f.treeId)!.push({ path: "a/x", mode: "100644", type: "blob", sha: f.addBlob(""), size: 0 });
+    const operations: FileMutationInput["operations"] = [];
+    for (let index = 0; index < 13; index++) operations.push({ type: "copy", path: "a", destination: `b${index}` }, { type: "copy", path: `b${index}`, destination: `a/n${index}` });
+    operations.push({ type: "delete", path: "a" });
+    for (let index = 0; index < 13; index++) operations.push({ type: "delete", path: `b${index}` });
+    await assert.rejects(f.files.mutate(f.actor, f.project.id, mutation(f.base, operations, "intermediate-file-budget")), hasCode("github_source_limit"));
+    f.trees.get(f.treeId)!.find(entry => entry.path === "a/x")!.size = 64 * 1024 * 1024;
+    await assert.rejects(f.files.mutate(f.actor, f.project.id, mutation(f.base, [
+      { type: "copy", path: "a", destination: "large-copy" }, { type: "delete", path: "large-copy" },
+    ], "intermediate-byte-budget")), hasCode("github_source_limit"));
+    assert.equal(f.calls.some(call => call.method !== "GET"), false);
+    assert.equal(f.refs.has(f.branch), false);
+    assert.equal(f.database.sqlite.prepare("SELECT count(*) AS n FROM github_file_mutation_receipts").get()!.n, 0);
   } finally { await f.close(); }
 });
 
