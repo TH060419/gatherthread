@@ -784,7 +784,9 @@ test("DSH cannot turn an unconfirmed active request into an early stop acknowled
   assert.equal(f.receipts.length, 1); assert.equal(host.openCount, 0); assert.deepEqual(await f.store.load(), pending); await second.stop();
 });
 
-test("DSH early shared cleanup survives a deleted source, lost ACK and unavailable session without opening the Host", async () => {
+test("DSH early shared cleanup survives a deleted source, lost ACK and unavailable session without opening the Host", {
+  skip: process.platform === "win32" ? "Private native sharing cleanup is unsupported on Windows" : false,
+}, async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "gt-dsh-shared-startup-"));
   try {
     const cfg = config({ statePath: path.join(directory, "dsh.json") }), api = new FakeApi(), store = new MemoryConnectorStateStore();
