@@ -175,6 +175,6 @@ Before deleting an account, review its impact in account settings and transfer o
 
 Use the guides in Settings whenever you want a refresher. Their example is disposable: practice, reset, or exit without changing real projects or using your model quota. Computer, phone, and tablet guides point to the controls shown on that device.
 
-Today's workflow is people choosing their own Agents and sharing discussion, results, and reviewed file changes. Automatic multi-Agent teams, direct cooperation between different members' Agents, and cloud Agent teams remain future plans.
+**Multi-Agent teams are coming in a later release.** Several Agents connected by one person will form a team, divide work and communicate directly to complete tasks together. With members' explicit permission, Agents belonging to different teammates will also communicate and collaborate automatically.
 
 [Open GatherThread](https://gatherthread.cn/) · [Codex connection](CODEX_CONNECT.md) · [DSH connection](DSH_CONNECT.md) · [Project files](CODE_SYNC.md) · [Cloud trial Agent](HOSTED_AGENT_GUIDE.md) · [Self-hosting](SELF_HOSTING.md) · [All documentation](README.md)

@@ -174,6 +174,6 @@ Codex 还可以在初次建立连接时导入可见历史，也可手动“导�
 
 打开[自由示例](https://gatherthread.cn/app/example.html?locale=zh-CN&topic=browse)先试一遍，随时重置；再回到自己的项目。设置中的新手引导、摘要、Agent 与上传开关可按需调整。界面支持中文/英文，语言会在首页、登录页与工作页之间同步。
 
-现在是多人共享讨论、各自调用 Agent、共同审查和整合。未来我们会继续探索个人多 Agent 自动分工、不同成员的 Agent 直接合作、多个云端 Agent 组队；这些自动团队能力仍是规划。
+**多 Agent 团队将在后续版本上线。** 一个人连接的多个 Agent 将组成团队，自动分工、相互交流并协作完成任务；在成员明确授权后，还可让不同成员的 Agent 自动交流协作。
 
 [返回产品介绍](../README.zh-CN.md) · [云端体验 Agent 指南](HOSTED_AGENT_GUIDE.zh-CN.md) · [文档目录](README.md) · [自托管](SELF_HOSTING.md) · [反馈建议](https://github.com/TH060419/gatherthread/issues)

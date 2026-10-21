@@ -1,24 +1,26 @@
 # GatherThread 共序
 
-**多人、多端、多 Agent，一起做项目。**
+**多人协作，多端接续。多 Agent 团队将在后续版本上线。**
 
 让讨论和开发发生在同一个地方。GatherThread 把**多人联机、共享会话、各自的 AI Agent 和文件协作**放在一起：说清楚要做什么，请自己的 Agent 开始做，同伴一起看进展、检查成果。换到手机或平板，也能接着推进。
 
 [开始使用](https://gatherthread.cn/app/) · [自由示例](https://gatherthread.cn/app/example.html?locale=zh-CN&topic=browse) · [图文指南](docs/PRODUCT_GUIDE.zh-CN.md) · [English](README.md)
 
-![GatherThread：多人、多端、多 Agent，一起做项目](docs/assets/product/cover.zh-CN.jpg)
+![GatherThread：多人协作、多端接续，多 Agent 团队将在后续版本上线](docs/assets/product/cover.zh-CN.jpg)
 
-开源 · 可自托管 · 当前版本标识 **0.1.0-beta.2** · [Apache 2.0](LICENSE)
+开源 · 可自托管 · 当前版本标识 **0.1.0-beta.3** · [Apache 2.0](LICENSE)
 
 公开注册的 Beta 测试：验证邮箱、设置密码，即可创建账号。云端可用模型和额度以工作页显示为准；项目邀请用于加入团队，不是账号注册码。[版本与发布记录](CHANGELOG.md) · [开发者测试环境](docs/TEST_ENVIRONMENT.md)
 
-## 一起聊，一起做，换个设备接着来
+## 多人、多端、多 Agent
 
 **多人：让讨论直接推动开发。** 大家共用一段会话，聊天、引用、@同伴、AI 进展和回答都在一起。各自的 Agent 能参考共享讨论，少一点复制转发，多一点真正协作。
 
 **多端：人离开电脑，项目不必停。** 同一账号可在电脑、手机、平板同时登录。路上回同伴、看进展、请电脑上的 Agent 继续做；换电脑时，也能下载已保存的文件版本接着工作。
 
-**多 Agent：每个人用合适的帮手。** 带上熟悉的 Codex 或 DeepSeek Harness，也可不安装本地工具，直接用云端体验 Agent 做个小任务。各自选择所用 Agent 支持的模型与选项，团队共享讨论和成果；云端使用额度以工作页显示为准。
+**多 Agent（后续版本）：让自己的 Agent 直接组队。** 一个人连接的多个 Agent 将组成团队，自动分工、相互交流并协作完成任务；在成员明确授权后，还可让不同成员的 Agent 自动交流协作。
+
+现在就能带上熟悉的 Codex 或 DeepSeek Harness，也可不安装本地工具，直接用云端体验 Agent 做个小任务。按所选 Agent 的能力选择模型与选项；云端使用额度以工作页显示为准。
 
 ![共享讨论和文件版本，各自调用 Agent，检查后整合](docs/assets/product/collaboration.zh-CN.jpg)
 
@@ -104,9 +106,9 @@
 
 [隐私与删除说明](https://gatherthread.cn/privacy/) · [安全问题私下反馈](SECURITY.md)
 
-## 下一步：让多个 Agent 更主动地合作
+## 下一步：让自己的 Agent 组成团队
 
-我们希望让一个人指挥多个 Agent 自动分工，让不同成员的 Agent 直接合作，并接入多个云端 Agent 组成团队。**这些自动团队能力是未来规划**；现在的特色是多人共享讨论、各自调用 Agent、共同检查和整合成果。
+**多 Agent 团队将在后续版本上线：** 一个人连接多个 Agent，让它们直接分工、互相交流、协作完成任务；在各成员明确授权后，还可扩展为不同成员的 Agent 之间自动交流协作。
 
 ## 参与项目
 

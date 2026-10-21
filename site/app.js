@@ -61,12 +61,17 @@
     });
     document.title =
       language === "zh"
-        ? "GatherThread 共序 · 一起做项目"
-        : "GatherThread · Build something together";
-    document.querySelector('meta[name="description"]').content =
+        ? "GatherThread 共序 · 多人协作，多端接续"
+        : "GatherThread · Collaborate across devices";
+    const description =
       language === "zh"
-        ? "GatherThread 共序，让多人、多端、多 Agent 一起做项目。实时讨论，携手开发，随时接续。"
-        : "GatherThread brings people, devices and their own Agents together. Discuss in real time, build together, and pick up anywhere.";
+        ? "GatherThread 共序，让多人实时讨论、共享会话和项目文件，电脑、手机、平板随时接续。多 Agent 团队将在后续版本上线：个人 Agent 直接组队，跨成员协作须明确授权。"
+        : "GatherThread brings shared conversations and project files across your devices. Multi-Agent teams will arrive in a later release: one person's Agents work together directly, with permission required for cross-member collaboration.";
+    document.querySelector('meta[name="description"]').content = description;
+    document.querySelector('meta[property="og:title"]').content = document.title;
+    document.querySelector('meta[property="og:description"]').content = description;
+    document.querySelector('meta[property="og:locale"]').content = language === "zh" ? "zh_CN" : "en_US";
+    document.querySelector('meta[property="og:locale:alternate"]').content = language === "zh" ? "en_US" : "zh_CN";
     languageButton.textContent = language === "zh" ? "EN" : "中文";
     languageButton.setAttribute(
       "aria-label",

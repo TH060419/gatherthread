@@ -1,24 +1,26 @@
 # GatherThread
 
-**Work together. Bring your Agents. Keep going anywhere.**
+**Work together. Continue anywhere. Multi-Agent teams are coming in a later release.**
 
 GatherThread puts your team's discussion, AI-assisted work, and file review in one shared conversation. Collaborate live, use your own Agent, and continue from a computer, phone, or tablet. Less copying between chats. More progress everyone can follow.
 
 [Open GatherThread](https://gatherthread.cn/) · [Try the example](https://gatherthread.cn/app/example.html?locale=en&topic=browse) · [Illustrated guide](docs/PRODUCT_GUIDE.md) · [简体中文](README.zh-CN.md)
 
-![GatherThread: work together across devices, with your own Agents](docs/assets/product/cover.en.jpg)
+![GatherThread: work together across devices; multi-Agent teams are planned for a later release](docs/assets/product/cover.en.jpg)
 
-Open source · Self-hostable · Current version identifier **0.1.0-beta.2** · [Apache 2.0](LICENSE)
+Open source · Self-hostable · Current version identifier **0.1.0-beta.3** · [Apache 2.0](LICENSE)
 
 Public-registration Beta: verify your email and choose a password to create an account. Available cloud models and allowances are shown in the workspace. Project invitations join a team; they are not account registration codes. [Release history](CHANGELOG.md) · [Developer test environment](docs/TEST_ENVIRONMENT.md)
 
-## Your team. Your devices. Your Agents.
+## People. Devices. Agent teams.
 
 **Work together in the same conversation.** Agree on a goal, ask your Agent to work, and let teammates follow the result. Quote a particular message or mention someone instead of explaining the same thing twice. Discussion and development stay together.
 
 **Keep going beyond your desk.** The same account can be signed in on computers, phones, and tablets at once. On your phone, continue the discussion, review progress, or ask your connected computer Agent to keep working. Move to another computer by downloading the file version you saved.
 
-**Choose the helper that fits.** Connect Codex or DeepSeek Harness, or use the cloud trial Agent for a small task without local setup. Choose from that Agent's supported models and options. Each teammate keeps their own setup while sharing discussion and results; cloud usage allowances are shown in the workspace.
+**Multi-Agent teams (coming in a later release).** Several Agents connected by one person will form a team, divide work and communicate directly to complete tasks together. With members' explicit permission, Agents belonging to different teammates will also communicate and collaborate automatically.
+
+For today's projects, connect Codex or DeepSeek Harness, or use the cloud trial Agent for a small task without local setup. Choose from that Agent's supported models and options; cloud usage allowances are shown in the workspace.
 
 ![People share discussion and file versions while keeping their own Agents](docs/assets/product/collaboration.en.jpg)
 
@@ -100,9 +102,9 @@ Summaries may omit details and use your Agent's quota. Later Agent requests defa
 
 After message deletion, all future Agent history prepared by GatherThread will exclude the erased content and invalidated results. Deletion does not roll back file changes, erase other members' independent messages or manual reposts, or recall copies already held locally or by model providers. The live conversation retains a placeholder with its order, author and time; [privacy](https://gatherthread.cn/privacy/) explains retention.
 
-## Next: Agents working more directly together
+## Next: your Agents, working as a team
 
-Our direction is simple: let one person coordinate several Agents, let teammates' Agents collaborate directly, and let multiple cloud Agents work as a team. **These automatic team capabilities are future plans**, separate from today's shared conversations and individually requested Agents.
+**Multi-Agent teams are planned for a later release:** one person connects several Agents that divide work, communicate directly and complete tasks together. With each member's explicit permission, this can extend to automatic collaboration between different teammates' Agents.
 
 ### Explore, contribute, or self-host
 
