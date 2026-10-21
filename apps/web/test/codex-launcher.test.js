@@ -60,8 +60,36 @@ function fixture(create, options = {}) {
       authorization: { id, expires_at: new Date(Date.now() + 600_000).toISOString() } })),
       revokeDeviceAuthorization: async key => revoked.push(key) },
     localizer: { t: value => value }, emailHint: hint, context: () => context, navigate: uri => opened.push(uri), ...options });
-  return { ui, get, hint, opened, revoked, change: () => { context = { ...context, scope: "b:project-b", projectId: "project-b" }; } };
+  return { ui, get, hint, opened, revoked, setModel: model => { context = { ...context, model }; },
+    change: () => { context = { ...context, scope: "b:project-b", projectId: "project-b" }; } };
 }
+
+test("Claude Launcher shares the private password handoff but uses independent DOM and v3 routing", async () => {
+  const f = fixture(undefined, { harness: "claude-code", fetchResponse: async () => new Response("", { status: 404 }) });
+  f.setModel("claude-sonnet-test");
+  await f.ui.open();
+  assert.equal(f.get("claude-launcher-account").textContent, "user@example.invalid");
+  assert.equal(f.get("open-claude-launcher-button").disabled, false);
+  f.get("open-claude-launcher-button").listeners.click();
+  const link = new URL(f.opened[0]);
+  assert.equal(link.searchParams.get("v"), "3");
+  assert.equal(link.searchParams.get("harness"), "claude-code");
+  assert.equal(link.searchParams.get("model"), "claude-sonnet-test");
+  f.ui.clear();
+  assert.equal(f.get("open-claude-launcher-button").disabled, true);
+  assert.deepEqual(f.revoked, [id]);
+});
+
+test("Claude does not reserve an account grant before the model is configured", async () => {
+  let calls = 0;
+  const f = fixture(async () => { calls++; throw new Error("must not authorize"); }, { harness: "claude-code" });
+  f.setModel("");
+  await f.ui.open();
+  assert.equal(calls, 0);
+  assert.equal(f.get("open-claude-launcher-button").disabled, true);
+  assert.match(f.get("claude-launcher-status").textContent, /exact Claude model ID/);
+  f.ui.clear();
+});
 
 test("the same Launcher download button uses a bounded exact same-source server index when deployed", async () => {
   const source = "a".repeat(40), requests = [];

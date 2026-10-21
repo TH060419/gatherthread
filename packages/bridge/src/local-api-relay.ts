@@ -58,8 +58,13 @@ const MAX_FRAME_BYTES = 1024 * 1024;
 const ACTIVE_LEASE_MS = 120_000;
 const ACTIVE_LEASE_REFRESH_MS = 20_000;
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+export type ConnectorHarnessNamespace = "codex" | "claude-code";
+export interface LocalConnectorRequestProfile {
+  harness: string; provider: string; model: string; runtime_id: string; reasoning_effort?: string;
+}
 const USER_METHODS = new Set([
   "listProjects",
+  "getCodeSyncStatus",
   "listProjectSessions",
   "listSessions",
   "listSessionMembers",
@@ -79,14 +84,16 @@ export function resolveWorkspaceConnectorApiPath(
   workspacePath: string,
   homeDirectory = homedir(),
   platform: NodeJS.Platform = process.platform,
+  harness: ConnectorHarnessNamespace = "codex",
 ): string {
+  requireHarnessNamespace(harness);
   const resolvedWorkspace = path.resolve(workspacePath);
   const id = createHash("sha256")
     .update(platform === "win32" ? resolvedWorkspace.toLowerCase() : resolvedWorkspace)
     .digest("hex")
     .slice(0, 24);
-  if (platform === "win32") return `\\\\.\\pipe\\gatherthread-${id}-user-api`;
-  return path.join(homeDirectory, ".gatherthread", "codex", "ipc", id, "user-api.sock");
+  if (platform === "win32") return `\\\\.\\pipe\\gatherthread-${harness === "codex" ? "" : "claude-code-"}${id}-user-api`;
+  return path.join(homeDirectory, ".gatherthread", harness, "ipc", id, "user-api.sock");
 }
 
 export class LocalConnectorApiRelayServer {
@@ -94,8 +101,11 @@ export class LocalConnectorApiRelayServer {
   readonly #api: CollaborationApi;
   readonly #platform: NodeJS.Platform;
   readonly #homeDirectory: string;
+  readonly #harness: ConnectorHarnessNamespace;
   readonly #projectId: string;
   readonly #localSync: LocalConversationSyncControl | undefined;
+  readonly #requestProfile: ((sessionId: string) => LocalConnectorRequestProfile) | undefined;
+  readonly #codeSyncStatus: (() => Promise<unknown>) | undefined;
   readonly #instanceId = randomUUID();
   readonly #capabilityPath: string;
   readonly #registrationPath: string;
@@ -109,22 +119,29 @@ export class LocalConnectorApiRelayServer {
     projectId: string;
     platform?: NodeJS.Platform;
     homeDirectory?: string;
+    harness?: ConnectorHarnessNamespace;
     localSync?: LocalConversationSyncControl;
+    requestProfile?: (sessionId: string) => LocalConnectorRequestProfile;
+    codeSyncStatus?: () => Promise<unknown>;
   }) {
     if (!PROJECT_ID_PATTERN.test(options.projectId)) throw new Error("Invalid local connector project route");
     this.#endpoint = options.endpoint;
     this.#api = options.api;
     this.#projectId = options.projectId;
     this.#localSync = options.localSync;
+    this.#requestProfile = options.requestProfile;
+    this.#codeSyncStatus = options.codeSyncStatus;
     this.#platform = options.platform ?? process.platform;
     this.#homeDirectory = options.homeDirectory ?? homedir();
-    this.#capabilityPath = capabilityPathForEndpoint(this.#endpoint, this.#platform, this.#homeDirectory);
-    this.#registrationPath = path.join(activeRegistryRoot(this.#homeDirectory), `${this.#instanceId}.json`);
+    this.#harness = options.harness ?? "codex";
+    requireHarnessNamespace(this.#harness);
+    this.#capabilityPath = capabilityPathForEndpoint(this.#endpoint, this.#platform, this.#homeDirectory, this.#harness);
+    this.#registrationPath = path.join(activeRegistryRoot(this.#homeDirectory, this.#harness), `${this.#instanceId}.json`);
   }
 
   async start(): Promise<void> {
     if (this.#server) return;
-    await preparePrivateIpcDirectory(activeRegistryRoot(this.#homeDirectory), this.#platform);
+    await preparePrivateIpcDirectory(activeRegistryRoot(this.#homeDirectory, this.#harness), this.#platform);
     if (this.#platform !== "win32") {
       await preparePrivateIpcDirectory(path.dirname(this.#endpoint), this.#platform);
       await refuseActiveConnectorOrRemoveStaleSocket(this.#endpoint);
@@ -265,6 +282,12 @@ export class LocalConnectorApiRelayServer {
       return { shares: listed.shares.filter(share => share.source_runtime_id === undefined && share.allowed_user_ids === undefined)
         .map(publicSharedAgent) };
     }
+    if (method === "getCodeSyncStatus") {
+      requireParameterCount(params, 1);
+      if (params[0] !== this.#projectId) throw new Error("Project is not routed by this connector");
+      if (!this.#codeSyncStatus) throw new Error("Project file synchronization is not configured on this connector");
+      return this.#codeSyncStatus();
+    }
     const sessionId = requiredLocalString(params[0], "session ID");
     const sessions = await listProjectSessions.call(this.#api, this.#projectId);
     if (!sessions.some((session) => session.id === sessionId)) {
@@ -294,6 +317,17 @@ export class LocalConnectorApiRelayServer {
       if (!event || typeof event !== "object"
         || (event.type !== "human_chat" && event.type !== "agent_request")) {
         throw new Error("Local user relay accepts only chat or agent request events");
+      }
+      if (this.#harness === "claude-code" && event.type === "agent_request") {
+        const profile = this.#requestProfile?.(sessionId);
+        if (!profile || profile.harness !== "claude-code" || !PROJECT_ID_PATTERN.test(profile.runtime_id)
+          || !profile.provider || !profile.model) throw new Error("The exact Claude execution profile is not registered yet");
+        if (!event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) throw new Error("Claude Agent request payload must be an object");
+        const payload = event.payload as Record<string, unknown>;
+        if (payload.execution_profile !== undefined && JSON.stringify(payload.execution_profile) !== JSON.stringify(profile)) {
+          throw new Error("The requested target does not match this connector's exact execution profile");
+        }
+        return this.#api.appendEvent(sessionId, { ...event, payload: { ...payload, execution_profile: profile } });
       }
       return this.#api.appendEvent(sessionId, event);
     }
@@ -345,14 +379,20 @@ export class LocalConnectorCollaborationClient implements CollaborationApi {
   readonly #workspacePath: string;
   readonly #homeDirectory: string;
   readonly #platform: NodeJS.Platform;
+  readonly #harness: ConnectorHarnessNamespace;
+  readonly #workspaceOnly: boolean;
   #projectRoutes = new Map<string, ConnectorConnection[]>();
   #sessionRoutes = new Map<string, ConnectorConnection[]>();
 
-  constructor(options: { workspacePath?: string; endpoint?: string; homeDirectory?: string; platform?: NodeJS.Platform }) {
+  constructor(options: { workspacePath?: string; endpoint?: string; homeDirectory?: string; platform?: NodeJS.Platform;
+    harness?: ConnectorHarnessNamespace; workspaceOnly?: boolean }) {
     this.#explicitEndpoint = options.endpoint;
     this.#workspacePath = path.resolve(options.workspacePath ?? process.cwd());
     this.#homeDirectory = options.homeDirectory ?? homedir();
     this.#platform = options.platform ?? process.platform;
+    this.#harness = options.harness ?? "codex";
+    requireHarnessNamespace(this.#harness);
+    this.#workspaceOnly = options.workspaceOnly === true;
   }
 
   async listProjects(): Promise<ProjectSummary[]> {
@@ -374,6 +414,10 @@ export class LocalConnectorCollaborationClient implements CollaborationApi {
     const sessions = await this.#callConnection<SessionSummary[]>(connection, "listProjectSessions", [projectId]);
     this.#rememberSessions(connection, sessions);
     return sessions;
+  }
+
+  async getCodeSyncStatus(projectId: string): Promise<unknown> {
+    return this.#callConnection(await this.#projectRoute(projectId), "getCodeSyncStatus", [projectId]);
   }
 
   async listSessions(): Promise<SessionSummary[]> {
@@ -548,8 +592,14 @@ export class LocalConnectorCollaborationClient implements CollaborationApi {
         capability: await this.#readCapability(this.#explicitEndpoint),
       }];
     }
+    if (this.#workspaceOnly) {
+      const workspace = await realpath(this.#workspacePath);
+      const endpoint = resolveWorkspaceConnectorApiPath(workspace, this.#homeDirectory, this.#platform, this.#harness);
+      return [{ version: 1, instanceId: "workspace", endpoint, projectId: "workspace",
+        leaseExpiresAt: new Date(0).toISOString(), capability: await this.#readCapability(endpoint) }];
+    }
     const registrations = newestRegistrationPerEndpoint(
-      await readActiveRegistrations(this.#homeDirectory, this.#platform),
+      await readActiveRegistrations(this.#homeDirectory, this.#platform, this.#harness),
     );
     const connections: ConnectorConnection[] = [];
     for (const registration of registrations) {
@@ -581,7 +631,7 @@ export class LocalConnectorCollaborationClient implements CollaborationApi {
       candidate = this.#workspacePath;
     }
     while (true) {
-      const endpoint = resolveWorkspaceConnectorApiPath(candidate, this.#homeDirectory, this.#platform);
+      const endpoint = resolveWorkspaceConnectorApiPath(candidate, this.#homeDirectory, this.#platform, this.#harness);
       try {
         return [{
           version: 1,
@@ -603,7 +653,7 @@ export class LocalConnectorCollaborationClient implements CollaborationApi {
 
   async #readCapability(endpoint: string): Promise<string> {
     return (await readFile(
-      capabilityPathForEndpoint(endpoint, this.#platform, this.#homeDirectory),
+      capabilityPathForEndpoint(endpoint, this.#platform, this.#homeDirectory, this.#harness),
       "utf8",
     )).trim();
   }
@@ -699,22 +749,25 @@ function capabilityPathForEndpoint(
   endpoint: string,
   platform: NodeJS.Platform,
   homeDirectory = homedir(),
+  harness: ConnectorHarnessNamespace = "codex",
 ): string {
   if (platform !== "win32") return `${endpoint}.capability`;
-  const id = endpoint.match(/gatherthread-([a-f0-9]{24})-user-api$/)?.[1];
+  const id = endpoint.match(harness === "codex" ? /gatherthread-([a-f0-9]{24})-user-api$/u
+    : /gatherthread-claude-code-([a-f0-9]{24})-user-api$/u)?.[1];
   if (!id) throw new Error("Invalid GatherThread Windows IPC endpoint");
-  return path.join(homeDirectory, ".gatherthread", "codex", "ipc", id, "user-api.capability");
+  return path.join(homeDirectory, ".gatherthread", harness, "ipc", id, "user-api.capability");
 }
 
-function activeRegistryRoot(homeDirectory: string): string {
-  return path.join(homeDirectory, ".gatherthread", "codex", "ipc", "active");
+function activeRegistryRoot(homeDirectory: string, harness: ConnectorHarnessNamespace = "codex"): string {
+  return path.join(homeDirectory, ".gatherthread", harness, "ipc", "active");
 }
 
 async function readActiveRegistrations(
   homeDirectory: string,
   platform: NodeJS.Platform,
+  harness: ConnectorHarnessNamespace = "codex",
 ): Promise<ConnectorConnection[]> {
-  const root = activeRegistryRoot(homeDirectory);
+  const root = activeRegistryRoot(homeDirectory, harness);
   let names: string[];
   try {
     names = (await readdir(root)).filter((name) => /^[0-9a-f-]{36}\.json$/.test(name)).sort();
@@ -729,7 +782,7 @@ async function readActiveRegistrations(
       const parsed = JSON.parse(await readFile(registrationPath, "utf8")) as unknown;
       if (!isActiveRegistration(parsed)
         || `${parsed.instanceId}.json` !== name
-        || !isExpectedConnectorEndpoint(parsed.endpoint, homeDirectory, platform)) {
+        || !isExpectedConnectorEndpoint(parsed.endpoint, homeDirectory, platform, harness)) {
         continue;
       }
       if (Date.parse(parsed.leaseExpiresAt) <= Date.now()) {
@@ -780,11 +833,17 @@ function isExpectedConnectorEndpoint(
   endpoint: string,
   homeDirectory: string,
   platform: NodeJS.Platform,
+  harness: ConnectorHarnessNamespace = "codex",
 ): boolean {
-  if (platform === "win32") return /^\\\\\.\\pipe\\gatherthread-[a-f0-9]{24}-user-api$/.test(endpoint);
-  const ipcRoot = path.join(homeDirectory, ".gatherthread", "codex", "ipc");
+  if (platform === "win32") return (harness === "codex" ? /^\\\\\.\\pipe\\gatherthread-[a-f0-9]{24}-user-api$/u
+    : /^\\\\\.\\pipe\\gatherthread-claude-code-[a-f0-9]{24}-user-api$/u).test(endpoint);
+  const ipcRoot = path.join(homeDirectory, ".gatherthread", harness, "ipc");
   const relative = path.relative(ipcRoot, endpoint);
   return /^[a-f0-9]{24}[\\/]user-api\.sock$/.test(relative) && !relative.startsWith("..");
+}
+
+function requireHarnessNamespace(value: string): asserts value is ConnectorHarnessNamespace {
+  if (value !== "codex" && value !== "claude-code") throw new Error("Unsupported local connector harness namespace");
 }
 
 async function refuseActiveConnectorOrRemoveStaleSocket(endpoint: string, removeStale = true): Promise<void> {

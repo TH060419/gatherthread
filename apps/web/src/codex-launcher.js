@@ -1,4 +1,4 @@
-import { normalizeLauncherEmail, projectCodexLauncherUrl } from "./domain.js?v=20261018-tabs-2";
+import { normalizeLauncherEmail, projectCodexLauncherUrl, projectClaudeLauncherUrl, isClaudeModelId } from "./domain.js?v=20261018-tabs-2";
 import { LAUNCHER_RELEASE_URL } from "./launcher-downloads.js?v=20261018-tabs-2";
 
 const EMAIL_HINT_KEY = "gt-account-email-hint";
@@ -33,7 +33,7 @@ export async function currentAgentDownloadIndex(fetchResponse = globalThis.fetch
 /** Advanced terminal setup shares the Launcher's index, not the old registry build. */
 export function mountAgentPackageDownloads({ document, localizer, fetchResponse = globalThis.fetch }) {
   const versions = new Map();
-  const nodes = new Map(["codex", "dsh"].map(kind => {
+  const nodes = new Map(["codex", "dsh", "claude"].map(kind => {
     const node = document.getElementById(`connect-${kind}-package-download`);
     return [kind, { node, fallback: node?.getAttribute("href") }];
   }));
@@ -96,10 +96,12 @@ export function createAccountEmailHint({ sessionStorage = optionalStorage("sessi
 }
 
 export function mountCodexLauncher({ document, api, localizer, emailHint, context,
+  harness = "codex",
   platform = globalThis.navigator?.userAgentData?.platform ?? globalThis.navigator?.platform ?? "",
   fetchResponse = globalThis.fetch,
   navigate = uri => { globalThis.location.href = uri; } }) {
-  const get = id => document.getElementById(id);
+  if (!["codex", "claude-code"].includes(harness)) throw new Error("Unsupported Launcher harness.");
+  const get = id => document.getElementById(harness === "claude-code" ? id.replaceAll("codex", "claude") : id);
   const button = get("open-codex-launcher-button"), prepareButton = get("prepare-codex-launcher-button");
   const email = get("codex-launcher-email"), status = get("codex-launcher-status");
   const macInstall = get("codex-launcher-macos-install");
@@ -131,6 +133,9 @@ export function mountCodexLauncher({ document, api, localizer, emailHint, contex
     invalidate({ keepOpened: true });
     const run = generation, current = context();
     if (!current?.userId || !current.projectId) return;
+    if (harness === "claude-code" && !isClaudeModelId(current.model)) {
+      tell("Enter the exact Claude model ID before opening the Launcher."); return;
+    }
     let enteredEmail;
     try { enteredEmail = normalizeLauncherEmail(email.value); }
     catch { tell("Enter the email you use to sign in, then confirm it."); return; }
@@ -149,7 +154,8 @@ export function mountCodexLauncher({ document, api, localizer, emailHint, contex
       if (normalizeLauncherEmail(result.email) !== enteredEmail || !Number.isFinite(expires) || expires <= Date.now()) {
         throw new Error("Invalid handoff");
       }
-      const uri = projectCodexLauncherUrl({ ...current, email: result.email, authorizationId: result.authorization.id });
+      const buildUrl = harness === "claude-code" ? projectClaudeLauncherUrl : projectCodexLauncherUrl;
+      const uri = buildUrl({ ...current, email: result.email, authorizationId: result.authorization.id });
       prepared = { uri, scope: current.scope, id: result.authorization.id };
       const grant = { opened: false, scope: current.scope, timer: null };
       grant.timer = setTimeout(() => {

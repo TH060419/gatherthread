@@ -346,7 +346,29 @@ export class LocalBridge {
       ? { view: "summary" as const, through_sequence: request.sequence - 1, items: [], content_revision: readContext?.content_revision ?? revision }
       : readContext;
     const controller = new AbortController();
+    let controlTerminated = false;
+    let controlCheck: Promise<void> | undefined;
     const contextChanged = () => new CollaborationHttpError(409, "Shared history changed; start a new request with current history", "context_changed");
+    // Claim re-reads observe the ordinary author's Pause control. Presence alone
+    // does not renew the claim; only accepted work progress does that on the server.
+    const checkControl = (): Promise<void> => {
+      if (controlCheck || controller.signal.aborted) return controlCheck ?? Promise.resolve();
+      controlCheck = (async () => {
+        try {
+          const current = await this.#api.claimAgentRequest(request.sessionId, request.id, runtime.id);
+          if (current.requestId !== request.id || current.runtimeId !== runtime.id
+            || (current.attemptCount ?? 1) !== claimAttempt) { controller.abort(contextChanged()); return; }
+          if (current.status === "paused" || current.status === "completed") {
+            controlTerminated = true;
+            controller.abort(new Error("The author stopped this Agent request"));
+          }
+        } catch (error) {
+          if (error instanceof CollaborationHttpError && [401, 403, 404, 409].includes(error.status)) controller.abort(contextChanged());
+          // A transient read failure does not grant a new claim or fabricate a pause.
+        }
+      })().finally(() => { controlCheck = undefined; });
+      return controlCheck;
+    };
     let checking = false;
     const checkRevision = async () => {
       if (!this.#api.readContext || checking || controller.signal.aborted) return;
@@ -359,7 +381,7 @@ export class LocalBridge {
         if (error instanceof CollaborationHttpError && [401, 403, 404].includes(error.status)) controller.abort(contextChanged());
       } finally { checking = false; }
     };
-    const watch = this.#api.readContext ? setInterval(() => { void checkRevision(); }, 1000) : undefined;
+    const watch = setInterval(() => { void checkRevision(); void checkControl(); }, 1000);
     watch?.unref();
     try {
     await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
@@ -410,6 +432,7 @@ export class LocalBridge {
         }),
       });
     } catch (error) {
+      if (controlTerminated) return { claimed: true, completed: [] };
       if (controller.signal.aborted) throw contextChanged();
       if (!(error instanceof HarnessExecutionTerminatedError)) throw error;
       const failure = await this.#api.completeAgentRequest(request.sessionId, request.id, {
@@ -427,6 +450,8 @@ export class LocalBridge {
       });
       return { claimed: true, completed: [failure] };
     }
+    await checkControl();
+    if (controlTerminated) return { claimed: true, completed: [] };
     if (this.#api.readContext) {
       const finalContext = await this.#api.readContext(request.sessionId, undefined, request.sequence - 1);
       if ((finalContext.content_revision ?? 0) !== revision) controller.abort(contextChanged());

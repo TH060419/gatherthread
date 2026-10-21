@@ -15,6 +15,7 @@ try {
   for (const archive of [
     `gatherthread-codex-connect-${VERSION}.tgz`,
     `gatherthread-dsh-host-${VERSION}.tgz`,
+    `gatherthread-claude-connect-${VERSION}.tgz`,
   ]) {
     await runNpm([
       "--cache", cacheRoot,
@@ -28,7 +29,7 @@ try {
   await rm(cacheRoot, { recursive: true, force: true });
 }
 
-process.stdout.write("Both npm candidates passed publish --dry-run with the beta dist-tag.\n");
+process.stdout.write("All npm candidates passed publish --dry-run with the beta dist-tag.\n");
 
 function runNpm(args, cwd) {
   const npmCli = process.env.npm_execpath?.trim();

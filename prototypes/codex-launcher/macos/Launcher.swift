@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Darwin
 
 private let serverOrigin = "https://gatherthread.cn"
 private let testOrigin = "https://test.gatherthread.cn"
@@ -14,6 +15,7 @@ private struct ConnectionLink: Equatable {
     let historySync: String
     let email: String?
     let authorizationID: String?
+    let harness: String
 
     static func parse(_ raw: String) throws -> ConnectionLink {
         guard raw.utf8.count <= 2048,
@@ -27,7 +29,8 @@ private struct ConnectionLink: Equatable {
         }
         let baseFields: Set<String> = ["v", "origin", "project", "model", "context_window_tokens", "visible_history_sync"]
         let accountFields: Set<String> = ["email", "authorization_id"]
-        let allowed = baseFields.union(accountFields)
+        let harnessFields: Set<String> = ["harness"]
+        let allowed = baseFields.union(accountFields).union(harnessFields)
         var values: [String: String] = [:]
         for part in query.split(separator: "&", omittingEmptySubsequences: false) {
             guard let separator = part.firstIndex(of: "="),
@@ -38,8 +41,8 @@ private struct ConnectionLink: Equatable {
             }
             values[name] = value
         }
-        guard let version = values["v"], ["1", "2"].contains(version),
-              Set(values.keys) == (version == "1" ? baseFields : allowed),
+        guard let version = values["v"], ["1", "2", "3"].contains(version),
+              Set(values.keys) == (version == "1" ? baseFields : version == "2" ? baseFields.union(accountFields) : allowed),
               let origin = values["origin"],
               (version == "1" ? origin == serverOrigin : [serverOrigin, testOrigin].contains(origin)),
               let project = values["project"], validProject(project),
@@ -52,7 +55,7 @@ private struct ConnectionLink: Equatable {
         }
         let email: String?
         let authorizationID: String?
-        if version == "2" {
+        if version != "1" {
             guard let mailbox = values["email"], let normalized = normalizedEmail(mailbox),
                   let rawID = values["authorization_id"],
                   matches(rawID, "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$") else {
@@ -64,8 +67,12 @@ private struct ConnectionLink: Equatable {
             email = nil
             authorizationID = nil
         }
+        let harness = version == "3" ? values["harness"]! : "codex"
+        guard ["codex", "claude-code"].contains(harness) else { throw LinkError.invalid("不支持的 Agent 类型") }
+        guard harness != "claude-code" || validClaudeModel(model) else { throw LinkError.invalid("请输入完整的 Claude 模型 ID，不能使用 sonnet/opus 等别名") }
         return ConnectionLink(version: version, origin: origin, project: project, model: model,
-                              contextTokens: tokens, historySync: mode, email: email, authorizationID: authorizationID)
+                              contextTokens: tokens, historySync: mode, email: email, authorizationID: authorizationID,
+                              harness: harness)
     }
 }
 
@@ -94,7 +101,7 @@ private func normalizedEmail(_ value: String) -> String? {
 }
 
 private func makeClaimRequest(link: ConnectionLink, password: String, deviceName: String) throws -> URLRequest {
-    guard link.version == "2", [serverOrigin, testOrigin].contains(link.origin),
+    guard ["2", "3"].contains(link.version), [serverOrigin, testOrigin].contains(link.origin),
           let email = link.email, let authorizationID = link.authorizationID,
           (8...128).contains(password.utf16.count), password.utf8.count <= 512,
           (1...120).contains(deviceName.utf16.count),
@@ -283,6 +290,10 @@ private func validModel(_ value: String) -> Bool {
     !value.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 })
 }
 
+private func validClaudeModel(_ value: String) -> Bool {
+    matches(value, "^claude-[A-Za-z0-9][A-Za-z0-9._-]{0,112}$")
+}
+
 private func workspaceArguments(_ path: String) throws -> [String] {
     if path.isEmpty { return ["--create-workspace"] }
     var isDirectory: ObjCBool = false
@@ -302,29 +313,122 @@ private func bundled(_ path: String) -> URL {
     Bundle.main.resourceURL!.appendingPathComponent(path)
 }
 
-private func executableCodex() -> String {
+private func executableAgent(_ harness: String = "codex") -> String {
+    if harness == "claude-code" { return claudeCommandCandidates().first ?? "" }
     let manager = FileManager.default
+    let name = harness == "claude-code" ? "claude" : "codex"
     let pathCandidates = (ProcessInfo.processInfo.environment["PATH"] ?? "")
-        .split(separator: ":").map { String($0) + "/codex" }
+        .split(separator: ":").map { String($0) + "/" + name }
     let home = manager.homeDirectoryForCurrentUser.path
-    let candidates = pathCandidates + ["/opt/homebrew/bin/codex", "/usr/local/bin/codex", home + "/.npm-global/bin/codex", home + "/.local/bin/codex"]
+    let candidates = pathCandidates + ["/opt/homebrew/bin/" + name, "/usr/local/bin/" + name,
+                                       home + "/.npm-global/bin/" + name, home + "/.local/bin/" + name]
     return candidates.first(where: { manager.isExecutableFile(atPath: $0) }) ?? ""
 }
 
-private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate {
+private func claudeCommandCandidates(path: String = ProcessInfo.processInfo.environment["PATH"] ?? "",
+                                     home: String = FileManager.default.homeDirectoryForCurrentUser.path) -> [String] {
+    let paths = path.split(separator: ":").filter { $0.hasPrefix("/") }.map { String($0) + "/claude" }
+        + ["/opt/homebrew/bin/claude", "/usr/local/bin/claude", home + "/.npm-global/bin/claude", home + "/.local/bin/claude"]
+    var seen = Set<String>()
+    return Array(paths.filter { candidate in
+        let identity = URL(fileURLWithPath: candidate).resolvingSymlinksInPath().standardizedFileURL.path
+        return FileManager.default.isExecutableFile(atPath: candidate) && seen.insert(identity).inserted
+    }.prefix(12))
+}
+
+private func compatibleClaudeVersion(_ value: String) -> Bool {
+    guard let expression = try? NSRegularExpression(pattern: "^(\\d{1,6})\\.(\\d{1,6})\\.(\\d{1,6})(?:\\s|$)"),
+          let match = expression.firstMatch(in: value.trimmingCharacters(in: .whitespacesAndNewlines),
+                                           range: NSRange(location: 0, length: (value.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).length)) else { return false }
+    let text = value.trimmingCharacters(in: .whitespacesAndNewlines) as NSString
+    let version = (1...3).compactMap { Int(text.substring(with: match.range(at: $0))) }
+    return version.count == 3 && !version.lexicographicallyPrecedes([2, 1, 259])
+}
+
+private final class ClaudeVersionOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bytes = Data()
+    func append(_ value: Data) { lock.lock(); defer { lock.unlock() }; bytes.append(value.prefix(max(0, 4096 - bytes.count))) }
+    func text() -> String { lock.lock(); defer { lock.unlock() }; return String(decoding: bytes, as: UTF8.self) }
+}
+
+/** A bounded metadata-only probe. Full flags/authentication checks remain in connector preflight. */
+private func probeClaudeVersion(_ executable: String) -> String {
+    let process = Process(), output = Pipe(), captured = ClaudeVersionOutput()
+    let done = DispatchSemaphore(value: 0), drained = DispatchSemaphore(value: 0)
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = ["--version"]
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    var environment = ProcessInfo.processInfo.environment
+    for key in ["GATHERTHREAD_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY"] {
+        environment.removeValue(forKey: key)
+    }
+    let runtime = bundled("runtime")
+    if FileManager.default.isExecutableFile(atPath: runtime.appendingPathComponent("node").path) {
+        environment["PATH"] = runtime.path + ":" + (environment["PATH"] ?? "")
+    }
+    process.environment = environment
+    output.fileHandleForReading.readabilityHandler = { handle in
+        let bytes = handle.availableData
+        captured.append(bytes)
+        if bytes.isEmpty { handle.readabilityHandler = nil; drained.signal() }
+    }
+    process.terminationHandler = { _ in done.signal() }
+    defer { output.fileHandleForReading.readabilityHandler = nil; try? output.fileHandleForReading.close() }
+    do { try process.run() } catch { return "" }
+    if done.wait(timeout: .now() + 0.8) == .timedOut {
+        process.terminate()
+        if done.wait(timeout: .now() + 0.1) == .timedOut { _ = Darwin.kill(process.processIdentifier, SIGKILL) }
+        return ""
+    }
+    _ = drained.wait(timeout: .now() + 0.1)
+    return process.terminationStatus == 0 ? captured.text() : ""
+}
+
+private func preferredClaudeCommand(_ candidates: [String], probe: (String) -> String = probeClaudeVersion) -> (path: String, compatible: Bool) {
+    for candidate in candidates where compatibleClaudeVersion(probe(candidate)) { return (candidate, true) }
+    return (candidates.first ?? "", false)
+}
+
+private func canApplyClaudeDiscovery(harness: String, generation: Int, currentGeneration: Int,
+                                    selected: String, original: String, manual: Bool, busy: Bool) -> Bool {
+    harness == "claude-code" && generation == currentGeneration && selected == original && !manual && !busy
+}
+
+private func connectorArguments(link: ConnectionLink, connector: String, workspace: [String],
+                                cli: String, model: String, contextTokens: Int, history: String,
+                                codeSync: Bool = false) -> [String] {
+    var arguments = [connector, "--url", link.origin, "--project", link.project] + workspace
+    arguments += ["--plugin-hooks", "--model", model]
+    if link.harness == "claude-code" {
+        arguments += ["--claude-command", cli]
+        if codeSync { arguments.append("--code-sync") }
+    } else {
+        arguments += ["--visible-history-sync", history, "--context-window-tokens", String(contextTokens), "--codex-command", cli]
+    }
+    return arguments
+}
+
+private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate {
     private var window: NSWindow!
     private let project = NSTextField()
     private let workspace = NSTextField()
     private let codex = NSTextField()
+    private let cliLabel = NSTextField(labelWithString: "Codex CLI 完整路径")
+    private let heading = NSTextField(labelWithString: "连接本机 Agent")
     private let model = NSTextField()
     private let tokens = NSTextField()
     private let history = NSPopUpButton()
+    private let codeSyncConsent = NSButton(checkboxWithTitle: "允许此设备同步项目文件（GT Cloud；上传仍需在项目中开启）", target: nil, action: nil)
     private let email = NSTextField()
     private let password = NSSecureTextField()
     private let passwordLabel = NSTextField(labelWithString: "密码")
     private let environmentLabel = NSTextField(labelWithString: "正式环境 · https://gatherthread.cn")
     private let advancedSettings = NSStackView()
     private let formScroll = NSScrollView()
+    private var codexOnlySettings: [NSView] = []
     private let startButton = NSButton()
     private let installButton = NSButton()
     private let status = NSTextField(labelWithString: "请登录 GatherThread 网页，选择项目后点击‘打开启动器’。")
@@ -333,9 +437,13 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
     private var pendingLink: URL?
     private var activeLink: ConnectionLink?
     private var connectionOrigin = serverOrigin
+    private var connectionHarness = "codex"
     private var busy = false
     private var connectionAttempt: UUID?
     private var authorizationClient: LauncherClaimClient?
+    private var claudeManualPath: String?
+    private var claudeDiscoveryGeneration = 0
+    private var claudeDiscoveryPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -351,7 +459,7 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 700),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
-        window.title = "GatherThread · Connect Codex"
+        window.title = "GatherThread · Connect Agent"
         window.minSize = NSSize(width: 600, height: 650)
         window.center()
         window.delegate = self
@@ -380,14 +488,14 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         formScroll.widthAnchor.constraint(equalTo: outer.widthAnchor).isActive = true
         formScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 250).isActive = true
         stack.widthAnchor.constraint(equalTo: formScroll.contentView.widthAnchor).isActive = true
-        let heading = NSTextField(labelWithString: "连接本机 Codex")
         heading.font = .boldSystemFont(ofSize: 21)
         stack.addArrangedSubview(heading)
         addNote("网页带入邮箱和项目，只需输入账号密码，授权此 Mac 独立连接。", to: stack)
         addNote("安装：将 DMG 中的应用拖入‘应用程序’，从那里首次打开。\nInstall: drag the app from the DMG to Applications; open it there once.", to: stack)
         stack.addArrangedSubview(environmentLabel)
         stack.addArrangedSubview(NSButton(title: "打开 GatherThread 网页", target: self, action: #selector(openWebsite)))
-        codex.stringValue = executableCodex()
+        codex.stringValue = executableAgent()
+        codex.delegate = self
         model.stringValue = "gpt-5.6-sol"
         tokens.stringValue = "128000"
         addField("邮箱账号（由网页填入）", email, to: stack)
@@ -405,7 +513,9 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         advancedSettings.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         advancedSettings.isHidden = true
         addField("项目 ID（由网页填入）", project, to: advancedSettings)
-        addField("Codex CLI 完整路径", codex, to: advancedSettings)
+        advancedSettings.addArrangedSubview(cliLabel)
+        advancedSettings.addArrangedSubview(codex)
+        codex.widthAnchor.constraint(equalTo: advancedSettings.widthAnchor).isActive = true
         advancedSettings.addArrangedSubview(NSTextField(labelWithString: "本地工作目录（可选；留空使用默认项目目录）"))
         let workspaceRow = NSStackView()
         workspaceRow.orientation = .horizontal
@@ -415,11 +525,19 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         workspaceRow.addArrangedSubview(NSButton(title: "默认目录", target: self, action: #selector(clearWorkspace)))
         advancedSettings.addArrangedSubview(workspaceRow)
         workspaceRow.widthAnchor.constraint(equalTo: advancedSettings.widthAnchor).isActive = true
+        stack.addArrangedSubview(codeSyncConsent)
+        codeSyncConsent.state = .off
+        codeSyncConsent.isHidden = true
         addField("模型", model, to: advancedSettings)
-        addField("上下文 Token 上限", tokens, to: advancedSettings)
-        advancedSettings.addArrangedSubview(NSTextField(labelWithString: "首次历史导入"))
+        let contextLabel = NSTextField(labelWithString: "上下文 Token 上限")
+        advancedSettings.addArrangedSubview(contextLabel)
+        advancedSettings.addArrangedSubview(tokens)
+        tokens.widthAnchor.constraint(equalTo: advancedSettings.widthAnchor).isActive = true
+        let historyLabel = NSTextField(labelWithString: "首次历史导入")
+        advancedSettings.addArrangedSubview(historyLabel)
         history.addItems(withTitles: ["first-connect", "never"])
         advancedSettings.addArrangedSubview(history)
+        codexOnlySettings = [contextLabel, tokens, historyLabel, history]
         let actions = NSStackView()
         actions.orientation = .horizontal
         actions.spacing = 10
@@ -449,7 +567,7 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         scroll.widthAnchor.constraint(equalTo: outer.widthAnchor).isActive = true
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
         addNote("若 macOS 阻止打开：核对官方包后前往 系统设置 → 隐私与安全性 → 仍要打开。尚未通过 Apple 公证。\nIf blocked: verify the official package, then use System Settings → Privacy & Security → Open Anyway. Not Apple-notarized.", to: stack, emphasized: true)
-        addNote("审查、信任并允许共序 Hooks，才能同步 Codex 直接回合。\nReview, trust and allow GatherThread Hooks before syncing direct Codex turns.", to: outer, emphasized: true)
+        addNote("审查、信任并允许共序 Hooks，才能同步所选 Agent 的本机直接回合。\nReview, trust and allow the selected Agent's GatherThread Hooks before syncing native turns.", to: outer, emphasized: true)
         addNote("关闭窗口不会停止连接；从 Dock 恢复后可停止。\nClosing the window keeps the connection running; restore it from the Dock to stop.", to: outer)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -483,6 +601,19 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         do {
             let link = try ConnectionLink.parse(urls[0].absoluteString)
             activeLink = link
+            claudeDiscoveryGeneration += 1
+            claudeDiscoveryPending = false
+            if connectionHarness != link.harness {
+                codex.stringValue = link.harness == "claude-code" ? claudeManualPath ?? executableAgent(link.harness) : executableAgent()
+            }
+            connectionHarness = link.harness
+            let agentName = link.harness == "claude-code" ? "Claude Code" : "Codex"
+            window.title = "GatherThread · Connect " + agentName
+            heading.stringValue = "连接本机 " + agentName
+            cliLabel.stringValue = agentName + " CLI 完整路径"
+            for view in codexOnlySettings { view.isHidden = link.harness == "claude-code" }
+            codeSyncConsent.isHidden = link.harness != "claude-code"
+            codeSyncConsent.state = .off
             connectionOrigin = link.origin
             project.stringValue = link.project
             project.isEditable = false
@@ -490,12 +621,13 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
             tokens.stringValue = String(link.contextTokens)
             history.selectItem(withTitle: link.historySync)
             email.stringValue = link.email ?? "旧版连接链接"
-            passwordLabel.stringValue = link.version == "2" ? "账号密码（仅在本机输入，不保存）" : "旧版一次性设备授权（建议返回网页使用新版连接）"
-            startButton.title = link.version == "2" ? "授权并连接" : "启动旧版连接"
+            passwordLabel.stringValue = link.version != "1" ? "账号密码（仅在本机输入，不保存）" : "旧版一次性设备授权（建议返回网页使用新版连接）"
+            startButton.title = link.version != "1" ? "授权并连接" : "启动旧版连接"
             startButton.isEnabled = true
             password.isEnabled = true
             environmentLabel.stringValue = (link.origin == testOrigin ? "测试环境 · " : "正式环境 · ") + link.origin
-            status.stringValue = link.version == "2" ? "输入密码后连接；其他已登录设备不受影响。" : "旧链接兼容模式。新版网页仅需输入邮箱账号密码。"
+            status.stringValue = link.version != "1" ? "输入密码后连接；其他已登录设备不受影响。" : "旧链接兼容模式。新版网页仅需输入邮箱账号密码。"
+            if link.harness == "claude-code", claudeManualPath == nil { discoverClaudeCommand() }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         } catch { showError(error.localizedDescription) }
@@ -510,11 +642,38 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         window.contentView?.layoutSubtreeIfNeeded()
     }
 
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField, field === codex, connectionHarness == "claude-code" else { return }
+        claudeManualPath = codex.stringValue
+        claudeDiscoveryGeneration += 1
+        claudeDiscoveryPending = false
+        setBusy(busy)
+    }
+
+    private func discoverClaudeCommand() {
+        let candidates = claudeCommandCandidates(), original = codex.stringValue, generation = claudeDiscoveryGeneration
+        claudeDiscoveryPending = true
+        setBusy(busy)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let preferred = preferredClaudeCommand(candidates)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, canApplyClaudeDiscovery(harness: self.connectionHarness, generation: generation,
+                    currentGeneration: self.claudeDiscoveryGeneration, selected: self.codex.stringValue, original: original,
+                    manual: self.claudeManualPath != nil, busy: self.busy || self.connector?.isRunning == true) else { return }
+                self.claudeDiscoveryPending = false
+                if preferred.compatible { self.codex.stringValue = preferred.path }
+                else { self.status.stringValue = "未发现兼容的 Claude Code CLI（需要 2.1.259 或更新版本）。请更新后重新打开；已保留当前路径。" }
+                self.setBusy(self.busy)
+            }
+        }
+    }
+
     private func setBusy(_ value: Bool) {
         busy = value
-        installButton.isEnabled = !value && connector?.isRunning != true
-        startButton.isEnabled = !value && connector?.isRunning != true && activeLink != nil
+        installButton.isEnabled = !value && !claudeDiscoveryPending && connector?.isRunning != true
+        startButton.isEnabled = !value && !claudeDiscoveryPending && connector?.isRunning != true && activeLink != nil
         password.isEnabled = !value && connector?.isRunning != true && activeLink != nil
+        codeSyncConsent.isEnabled = !value && connector?.isRunning != true
     }
 
     private func showError(_ value: String) {
@@ -537,16 +696,19 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
     @objc private func clearWorkspace() { workspace.stringValue = "" }
 
     @objc private func installPlugin() {
+        if claudeDiscoveryPending { status.stringValue = "正在检查本机 Claude Code 版本，请稍候。"; return }
         if busy || connector?.isRunning == true { showError("请先等待操作完成并停止连接，再安装插件。"); return }
         let codexPath = codex.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard FileManager.default.isExecutableFile(atPath: codexPath),
               FileManager.default.isExecutableFile(atPath: bundled("runtime/node").path) else {
-            showError("请先选择已登录的 Codex CLI，并检查随包 Node。")
+            showError("请先选择已登录的所选 Agent CLI，并检查随包 Node。")
             return
         }
         let alert = NSAlert()
         alert.messageText = "安装 GatherThread 插件？"
-        alert.informativeText = "会将随包插件复制到本机用户目录并注册到 Codex。请重启 Codex，并在 /hooks 审查 Hooks。"
+        let selectedHarness = connectionHarness
+        let agentName = selectedHarness == "claude-code" ? "Claude Code" : "Codex"
+        alert.informativeText = "将为当前系统用户安装 " + agentName + " 的随包插件，并通过该 Agent 的官方命令注册。请审查 MCP 与 /hooks；此操作不会替你批准 Agent 的工具操作。"
         alert.addButton(withTitle: "安装")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -554,12 +716,14 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         status.stringValue = "正在安装插件…"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
-                let root = try Self.preparePlugin()
+                let root = try selectedHarness == "claude-code" ? Self.prepareClaudePlugin() : Self.preparePlugin()
                 try Self.runCodex(codexPath, ["plugin", "marketplace", "add", root.path])
-                try Self.runCodex(codexPath, ["plugin", "add", "gatherthread@gatherthread-launcher"])
+                try Self.runCodex(codexPath, selectedHarness == "claude-code"
+                                 ? ["plugin", "install", "gatherthread@gatherthread-launcher-claude", "--scope", "user"]
+                                 : ["plugin", "add", "gatherthread@gatherthread-launcher"])
                 DispatchQueue.main.async {
                     self?.setBusy(false)
-                    self?.status.stringValue = "插件已安装。请重启 Codex 并在 /hooks 审查 Hooks。"
+                    self?.status.stringValue = "插件已安装。请重启所选 Agent 会话并在 /hooks 审查 Hooks。"
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -642,6 +806,59 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         return root
     }
 
+    private static func prepareClaudePlugin() throws -> URL {
+        let manager = FileManager.default
+        let parent = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("GatherThread Launcher", isDirectory: true)
+        try manager.createDirectory(at: parent, withIntermediateDirectories: true)
+        let destination = parent.appendingPathComponent("claude-marketplace", isDirectory: true)
+        let stage = parent.appendingPathComponent(".claude-stage-\(UUID().uuidString)", isDirectory: true)
+        let backup = parent.appendingPathComponent(".claude-previous-\(UUID().uuidString)", isDirectory: true)
+        defer { try? manager.removeItem(at: stage) }
+        try manager.copyItem(at: bundled("claude-marketplace"), to: stage)
+        let plugin = stage.appendingPathComponent("plugins/gatherthread", isDirectory: true)
+        let node = bundled("runtime/node").path
+        let mcp: [String: Any] = ["mcpServers": ["gatherthread": ["command": node,
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp-launcher.mjs"]]]]
+        try JSONSerialization.data(withJSONObject: mcp, options: [.prettyPrinted, .sortedKeys])
+            .write(to: plugin.appendingPathComponent(".mcp.json"))
+        let hooksFile = plugin.appendingPathComponent("hooks/hooks.json")
+        guard var hooks = try JSONSerialization.jsonObject(with: Data(contentsOf: hooksFile)) as? [String: Any],
+              var events = hooks["hooks"] as? [String: [[String: Any]]] else {
+            throw LinkError.invalid("Claude Code 插件 Hooks 格式无效")
+        }
+        for event in events.keys {
+            var entries = events[event]!
+            for index in entries.indices {
+                guard var items = entries[index]["hooks"] as? [[String: Any]] else { throw LinkError.invalid("Claude Code Hook 缺失") }
+                for inner in items.indices {
+                    guard items[inner]["type"] as? String == "command" else { throw LinkError.invalid("不支持的 Claude Code Hook") }
+                    items[inner]["command"] = "\(shellQuote(node)) \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-forwarder.mjs\""
+                }
+                entries[index]["hooks"] = items
+            }
+            events[event] = entries
+        }
+        hooks["hooks"] = events
+        try JSONSerialization.data(withJSONObject: hooks, options: [.prettyPrinted, .sortedKeys]).write(to: hooksFile)
+        let hadPrevious = manager.fileExists(atPath: destination.path)
+        if hadPrevious {
+            let manifest = destination.appendingPathComponent(".claude-plugin/marketplace.json")
+            guard let existing = try JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as? [String: Any],
+                  existing["name"] as? String == "gatherthread-launcher-claude" else {
+                throw LinkError.invalid("已有目录不属于 GatherThread Claude Code 插件，未覆盖")
+            }
+            try manager.moveItem(at: destination, to: backup)
+        }
+        do { try manager.moveItem(at: stage, to: destination) }
+        catch {
+            if hadPrevious { try? manager.moveItem(at: backup, to: destination) }
+            throw error
+        }
+        if hadPrevious { try? manager.removeItem(at: backup) }
+        return destination
+    }
+
     private static func runCodex(_ executable: String, _ arguments: [String]) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -660,16 +877,17 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         DispatchQueue.global().async { _ = output.fileHandleForReading.readDataToEndOfFile() }
         if done.wait(timeout: .now() + 180) == .timedOut {
             process.terminate()
-            throw LinkError.invalid("Codex 插件安装超时")
+            throw LinkError.invalid("Agent 插件安装超时")
         }
-        if process.terminationStatus != 0 { throw LinkError.invalid("Codex 插件命令失败（退出码 \(process.terminationStatus)）") }
+        if process.terminationStatus != 0 { throw LinkError.invalid("Agent 插件命令失败（退出码 \(process.terminationStatus)）") }
     }
 
     @objc private func startConnection() {
+        if claudeDiscoveryPending { status.stringValue = "正在检查本机 Claude Code 版本，请稍候。"; return }
         if busy || connector?.isRunning == true { status.stringValue = "连接或授权正在进行。"; return }
         guard let link = activeLink else { showError("请先登录网页，再选择项目并打开启动器。"); return }
         let node = bundled("runtime/node")
-        let connectorFile = bundled("connector/codex-connect.js")
+        let connectorFile = bundled(link.harness == "claude-code" ? "connector/claude-connect.js" : "connector/codex-connect.js")
         let codexPath = codex.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let enteredPassword = password.stringValue
         let projectId = project.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -679,13 +897,14 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
               FileManager.default.fileExists(atPath: connectorFile.path),
               FileManager.default.isExecutableFile(atPath: codexPath),
               validProject(projectId), projectId == link.project, validModel(modelName),
+              link.harness != "claude-code" || validClaudeModel(modelName),
               !tokenCount.isEmpty, tokenCount.utf8.allSatisfy({ (48...57).contains($0) }),
               let count = Int(tokenCount), (4096...2_000_000).contains(count),
               let mode = history.selectedItem?.title, ["first-connect", "never"].contains(mode) else {
-            showError("请检查包内 Node/连接器、Codex CLI 路径、项目和连接设置。")
+            showError("请检查包内 Node/连接器、所选 Agent CLI 路径、项目和连接设置。")
             return
         }
-        if link.version == "2" {
+        if link.version != "1" {
             guard (8...128).contains(enteredPassword.utf16.count), enteredPassword.utf8.count <= 512 else {
                 showError("请输入 8 至 128 个字符的账号密码。"); return
             }
@@ -697,10 +916,9 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         catch { showError(error.localizedDescription); return }
         let process = Process()
         process.executableURL = node
-        process.arguments = [connectorFile.path, "--url", link.origin, "--project", projectId]
-            + workspaceArgs + ["--plugin-hooks", "--visible-history-sync", mode,
-                             "--model", modelName, "--context-window-tokens", String(count),
-                             "--codex-command", codexPath]
+        process.arguments = connectorArguments(link: link, connector: connectorFile.path, workspace: workspaceArgs,
+                                               cli: codexPath, model: modelName, contextTokens: count, history: mode,
+                                               codeSync: codeSyncConsent.state == .on)
         password.stringValue = ""
         // A submitted handoff cannot be reused after an uncertain network result.
         activeLink = nil
@@ -709,11 +927,11 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         connectionAttempt = attempt
         authorizationClient = client
         setBusy(true)
-        status.stringValue = link.version == "2" ? "正在验证账号并授权此 Mac…" : "正在启动旧版连接…"
+        status.stringValue = link.version != "1" ? "正在验证账号并授权此 Mac…" : "正在启动旧版连接…"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 let credential: String
-                if link.version == "2" {
+                if link.version != "1" {
                     credential = try client.claim(link: link, password: enteredPassword,
                                                   deviceName: "macOS · GatherThread Launcher")
                 } else { credential = enteredPassword }
@@ -761,7 +979,7 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
             try process.run()
             connector = process
             setBusy(false)
-            status.stringValue = "连接器正在启动；请在 Codex 中审查并启用已安装的 Hooks。"
+            status.stringValue = "连接器正在启动；请在所选 Agent 中审查并启用已安装的 Hooks。"
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 var pending = Data()
                 var discardingLongLine = false
@@ -860,6 +1078,22 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
               content.bounds.contains(startButton.convert(startButton.bounds, to: content)) else {
             throw LinkError.invalid("邮箱密码表单布局不完整或按钮不可见")
         }
+        let claude = uri.replacingOccurrences(of: "v=2", with: "v=3")
+            .replacingOccurrences(of: "model=gpt-6-sol", with: "model=claude-sonnet-4-6") + "&harness=claude-code"
+        application(NSApp, open: [URL(string: claude)!])
+        guard connectionHarness == "claude-code", codeSyncConsent.state == .off, !codeSyncConsent.isHidden,
+              codexOnlySettings.allSatisfy({ $0.isHidden }) else {
+            throw LinkError.invalid("Claude Code 不应默认授权文件同步或显示 Codex 专用设置")
+        }
+        codeSyncConsent.state = .on
+        application(NSApp, open: [URL(string: claude)!])
+        guard codeSyncConsent.state == .off else { throw LinkError.invalid("新连接不得沿用旧的本地文件授权") }
+        codex.stringValue = "/fixture/manually-selected-claude"
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: codex))
+        application(NSApp, open: [URL(string: claude)!])
+        guard codex.stringValue == "/fixture/manually-selected-claude", !claudeDiscoveryPending else {
+            throw LinkError.invalid("Claude 自动发现不得覆盖用户手动选择的路径")
+        }
         window.orderOut(nil)
         print("macOS Launcher form: prefilled email, masked password, compact settings, reachable connect button, bold installation/Hook guidance")
     }
@@ -893,6 +1127,19 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
 
 private func runContractTests(at path: String) throws {
     try runAccountAuthorizationTests()
+    let fixtureVersions = ["/old/claude": "2.1.150 (Claude Code)", "/new/claude": "2.1.306 (Claude Code)"]
+    let discovered = preferredClaudeCommand(["/old/claude", "/new/claude"], probe: { fixtureVersions[$0] ?? "" })
+    let unsupported = preferredClaudeCommand(["/old/claude"], probe: { fixtureVersions[$0] ?? "" })
+    guard discovered.path == "/new/claude", discovered.compatible,
+          unsupported.path == "/old/claude", !unsupported.compatible,
+          compatibleClaudeVersion("2.1.259 (Claude Code)"), !compatibleClaudeVersion("2.1.258 (Claude Code)"),
+          !compatibleClaudeVersion("debug 2.1.306"),
+          !canApplyClaudeDiscovery(harness: "claude-code", generation: 1, currentGeneration: 1,
+                                  selected: "/old/claude", original: "/old/claude", manual: true, busy: false),
+          canApplyClaudeDiscovery(harness: "claude-code", generation: 1, currentGeneration: 1,
+                                 selected: "/old/claude", original: "/old/claude", manual: false, busy: false) else {
+        throw LinkError.invalid("Claude CLI 发现必须跳过旧版本，且不得覆盖手动路径")
+    }
     let defaultWorkspaceArgs = try workspaceArguments("")
     let selectedWorkspaceArgs = try workspaceArguments(FileManager.default.temporaryDirectory.path)
     guard defaultWorkspaceArgs == ["--create-workspace"],
@@ -920,15 +1167,28 @@ private func runContractTests(at path: String) throws {
     for item in accepted {
         guard let uri = item["uri"] as? String, let expected = item["parsed"] as? [Any] else { throw LinkError.invalid("测试向量缺失") }
         let actual = try ConnectionLink.parse(uri)
-        guard [5, 7].contains(expected.count),
+        if actual.harness == "claude-code" {
+            let args = connectorArguments(link: actual, connector: "claude-connect.js", workspace: ["--create-workspace"],
+                                          cli: "/fixture/claude", model: actual.model, contextTokens: actual.contextTokens, history: actual.historySync)
+            let approved = connectorArguments(link: actual, connector: "claude-connect.js", workspace: ["--create-workspace"],
+                                              cli: "/fixture/claude", model: actual.model, contextTokens: actual.contextTokens,
+                                              history: actual.historySync, codeSync: true)
+            guard !args.contains("--code-sync"), approved.contains("--code-sync"),
+                  args.contains("--claude-command"), !args.contains("--codex-command"),
+                  !args.contains("--context-window-tokens"), !args.contains("--visible-history-sync") else {
+                throw LinkError.invalid("Claude Code 参数或本地文件授权边界不正确")
+            }
+        }
+        guard [5, 7, 8].contains(expected.count),
               expected[0] as? String == actual.origin,
               expected[1] as? String == actual.project,
               expected[2] as? String == actual.model,
               expected[3] as? Int == actual.contextTokens,
               expected[4] as? String == actual.historySync else { throw LinkError.invalid("测试向量不匹配") }
-        if expected.count == 7 {
+        if expected.count >= 7 {
             guard expected[5] as? String == actual.email,
                   expected[6] as? String == actual.authorizationID else { throw LinkError.invalid("邮箱授权链接测试向量不匹配") }
+            if expected.count == 8 && expected[7] as? String != actual.harness { throw LinkError.invalid("Agent 类型不匹配") }
         } else if actual.version != "1" { throw LinkError.invalid("新版链接缺少邮箱测试字段") }
     }
     for uri in rejected {
@@ -1096,6 +1356,10 @@ private func runIconTests(at path: String) throws {
 if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--icon-self-test" {
     do { try runIconTests(at: CommandLine.arguments[2]) }
     catch { fputs("\(error.localizedDescription)\n", stderr); exit(1) }
+} else if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--claude-discovery-self-test" {
+    let selected = preferredClaudeCommand(claudeCommandCandidates())
+    print("Claude CLI discovery (metadata only): compatible=\(selected.compatible), path=\(selected.path)")
+    if !selected.compatible { exit(1) }
 } else if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--form-self-test" {
     let app = NSApplication.shared
     let delegate = Launcher()

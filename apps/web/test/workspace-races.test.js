@@ -56,7 +56,8 @@ function harness(names, overrides = {}) {
     invitationLink: { hasPending: () => false, reset: noop },
     sessionContextDetails: { open: false }, updateSessionContextDisclosure: noop,
     sessionToolbar: { reset: noop, refresh: noop },
-    codexLauncher: { clear: noop }, codexDeviceAuthorization: { clear: noop },
+    codexLauncher: { clear: noop }, claudeLauncher: { clear: noop }, connectClaudeDialog: { open: false }, codexDeviceAuthorization: { clear: noop },
+    renderNativeSettingsRuntimeOptions: noop,
     location: { hash: "" }, URLSearchParams, initials: () => "U", localizer: { t: (value) => value },
     renderProjectSelect: noop, renderSessionList: noop, maybeOpenPendingDshPairing: noop,
     renderCurrentAvatar: noop, applyAvatarProfiles: noop,
@@ -67,7 +68,7 @@ function harness(names, overrides = {}) {
     ...overrides,
     api: { getAccountAvatar: async () => ({ user_id: "u1", avatar_id: null }), listAvatarProfiles: async () => [], ...overrides.api },
   });
-  vm.runInContext([...new Set(["captureWorkspaceScope", "applyAccountAvatar", "refreshAccountAvatar", "refreshAvatarProfiles", ...names])]
+  vm.runInContext([...new Set(["captureWorkspaceScope", "applyAccountAvatar", "refreshAccountAvatar", "refreshAvatarProfiles", "isAlternativeNative", ...names])]
     .map(functionSource).join("\n"), context);
   return context;
 }
@@ -169,7 +170,7 @@ test("authenticated invitation entry waits for explicit confirmation before load
 });
 
 test("closed Cloud Agent never counts as the last available Agent or becomes the Settings default", () => {
- const nodes = Object.fromEntries(["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud",
+ const nodes = Object.fromEntries(["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-claude", "settings-enabled-cloud",
   "settings-agent-harness", "settings-codex-agent-fields", "settings-dsh-agent-fields", "settings-cloud-agent-fields",
   "settings-agent-summary"].map((id) => [id, element()]));
  for (const [id, value] of [["settings-enabled-codex", "codex"], ["settings-enabled-dsh", "deepseek-harness"], ["settings-enabled-cloud", "cloud"]]) nodes[id].value = value;
@@ -196,7 +197,7 @@ test("closed Cloud Agent never counts as the last available Agent or becomes the
 });
 
 test("open Cloud Agent can be explicitly selected without changing existing local defaults", () => {
- const nodes = Object.fromEntries(["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud",
+ const nodes = Object.fromEntries(["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-claude", "settings-enabled-cloud",
   "settings-agent-harness", "settings-codex-agent-fields", "settings-dsh-agent-fields", "settings-cloud-agent-fields",
   "settings-agent-summary"].map((id) => [id, element()]));
  for (const [id, value] of [["settings-enabled-codex", "codex"], ["settings-enabled-dsh", "deepseek-harness"], ["settings-enabled-cloud", "cloud"]]) nodes[id].value = value;

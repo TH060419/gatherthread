@@ -63,3 +63,4 @@ Current account guidance (2026-10-08): `main` uses verified-email registration a
 | [0057](0057-explicit-browser-interface-and-mobile-navigation.md) | Explicit browser interface and mobile navigation | proposed / local implementation | 2026-10-18 |
 | [0058](0058-dsh-desktop-profile-and-version-gated-plugin-layer.md) | Gate the DSH plugin layer by release and serve desktop from the same package | proposed / local implementation | 2026-10-18 |
 | [0059](0059-right-file-workspace.md) | Right file workspace with provider-scoped personal-branch editing | proposed / local implementation | 2026-10-18 |
+| [0060](0060-claude-code-plugin-and-local-connector.md) | Claude Code native plugin, scoped connector and compatible Launcher | implementation preview | 2026-10-22 |

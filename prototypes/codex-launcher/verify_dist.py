@@ -7,6 +7,7 @@ import json
 import struct
 from pathlib import Path
 from zipfile import ZipFile
+from claude_bundle import CLAUDE_RESOURCE_FILES
 
 
 ARCHIVE = Path(__file__).resolve().parent / "dist" / "GatherThreadLauncher-Windows-x64.zip"
@@ -57,7 +58,7 @@ def main() -> None:
         license_text = archive.read(ROOT + "runtime/Node-LICENSE.txt")
         if not license_text.startswith(b"Node.js is licensed for use as follows:"):
             raise SystemExit("ZIP lacks the official Node license")
-        for required in ("assets/gatherthread.ico", "assets/gatherthread.png", "launcher.py", "Install.cmd", "Uninstall.ps1"):
+        for required in ("assets/gatherthread.ico", "assets/gatherthread.png", "launcher.py", "Install.cmd", "Uninstall.ps1", *CLAUDE_RESOURCE_FILES):
             if required not in files:
                 raise SystemExit(f"ZIP lacks Launcher application asset: {required}")
         try:

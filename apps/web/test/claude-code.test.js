@@ -1,0 +1,65 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import vm from "node:vm";
+import { normalizeSettings, withProjectAgentHarness, projectAgentHarness, projectClaudeProfile, withProjectClaudeProfile } from "../src/settings.js";
+import { projectClaudeLauncherUrl } from "../src/domain.js";
+import { dshRuntimeChoices, resolveDshRuntime, dshExecutionSelection, dshExecutionProfile } from "../src/dsh.js";
+
+const runtime = { id: "runtime-claude", device_id: "device-claude", harness: "claude-code", provider: "anthropic",
+  model: "claude-sonnet-test", status: "online", last_seen_at: "2026-10-21T01:00:00.000Z" };
+const codex = { ...runtime, id: "runtime-codex", harness: "codex" };
+const dsh = { ...runtime, id: "runtime-dsh", harness: "deepseek-harness" };
+test("Claude selection survives settings normalization without rewriting Codex or DSH", () => {
+  let settings = withProjectAgentHarness(normalizeSettings({}), "project-a", "claude-code");
+  settings = withProjectClaudeProfile(settings, "project-a", { runtimeId: runtime.id, deviceId: "device-claude", provider: "anthropic", model: runtime.model });
+  assert.equal(projectAgentHarness(settings, "project-a"), "claude-code");
+  assert.equal(projectClaudeProfile(settings, "project-a").runtimeId, runtime.id);
+  assert.equal(settings.agents.projectProfiles["project-a"].dsh, null);
+  assert.equal(settings.agents.projectProfiles["project-a"].codex.model, "gpt-5.6-sol");
+});
+test("Claude native selector never falls back to another harness or device", () => {
+  assert.deepEqual(dshRuntimeChoices([runtime, codex, dsh], [], "claude-code").map(r => r.id), [runtime.id]);
+  assert.equal(resolveDshRuntime([runtime, codex, dsh], [], null, "claude-code").runtime.id, runtime.id);
+  assert.equal(resolveDshRuntime([codex, dsh], [], null, "claude-code").runtime, null);
+  assert.equal(resolveDshRuntime([runtime], [], { runtimeId: "other" }, "claude-code").runtime, null);
+  const selected = dshExecutionSelection(runtime, null, "claude-code");
+  assert.deepEqual(dshExecutionProfile(runtime, selected, "claude-code"), { harness: "claude-code", provider: "anthropic", model: runtime.model, runtimeId: runtime.id });
+  assert.throws(() => dshExecutionProfile(codex, selected, "claude-code"));
+});
+test("Claude handoff is v3 with exact native harness and no credential", () => {
+  const link = projectClaudeLauncherUrl({ baseUrl: "https://test.gatherthread.cn", projectId: "project-a", model: runtime.model,
+    email: "user@example.com", authorizationId: "b9c8f2e1-457b-4c22-b19a-c0184d9a1123" });
+  const url = new URL(link);
+  assert.equal(url.searchParams.get("v"), "3");
+  assert.equal(url.searchParams.get("harness"), "claude-code");
+  assert.equal(url.searchParams.get("model"), runtime.model);
+  assert.equal(url.searchParams.has("token"), false);
+  assert.throws(() => projectClaudeLauncherUrl({ baseUrl: "https://gatherthread.cn", projectId: "project-a", model: "sonnet" }));
+});
+test("Claude offers an accessible launcher and independently enabled native runtime choice", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  for (const id of ["connect-claude-button", "connect-claude-dialog", "claude-launcher-model", "settings-enabled-claude", "open-claude-launcher-button"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /<option value="claude-code">Claude Code<\/option>/);
+  assert.doesNotMatch(html, /Claude Code · coming later/);
+});
+
+test("an unconnected native Agent has a visible device placeholder, not an empty disabled picker", async () => {
+  const source = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+  const render = source.match(/function renderDshRuntimeOptions\([^]*?(?=\nfunction dshStoredProjectProfile)/u)?.[0];
+  assert.ok(render);
+  const options = [];
+  const select = { replaceChildren() { options.length = 0; }, append(option) { options.push(option); },
+    setAttribute() {}, disabled: false };
+  vm.runInNewContext(`${render}\nrenderDshRuntimeOptions(select);`, {
+    state: { settings: {} }, select,
+    currentDshResolution: () => ({ choices: [], runtime: null }),
+    document: { createElement: () => ({}) }, localizer: { t: value => value },
+  });
+  assert.equal(select.disabled, true);
+  assert.equal(options.length, 1);
+  assert.equal(options[0].textContent, "No connected Agent runtime");
+  assert.equal(options[0].value, "");
+});

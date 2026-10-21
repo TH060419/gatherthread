@@ -1,6 +1,15 @@
 {
-  "version": 2,
+  "version": 3,
   "accepted": [
+    {
+      "name": "Claude Code account handoff selects exact harness",
+      "input": {
+        "baseUrl": "https://test.gatherthread.cn", "projectId": "project-test", "model": "claude-sonnet-4-6", "contextWindowTokens": 128000,
+        "visibleHistorySync": "never", "email": "user@example.invalid", "authorizationId": "12345678-1234-4234-8234-123456789abc", "harness": "claude-code"
+      },
+      "uri": "gatherthread-connect://connect?v=3&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=claude-sonnet-4-6&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc&harness=claude-code",
+      "parsed": ["https://test.gatherthread.cn", "project-test", "claude-sonnet-4-6", 128000, "never", "user@example.invalid", "12345678-1234-4234-8234-123456789abc", "claude-code"]
+    },
     {
       "name": "default model and first import",
       "input": {
@@ -43,6 +52,15 @@
     }
   ],
   "rejected_uris": [
+    "gatherthread-connect://connect?v=3&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=sonnet&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc&harness=claude-code",
+    "gatherthread-connect://connect?v=3&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=sonnet&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc",
+    "gatherthread-connect://connect?v=3&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=sonnet&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc&harness=Claude-Code",
+    "gatherthread-connect://connect?v=3&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=sonnet&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc&harness=unknown",
+    "gatherthread-connect://connect?v=3&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=sonnet&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc&harness=claude-code&harness=codex",
+    "gatherthread-connect://connect?v=3&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=sonnet&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc&harness=claude-code&password=not-allowed",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=sonnet&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc&harness=claude-code",
+    "gatherthread-connect//connect?v=3&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=sonnet&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc&harness=claude-code",
+    "gatherthread-connectnot://connect?v=3&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=sonnet&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc&harness=claude-code",
     "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example",
     "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536",
     "gatherthread-connect://connect?origin=https%3A%2F%2Fgatherthread.cn&project=project-example",

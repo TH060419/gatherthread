@@ -12,10 +12,11 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build:ts && npm run build:dsh-plugin && npm run build:connector && npm run build:web",
+    "build": "npm run build:ts && npm run build:dsh-plugin && npm run build:connector && npm run build:claude && npm run build:web",
     "build:ts": "tsc -b",
     "build:dsh-plugin": "node scripts/build-dsh-plugin.mjs",
     "build:connector": "npm --workspace @gatherthread/codex-connect run build",
+    "build:claude": "npm --workspace @gatherthread/claude-connect run build",
     "build:web": "npm --workspace apps/web run build",
     "clean": "tsc -b --clean",
     "test-gate": "node --env-file-if-exists=.env apps/server/dist/src/test-gate-cli.js",
@@ -29,10 +30,11 @@
     "owner-host:lan": "node --env-file-if-exists=.env scripts/self-host-lan.mjs",
     "owner-host:tailscale-serve": "node --env-file-if-exists=.env scripts/self-host-tailscale.mjs",
     "codex:connect": "npm run build:ts && node packages/bridge/dist/src/codex-connect-bin.js",
+    "claude:connect": "npm run build:claude && node packages/claude-connect/dist/claude-connect.js",
     "dsh:connect": "npm run build:ts && node packages/dsh-host/dist/src/connect-cli.js",
     "test": "npm run test:unit && npm run test:scripts && npm run test:web && npm run test:integration && npm run test:e2e",
     "test:unit": "npm run build:ts && node --test packages/protocol/dist/test/*.test.js packages/adapters/dist/test/*.test.js packages/bridge/dist/test/*.test.js packages/dsh-host/dist/test/*.test.js packages/mcp/dist/test/*.test.js apps/server/dist/test/*.test.js",
-    "test:scripts": "npm run build:ts && npm run build:connector && node --test scripts/test/*.test.mjs",
+    "test:scripts": "npm run build:ts && npm run build:connector && npm run build:claude && node --test scripts/test/*.test.mjs",
     "test:web": "npm --workspace apps/web run check",
     "test:integration": "node --test tests/integration/*.test.mjs",
     "test:dsh-host:real": "npm run build:ts && node scripts/test-dsh-host-real.mjs",
@@ -49,9 +51,10 @@
     "release:check": "node scripts/check-release.mjs",
     "release:verify-codex": "node scripts/verify-codex-package.mjs",
     "release:verify-dsh": "node scripts/verify-dsh-package.mjs",
+    "release:verify-claude": "node scripts/verify-claude-package.mjs",
     "release:pack-npm": "node scripts/pack-npm-release.mjs",
     "release:dry-run-npm": "node scripts/dry-run-npm-release.mjs",
-    "release:verify": "npm run verify && npm run release:check && npm run release:verify-codex && npm run release:verify-dsh",
+    "release:verify": "npm run verify && npm run release:check && npm run release:verify-codex && npm run release:verify-dsh && npm run release:verify-claude",
     "verify": "npm run typecheck && npm run build:dsh-plugin && npm run build:web && npm run test && npm run audit:references && npm run audit:licenses && npm run audit:branding && npm run audit:secrets && npm run audit:vulnerabilities"
   },
   "devDependencies": {

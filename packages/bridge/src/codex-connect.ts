@@ -763,13 +763,24 @@ export class CodexLocalSyncRegistry implements LocalConversationSyncControl {
 
   async getLocalSyncStatus(sessionId: string): Promise<LocalConversationSyncStatus> {
     const session = this.#requireSession(sessionId);
-    if (!session.getLocalSyncStatus) throw new Error("This Codex session does not support local upload controls");
+    if (!session.getLocalSyncStatus) throw new Error("This Agent session does not support local upload controls");
     return session.getLocalSyncStatus();
+  }
+
+  /** Public routing metadata, never a credential or native transport capability. */
+  getExecutionProfile(sessionId: string): {
+    harness: string; provider: string; model: string; runtime_id: string; reasoning_effort?: string;
+  } {
+    const runtime = this.#requireSession(sessionId).bridge.runtime;
+    if (!runtime || runtime.sessionId !== sessionId || runtime.purpose === "snapshot_connector") throw new Error("This session has no active execution runtime");
+    const effort = runtime.executionProfiles?.find(profile => profile.provider === runtime.provider && profile.model === runtime.model)?.defaultReasoningEffort;
+    return { harness: runtime.harness, provider: runtime.provider, model: runtime.model, runtime_id: runtime.id,
+      ...(effort ? { reasoning_effort: effort } : {}) };
   }
 
   async setLocalAutoUpload(sessionId: string, enabled: boolean): Promise<LocalConversationSyncStatus> {
     const session = this.#requireSession(sessionId);
-    if (!session.setLocalAutoUpload) throw new Error("This Codex session does not support local upload controls");
+    if (!session.setLocalAutoUpload) throw new Error("This Agent session does not support local upload controls");
     return session.setLocalAutoUpload(enabled);
   }
 
@@ -777,7 +788,7 @@ export class CodexLocalSyncRegistry implements LocalConversationSyncControl {
     const session = this.#requireSession(sessionId);
     const runtime = session.bridge.runtime;
     if (!runtime || !session.uploadLocalTurns) {
-      throw new Error("This Codex session is not ready for manual local upload");
+      throw new Error("This Agent session is not ready for manual local upload");
     }
     return session.uploadLocalTurns({ api: this.#api, runtime });
   }
@@ -800,10 +811,13 @@ export class CodexLocalSyncRegistry implements LocalConversationSyncControl {
 
   #requireSession(sessionId: string): ManagedSession {
     const session = this.#sessions.get(sessionId);
-    if (!session) throw new Error("No active local Codex conversation is bound to this session");
+    if (!session) throw new Error("No active local Agent conversation is bound to this session");
     return session;
   }
 }
+
+/** Harness-neutral name; keep the original export for existing Codex consumers. */
+export { CodexLocalSyncRegistry as ProjectLocalSyncRegistry };
 
 export function formatConnectedCodexSessionOutput(_projectName: string, session: SessionSummary): string {
   const sessionName = session.name ?? session.id;
@@ -861,7 +875,8 @@ export async function initializeProjectSession(options: {
       captureFidelity: descriptor.captureFidelity,
       capabilities: descriptor.capabilities,
       ...(descriptor.sharingCapability === undefined ? {} : { sharingCapability: descriptor.sharingCapability }),
-      ...(options.harness instanceof CodexProjectHarness ? { contextDeletionVersion: 1 as const } : {}),
+      ...(descriptor.contextDeletionVersion === 1 || options.harness instanceof CodexProjectHarness
+        ? { contextDeletionVersion: 1 as const } : {}),
       purpose: "execution",
     },
     transcriptRoots: {},
@@ -1048,6 +1063,8 @@ export async function runProjectConnector(options: {
   codeSync?: ProjectCodeSync;
   githubCodeSync?: ProjectCodeSync;
   hookRelay?: Pick<CodexHookRelayServer, "start" | "close">;
+  /** Native adapters own their explicitly opted-in hook protocol; it is not a Codex Hook source. */
+  nativeHookRelay?: { start(): Promise<void>; close(): Promise<void> };
   sharedExecutorFactory?: () => SharedAgentExecutor;
 }): Promise<void> {
   const hooksEnabled = options.hookMode !== "disabled";
@@ -1165,6 +1182,7 @@ export async function runProjectConnector(options: {
     });
   }
   await relay?.start();
+  await options.nativeHookRelay?.start();
   let nextRefreshAt = 0;
   let eligibleSessions: SessionSummary[] = [];
   let visibleSessions: SessionSummary[] = [];
@@ -1264,7 +1282,9 @@ export async function runProjectConnector(options: {
           });
           managed.set(session.id, current);
           options.localSync?.attach(session.id, current);
-          process.stdout.write(formatConnectedCodexSessionOutput(options.project.name, session));
+          process.stdout.write(options.harness.descriptor.harness === "codex"
+            ? formatConnectedCodexSessionOutput(options.project.name, session)
+            : `Connected ${terminalQuoted(options.harness.descriptor.harness)} session: ${terminalQuoted(session.name ?? session.id)} [${session.mode}]\n`);
         }
         await runManagedSessionCycle(current, options.api);
         retryReporter.recovered(session.id);
@@ -1278,10 +1298,17 @@ export async function runProjectConnector(options: {
       try {
         await processLocalSyncControlJobs({ api: options.api, managed });
         try {
-          const codeBusy = async () => activeLocalRuns.size > 0 || await managedCodeRunsBusy(managed);
-          await processCodeSyncControlJobs({ api: options.api, managed, codeSync: options.codeSync, githubCodeSync: options.githubCodeSync, busy: codeBusy });
+          const codeBusy = async () => activeLocalRuns.size > 0 || Boolean(await options.harness.isWorkspaceBusy?.()) || await managedCodeRunsBusy(managed);
+          const workspaceOperation = options.harness.withWorkspaceOperation?.bind(options.harness);
+          await processCodeSyncControlJobs({ api: options.api, managed, codeSync: options.codeSync, githubCodeSync: options.githubCodeSync, busy: codeBusy, ...(workspaceOperation ? { workspaceOperation } : {}) });
           for (const [provider, sync] of [["cloud code", options.codeSync], ["GitHub code", options.githubCodeSync]] as const) {
-            try { if (sync && await sync.automaticUploadEnabled()) await sync.tick({ busy: await codeBusy() }); }
+            try {
+              if (sync && await sync.automaticUploadEnabled()) {
+                const busy = await codeBusy();
+                if (workspaceOperation && !busy) await workspaceOperation(() => sync.tick({ busy: false }));
+                else await sync.tick({ busy });
+              }
+            }
             catch (error) { retryReporter.retrying(provider, error); }
           }
           retryReporter.recovered("code sync");
@@ -1325,6 +1352,7 @@ export async function runProjectConnector(options: {
     await heartbeat;
     options.localSync?.clear();
     await relay?.close();
+    await options.nativeHookRelay?.close();
   }
 }
 
@@ -1350,6 +1378,7 @@ export async function processCodeSyncControlJobs(input: {
   codeSync?: Pick<ProjectCodeSync, "execute"> | undefined;
   githubCodeSync?: Pick<ProjectCodeSync, "execute"> | undefined;
   busy: boolean | (() => Promise<boolean>);
+  workspaceOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
   connectGitHub?: typeof connectGitHubAccount;
 }): Promise<void> {
   const { api } = input;
@@ -1358,7 +1387,7 @@ export async function processCodeSyncControlJobs(input: {
     .filter((job, index, all) => (isCodeSyncRequestKind(job.kind) || isGitHubCodeSyncRequestKind(job.kind)) && all.findIndex((candidate) => candidate.id === job.id) === index);
   for (const job of jobs) {
     const runtime = input.managed.get(job.sessionId)?.bridge.runtime;
-    if (!runtime || runtime.harness !== "codex" || job.targetRuntimeId !== runtime.id) continue;
+    if (!runtime || !["codex", "claude-code"].includes(runtime.harness) || job.targetRuntimeId !== runtime.id) continue;
     let claimed;
     try { claimed = await api.claimSnapshotRequest(job.id, runtime.id); } catch { continue; }
     if (claimed.status !== "claimed" || claimed.id !== job.id || claimed.kind !== job.kind || claimed.sessionId !== job.sessionId || claimed.targetRuntimeId !== runtime.id) continue;
@@ -1373,7 +1402,9 @@ export async function processCodeSyncControlJobs(input: {
       if (!sync) throw new CodeSyncError("code_sync_disabled", github ? "Restart this Codex connector with --github-code-sync OWNER/REPO --github-base-branch BRANCH to authorize this exact target locally." : "Restart this Codex connector with --code-sync to authorize source-file sync for this workspace.");
       const modifiesFiles = !["code_sync_status", "code_auto_upload_disable", "github_code_sync_status", "github_code_auto_upload_disable"].includes(claimed.kind);
       const busy = modifiesFiles && (typeof input.busy === "function" ? await input.busy() : input.busy);
-      result = await sync.execute(claimed.kind, { busy, operationId: claimed.id });
+      if (modifiesFiles && input.workspaceOperation) {
+        result = await input.workspaceOperation(() => sync.execute(claimed.kind, { busy, operationId: claimed.id }));
+      } else result = await sync.execute(claimed.kind, { busy, operationId: claimed.id });
       }
     } catch (error) {
       await api.failSnapshotRequest(job.id, runtime.id, {

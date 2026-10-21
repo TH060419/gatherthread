@@ -191,7 +191,7 @@ function sendFixture({ mode = "solo", approve = true, apiOverride } = {}) {
     api: { startSharedAgentRequest: async (id, body) => { calls.push([id, body]); if (apiOverride) return apiOverride(id, body); } },
     window: { confirm: value => { confirmations.push(value); return approve; } },
   });
-  vm.runInContext(["captureWorkspaceScope", "renderComposerPermissions", "sendMessage"].map(functionSource).join("\n"), context);
+  vm.runInContext(["captureWorkspaceScope", "isAlternativeNative", "renderComposerPermissions", "sendMessage"].map(functionSource).join("\n"), context);
   const marker = 'element("shared-agent-recover").addEventListener("click", async () => {';
   const begin = mainSource.indexOf(marker), tail = mainSource.slice(begin + marker.length), end = tail.indexOf("\n});");
   assert.ok(begin >= 0 && end >= 0, "actual recovery handler exists");

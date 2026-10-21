@@ -13,6 +13,7 @@ const manifestPaths = [
   "packages/adapters/package.json",
   "packages/bridge/package.json",
   "packages/codex-connect/package.json",
+  "packages/claude-connect/package.json",
   "packages/dsh-host/package.json",
   "packages/mcp/package.json",
   "packages/protocol/package.json",
@@ -29,7 +30,7 @@ for (const path of manifestPaths) {
 
 const lock = await json("package-lock.json");
 assert.equal(lock.version, EXPECTED_VERSION, "package-lock.json must declare the candidate version");
-for (const path of ["", "apps/server", "apps/web", "packages/adapters", "packages/bridge", "packages/codex-connect", "packages/dsh-host", "packages/mcp", "packages/protocol"]) {
+for (const path of ["", "apps/server", "apps/web", "packages/adapters", "packages/bridge", "packages/codex-connect", "packages/claude-connect", "packages/dsh-host", "packages/mcp", "packages/protocol"]) {
   assert.equal(lock.packages?.[path]?.version, EXPECTED_VERSION, `package-lock.json package ${path || "root"} is stale`);
 }
 
@@ -112,9 +113,18 @@ const requiredFiles = [
   "docs/CODEX_CONNECT.zh-CN.md",
   "docs/DSH_CONNECT.md",
   "docs/DSH_CONNECT.zh-CN.md",
+  "docs/CLAUDE_CODE.md",
+  "docs/adr/0060-claude-code-plugin-and-local-connector.md",
   "docs/adr/0018-unified-codex-plugin-and-connector.md",
   ".agents/plugins/marketplace.json",
   "packages/codex-connect/README.md",
+  "packages/claude-connect/README.md",
+  "plugins/gatherthread-claude/.claude-plugin/plugin.json",
+  "plugins/gatherthread-claude/.mcp.json",
+  "plugins/gatherthread-claude/hooks/hooks.json",
+  "plugins/gatherthread-claude/scripts/hook-forwarder.mjs",
+  "plugins/gatherthread-claude/scripts/mcp-launcher.mjs",
+  "plugins/gatherthread-claude/skills/gatherthread/SKILL.md",
   "plugins/gatherthread/.codex-plugin/plugin.json",
   "plugins/gatherthread/.mcp.json",
   "plugins/gatherthread/hooks/hooks.json",
@@ -159,6 +169,7 @@ const requiredFiles = [
   "scripts/dry-run-npm-release.mjs",
   "scripts/verify-codex-package.mjs",
   "scripts/verify-dsh-package.mjs",
+  "scripts/verify-claude-package.mjs",
 ];
 await Promise.all(requiredFiles.map((path) => readFile(join(root, path), "utf8")));
 
@@ -168,6 +179,21 @@ assert.equal(connector.private, undefined);
 assert.deepEqual(connector.publishConfig, { access: "public", tag: "beta" });
 assert.deepEqual(connector.bin, { "gatherthread-codex-connect": "dist/codex-connect.js" });
 assert.deepEqual(connector.dependencies ?? {}, {});
+
+const claudeConnector = await json("packages/claude-connect/package.json");
+assert.equal(claudeConnector.name, "@gatherthread/claude-connect");
+assert.equal(claudeConnector.private, undefined);
+assert.deepEqual(claudeConnector.publishConfig, { access: "public", tag: "beta" });
+assert.deepEqual(claudeConnector.bin, { "gatherthread-claude-connect": "dist/claude-connect.js" });
+assert.deepEqual(claudeConnector.dependencies ?? {}, {});
+const claudePlugin = await json("plugins/gatherthread-claude/.claude-plugin/plugin.json");
+assert.equal(claudePlugin.version, EXPECTED_VERSION);
+const claudeMcp = await json("plugins/gatherthread-claude/.mcp.json");
+assert.equal(claudeMcp.gatherthread?.command, "node");
+assert.deepEqual(claudeMcp.gatherthread?.args, ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp-launcher.mjs"]);
+assert.equal(claudeMcp.gatherthread?.env, undefined);
+assert.equal(claudeMcp.gatherthread?.env_vars, undefined);
+assert.equal(await readFile(join(root, "packages/claude-connect/LICENSE"), "utf8"), await readFile(join(root, "LICENSE"), "utf8"));
 
 const plugin = await json("plugins/gatherthread/.codex-plugin/plugin.json");
 assert.equal(plugin.version, EXPECTED_VERSION);

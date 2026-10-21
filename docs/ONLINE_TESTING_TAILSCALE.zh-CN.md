@@ -317,7 +317,7 @@ https://gatherthread-host.example-tailnet.ts.net/health
 - [ ] Agent 请求只由发出者自己的 runtime 领取。
 - [ ] Agent 回复实时同步到另一端。
 
-Codex 的具体命令与验收步骤参见[接入本地 Codex](CODEX_CONNECT.zh-CN.md)。Claude Code 和自定义 harness 目前仍使用通用 bridge 的显式 adapter 接口。
+Codex 的具体命令与验收步骤参见[接入本地 Codex](CODEX_CONNECT.zh-CN.md)。Claude Code 的连接器、原生插件及配套启动器源码预览见 [Claude Code 接入说明](CLAUDE_CODE.md)；其他自定义 harness 使用通用 bridge 的显式 adapter 接口。
 
 ## 13. 测试记录建议
 

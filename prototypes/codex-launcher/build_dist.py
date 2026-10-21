@@ -12,6 +12,7 @@ import subprocess
 import sys
 from urllib.request import urlopen
 from pathlib import Path
+from claude_bundle import copy_claude_resources
 
 
 HERE = Path(__file__).resolve().parent
@@ -49,6 +50,9 @@ def main() -> None:
     plugin_version = json.loads((ROOT / "plugins" / "gatherthread" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
     if plugin_version != version or f"@gatherthread/codex-connect@{version}" not in (HERE / "launcher.py").read_text(encoding="utf-8"):
         raise SystemExit("Launcher, connector, and plugin versions must match")
+    if (json.loads((ROOT / "packages/claude-connect/package.json").read_text(encoding="utf-8"))["version"] != version
+            or json.loads((ROOT / "plugins/gatherthread-claude/.claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"] != version):
+        raise SystemExit("Claude Code connector and plugin must match the bundle version")
     python_home = Path(sys.executable).resolve().parent
     node_path = Path(shutil.which("node.exe") or "")
     if not node_path.is_file() or not node_path.resolve().name.lower() == "node.exe":
@@ -60,6 +64,7 @@ def main() -> None:
         raise SystemExit("npm.cmd is required for building the connector")
     subprocess.run([npm, "run", "build:ts"], cwd=ROOT, check=True)
     subprocess.run([npm, "run", "build:connector"], cwd=ROOT, check=True)
+    subprocess.run([npm, "--workspace", "@gatherthread/claude-connect", "run", "build"], cwd=ROOT, check=True)
     if BUILD.exists():
         resolved = BUILD.resolve()
         if resolved.parent != HERE.resolve():
@@ -85,6 +90,7 @@ def main() -> None:
     copy(HERE / "connector" / "package.json", APP / "connector" / "package.json")
     copy(ROOT / "packages" / "codex-connect" / "LICENSE", APP / "connector" / "LICENSE")
     copy(ROOT / "packages" / "codex-connect" / "NOTICE", APP / "connector" / "NOTICE")
+    copy_claude_resources(ROOT, APP, node_path)
     shutil.copytree(ROOT / "plugins" / "gatherthread", APP / "plugins" / "gatherthread")
     copy(ROOT / ".agents" / "plugins" / "marketplace.json", APP / ".agents" / "plugins" / "marketplace.json")
     marketplace_path = APP / ".agents" / "plugins" / "marketplace.json"

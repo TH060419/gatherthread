@@ -22,6 +22,8 @@
 
 现在就能带上熟悉的 Codex 或 DeepSeek Harness，也可不安装本地工具，直接用云端体验 Agent 做个小任务。按所选 Agent 的能力选择模型与选项；云端使用额度以工作页显示为准。
 
+使用 Claude Code？本次源码预览加入了[原生插件、连接器和启动器适配](docs/CLAUDE_CODE.md)，配套安装包与 npm 包的正式发布状态单独记录。
+
 ![共享讨论和文件版本，各自调用 Agent，检查后整合](docs/assets/product/collaboration.zh-CN.jpg)
 
 ## 看一个小项目怎么完成

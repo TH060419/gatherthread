@@ -46,7 +46,7 @@ const PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const DEVICE_ID_PATTERN = PROJECT_ID_PATTERN;
 const DSH_PROVIDER_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,80}$/u;
 const DSH_MODEL_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,160}$/u;
-export const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness", "cloud"]);
+export const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness", "claude-code", "cloud"]);
 
 export const MOTION_PREFERENCES = Object.freeze(["system", "reduce", "full"]);
 
@@ -144,6 +144,7 @@ export function normalizeSettings(input) {
         enabledHarnesses,
         codex: normalizeStoredCodexProfile(legacyCodex, customCodexModels),
         dsh: normalizeDshProfile(profile.dsh),
+        claude: normalizeDshProfile(profile.claude),
         cloud: { profileId: typeof profile.cloud?.profileId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/u.test(profile.cloud.profileId) ? profile.cloud.profileId : null },
       };
     }
@@ -382,6 +383,24 @@ export function projectDshProfile(settings, projectId) {
   return normalized.agents.projectProfiles[projectId]?.dsh ?? null;
 }
 
+export function projectClaudeProfile(settings, projectId) {
+  return normalizeSettings(settings).agents.projectProfiles[projectId]?.claude ?? null;
+}
+
+export function withProjectClaudeProfile(settings, projectId, profile) {
+  if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("A safe project ID is required for Agent settings.");
+  const normalized = normalizeSettings(settings);
+  const claude = normalizeDshProfile(profile);
+  if (!claude) throw new Error("Choose a connected Claude Code runtime.");
+  const current = normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized);
+  return normalizeSettings({ ...normalized, agents: { ...normalized.agents,
+    activeHarness: "claude-code",
+    enabledHarnesses: [...new Set([...normalized.agents.enabledHarnesses, "claude-code"])],
+    projectProfiles: { ...normalized.agents.projectProfiles, [projectId]: { ...current,
+      harness: "claude-code", enabledHarnesses: [...new Set([...current.enabledHarnesses, "claude-code"])], claude } },
+  } });
+}
+
 export function withProjectDshProfile(settings, projectId, profile) {
   if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("A safe project ID is required for Agent settings.");
   const normalized = normalizeSettings(settings);
@@ -598,6 +617,7 @@ function defaultProjectAgentProfile(settings) {
     enabledHarnesses: [...settings.agents.enabledHarnesses],
     codex: normalizeCodexProfile(undefined, settings.agents.customCodexModels),
     dsh: null,
+    claude: null,
     cloud: { profileId: null },
   };
 }

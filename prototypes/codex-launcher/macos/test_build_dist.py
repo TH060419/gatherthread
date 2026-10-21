@@ -104,11 +104,18 @@ class DmgPackagingTests(unittest.TestCase):
             path = contents / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("synthetic bundle fixture\n", encoding="utf-8")
+        for relative in BUILD.CLAUDE_BUNDLE.CLAUDE_RESOURCE_FILES:
+            path = resources / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic Claude bundle fixture\n", encoding="utf-8")
+        (resources / "claude-marketplace/.claude-plugin/marketplace.json").write_text(json.dumps({
+            "name": "gatherthread-launcher-claude", "plugins": [{"name": "gatherthread", "source": "./plugins/gatherthread"}]}))
         for relative in ("MacOS/GatherThreadLauncher", "Resources/runtime/node"):
             (contents / relative).chmod(0o755)
         (resources / "runtime/Node-LICENSE.txt").write_text(
             "Node.js is licensed for use as follows:\n" + "Fixture license notice.\n" * 700, encoding="utf-8")
-        for relative in ("connector/package.json", "plugins/gatherthread/.codex-plugin/plugin.json"):
+        for relative in ("connector/package.json", "plugins/gatherthread/.codex-plugin/plugin.json",
+                         "connector/claude/package.json", "claude-marketplace/plugins/gatherthread/.claude-plugin/plugin.json"):
             path = resources / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"version": "0.1.0-beta.3"}), encoding="utf-8")

@@ -8,7 +8,7 @@ const ACTIVE_JOBS = new Set(["queued", "claimed", "importing", "compacting"]);
 
 export function codeRuntimeChoices(context) {
   return (context?.runtimes ?? []).filter((runtime) =>
-    isExecutionRuntime(runtime) && ["codex", "deepseek-harness"].includes(runtime.harness)
+    isExecutionRuntime(runtime) && ["codex", "deepseek-harness", "claude-code"].includes(runtime.harness)
     && (!runtime.userId || runtime.userId === context.userId)
     && (!context.enabledHarnesses || context.enabledHarnesses.includes(runtime.harness)));
 }

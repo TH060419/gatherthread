@@ -286,6 +286,7 @@
             <span>Connect DeepSeek Harness</span>
             <small id="connect-dsh-button-status">Not connected</small>
           </button>
+          <button id="connect-claude-button" class="button button-secondary project-connect-button" type="button" aria-haspopup="dialog" aria-controls="connect-claude-dialog" hidden><span>Connect Claude Code</span></button>
           <button id="add-agent-button" class="icon-button agent-settings-shortcut" type="button" aria-label="Choose Agent connections" title="Choose Agent connections" data-tooltip aria-haspopup="dialog" aria-controls="settings-dialog"><span aria-hidden="true">＋</span></button>
           <button id="agent-sharing-button" class="button button-secondary button-wide" type="button" aria-haspopup="dialog" aria-controls="agent-sharing-dialog" disabled>Share my Agent</button>
           <div class="project-action-row">
@@ -397,15 +398,15 @@
                           <strong>Local turns to cloud</strong>
                         </div>
                         <label id="codex-local-runtime-field" class="codex-local-runtime-field" for="codex-local-runtime-select" hidden>
-                          <span>Codex device</span>
-                          <select id="codex-local-runtime-select" aria-label="Codex device"></select>
+                          <span>Connected Agent device</span>
+                          <select id="codex-local-runtime-select" aria-label="Connected Agent device"></select>
                         </label>
                         <label class="codex-auto-upload-control" for="codex-auto-upload-toggle">
                           <input id="codex-auto-upload-toggle" type="checkbox" disabled>
                           <span>Auto-upload local turns to cloud</span>
                         </label>
                         <button id="upload-local-turns-button" class="button button-secondary compact-button" type="button" disabled>Upload local turns to cloud now</button>
-                        <span id="codex-local-sync-status" role="status" aria-live="polite">Waiting for Codex.</span>
+                        <span id="codex-local-sync-status" role="status" aria-live="polite">Waiting for an Agent.</span>
                       </div>
                     </div>
                   </details>
@@ -523,7 +524,7 @@
                   <select id="agent-effort-select" name="agent-effort"></select>
                 </div>
                 <div id="dsh-agent-profile-fields" class="agent-profile-fields dsh-agent-profile-fields" hidden>
-                  <label for="agent-dsh-runtime-select">DSH runtime</label>
+                  <label for="agent-dsh-runtime-select">Connected Agent device</label>
                   <select id="agent-dsh-runtime-select" name="agent-dsh-runtime"></select>
                   <label id="agent-dsh-model-label" for="agent-dsh-model-select" hidden>Model</label>
                   <select id="agent-dsh-model-select" name="agent-dsh-model" hidden></select>
@@ -1009,6 +1010,30 @@
       <div id="mobile-members-content"></div>
     </dialog>
 
+    <dialog id="connect-claude-dialog" class="create-dialog codex-connect-dialog" aria-labelledby="connect-claude-title" aria-describedby="connect-claude-summary">
+      <div class="codex-connect-content">
+        <div class="dialog-heading"><div><p class="eyebrow">Project connector</p><h2 id="connect-claude-title">Connect Claude Code</h2></div><button id="close-connect-claude-button" class="icon-button" type="button" aria-label="Close Connect Claude Code dialog">×</button></div>
+        <p id="connect-claude-summary" class="connection-lead">Keep Claude Code signed in on this computer. Connect once, then use it from any of your signed-in devices.</p>
+        <label for="claude-launcher-model">Claude model ID</label>
+        <input id="claude-launcher-model" type="text" maxlength="120" autocomplete="off" aria-describedby="claude-launcher-model-help" />
+        <p id="claude-launcher-model-help" class="field-help">Enter the exact model ID configured in Claude Code. This connection will not switch models automatically.</p>
+        <section id="claude-launcher-option" class="codex-launcher-flow" hidden>
+          <h3>Open and sign in</h3><p id="claude-launcher-environment" class="field-help"></p>
+          <p>Your email is filled in. Enter your password only in the Launcher, then connect.</p>
+          <p id="claude-launcher-account" class="field-help" data-i18n-skip></p>
+          <div id="claude-launcher-email-row" class="launcher-email-row" hidden><label for="claude-launcher-email">Account email</label><input id="claude-launcher-email" type="email" maxlength="254" autocomplete="email" aria-describedby="claude-launcher-status" /><button id="prepare-claude-launcher-button" class="button button-secondary" type="button">Confirm email</button></div>
+          <button id="open-claude-launcher-button" class="button button-primary" type="button" disabled>Open Launcher</button>
+          <p id="claude-launcher-status" class="field-help" role="status" aria-live="polite"></p>
+          <a id="download-claude-launcher-button" class="button button-secondary" href="https://github.com/TH060419/gatherthread/blob/main/docs/CLAUDE_CODE.md" target="_blank" rel="noopener noreferrer">Get the Claude-compatible Launcher</a>
+        </section>
+        <details class="connection-details"><summary>Claude Code plugin and terminal setup</summary>
+          <p>Install the GatherThread plugin to browse projects, read shared context and send chat from Claude Code. Review its Hooks before enabling local conversation upload.</p>
+          <p><a id="connect-claude-package-download" href="https://github.com/TH060419/gatherthread/blob/main/docs/CLAUDE_CODE.md" target="_blank" rel="noopener noreferrer">Source-checkout instructions</a></p>
+        </details>
+        <p class="field-help">The Launcher connects one independent device. Your password is not saved. You can revoke this device in Settings.</p>
+        <div class="dialog-actions"><button id="done-connect-claude-button" class="button button-primary" type="button">Done</button></div>
+      </div>
+    </dialog>
     <dialog
       id="connect-codex-dialog"
       class="create-dialog codex-connect-dialog"
@@ -1455,10 +1480,11 @@ codex plugin add gatherthread@gatherthread-source</code>
                 <div class="settings-agent-options">
                   <label class="settings-agent-option" for="settings-enabled-codex"><input id="settings-enabled-codex" name="enabled-agent" type="checkbox" value="codex" /><span>Codex</span></label>
                   <label class="settings-agent-option" for="settings-enabled-dsh"><input id="settings-enabled-dsh" name="enabled-agent" type="checkbox" value="deepseek-harness" /><span>DeepSeek Harness</span></label>
+                  <label class="settings-agent-option" for="settings-enabled-claude"><input id="settings-enabled-claude" name="enabled-agent" type="checkbox" value="claude-code" /><span>Claude Code</span></label>
                   <label class="settings-agent-option" for="settings-enabled-cloud"><input id="settings-enabled-cloud" name="enabled-agent" type="checkbox" value="cloud" disabled /><span>Cloud Agent</span></label>
                 </div>
               </fieldset>
-              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option value="cloud" disabled>Cloud Agent</option><option disabled>Claude Code · coming later</option></select></label>
+              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option value="claude-code">Claude Code</option><option value="cloud" disabled>Cloud Agent</option></select></label>
               <div id="settings-codex-agent-fields" class="settings-agent-fields">
                 <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
                 <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>
@@ -1466,8 +1492,8 @@ codex plugin add gatherthread@gatherthread-source</code>
                 <p id="settings-custom-model-error" class="form-error" role="alert"></p>
               </div>
               <div id="settings-dsh-agent-fields" class="settings-agent-fields" hidden>
-                <label class="settings-row" for="settings-dsh-runtime"><span><strong>DeepSeek Harness runtime</strong><small>Provider and model names come only from your connected DSH configuration.</small></span><select id="settings-dsh-runtime" name="dsh-runtime"></select></label>
-                <p class="field-help">Install and pair the plugin from “Connect DeepSeek Harness” if no runtime appears.</p>
+                <label class="settings-row" for="settings-dsh-runtime"><span><strong>Connected Agent device</strong><small>Provider and model names come only from the selected Agent connection.</small></span><select id="settings-dsh-runtime" name="dsh-runtime"></select></label>
+                <p class="field-help">Connect the selected Agent on your computer if no device appears.</p>
                 <p id="settings-dsh-runtime-error" class="form-error" role="alert"></p>
               </div>
               <div id="settings-cloud-agent-fields" class="settings-agent-fields" hidden>

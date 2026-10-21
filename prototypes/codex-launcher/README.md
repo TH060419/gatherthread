@@ -1,4 +1,46 @@
-# GatherThread Codex Launcher for Windows
+# GatherThread Agent Launcher for Windows
+
+## Claude Code adaptation in this source tree
+
+This source adds a separate Claude Code connector and reviewed Claude plugin to
+the same Launcher. It does not change the existing published Codex installer.
+New installers must be built and released explicitly before their download can
+offer this integration. Install and sign in to the native Claude Code CLI first;
+on Windows the Launcher requires `claude.exe`, not a `.cmd` or `.bat` wrapper.
+Automatic discovery checks existing CLI candidates in the background with a
+short, metadata-only `--version` probe and prefers a compatible release (2.1.259
+or newer). A manually entered path is never replaced. If only older versions
+exist, the current path remains visible with an update prompt; connector preflight
+still verifies the full safe streaming interface before any model execution.
+
+Choose **Claude Code** in the project's Web connection entry and open the
+Launcher. Its version-3 link selects that exact Agent, carries the account email
+and production/test environment, and leaves only the password to enter locally.
+No access token is pasted. It reuses the one-use, independently revocable device
+authorization; the grant authorizes the account/project, not a particular harness.
+The Launcher never substitutes Codex or disables Claude's tool permissions.
+
+Local file synchronization has a separate **Allow this device to synchronize
+project files** checkbox, initially off and reset for each new connection.
+Only checking it adds `--code-sync`; project sharing and upload still need their
+own explicit enable action. Claude does not display or receive Codex-only native
+history-import or context-window controls. Enter a full `claude-...` model ID,
+not a `sonnet`, `opus` or `haiku` alias.
+
+**Install bundled plugin** is an optional, separate trust decision. For Claude
+Code it invokes the official `claude plugin marketplace add` and `claude plugin
+install ... --scope user` commands against the separately bundled local
+marketplace. Review the MCP server and Hooks in Claude Code before trusting them.
+The plugin and connector use the private bundled Node runtime; a Claude plugin
+cannot overwrite the bundled Codex MCP entry. To remove this optional plugin,
+use `claude plugin uninstall gatherthread@gatherthread-launcher-claude --scope user`
+and `claude plugin marketplace remove gatherthread-launcher-claude` before
+uninstalling the Launcher. Local projects and Claude conversations are retained.
+
+Version-1 and version-2 links continue to select Codex. Version 3 adds the single
+required `harness` field (`codex` or `claude-code`) to all version-2 fields and
+rejects unknown, missing or duplicate fields. It contains no password, Cookie or
+device credential and never starts an Agent automatically when opened.
 
 For the corresponding native macOS app, see [macOS README](macos/README.md).
 Mac users receive a DMG with a drag-to-Applications folder and bilingual install

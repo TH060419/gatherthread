@@ -28,6 +28,7 @@ import {
   pendingAgentRequests,
   projectCodexConnectionCommands,
   projectCodexLauncherUrl,
+  projectAgentLauncherUrl,
   provenanceSummary,
   retryAgentRequestInput,
   runtimeLabel,
@@ -212,9 +213,9 @@ test("email Launcher input rejects incomplete handoffs and non-official server t
 
 test("browser and Python Launcher agree on versioned URI contract vectors", () => {
   const vectors = JSON.parse(readFileSync(new URL("../../../prototypes/codex-launcher/contract-vectors.json", import.meta.url), "utf8"));
-  assert.equal(vectors.version, 2);
+  assert.equal(vectors.version, 3);
   for (const vector of vectors.accepted) {
-    assert.equal(projectCodexLauncherUrl(vector.input), vector.uri, vector.name);
+    assert.equal((vector.input.harness ? projectAgentLauncherUrl : projectCodexLauncherUrl)(vector.input), vector.uri, vector.name);
   }
   for (const input of vectors.rejected_inputs) assert.throws(() => projectCodexLauncherUrl(input));
 });

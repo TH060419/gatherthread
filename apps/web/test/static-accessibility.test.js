@@ -721,10 +721,11 @@ test("workspace rails and dense session context use accessible icon disclosures"
   assert.match(i18n, /会话状态详情/);
 });
 
-test("Codex-only history and upload controls follow the saved project Agent selection", async () => {
+test("native upload controls follow enabled Agents while visible history import stays Codex-only", async () => {
   const main = await readFile(mainPath, "utf8");
   assert.match(main, /element\("visible-history-controls"\)\.hidden = !currentProjectEnabledHarnesses\(\)\.includes\("codex"\)/);
-  assert.match(main, /const available = Boolean\(state\.session\)[\s\S]*?currentProjectEnabledHarnesses\(\)\.includes\("codex"\)/);
+  assert.match(main, /function renderCodexLocalSyncControls\(\)[\s\S]*?const available = Boolean\(state\.session\)[\s\S]*?currentProjectEnabledHarnesses\(\)\.some\(harness => \["codex", "claude-code"\]\.includes\(harness\)\)/);
+  assert.match(main, /function onlineCodexLocalRuntimes\(\)[\s\S]*?isExecutionRuntime\(runtime\)[\s\S]*?\["codex", "claude-code"\]\.includes\(String\(runtime\.harness\)\.toLowerCase\(\)\)[\s\S]*?enabled\.includes\(String\(runtime\.harness\)\.toLowerCase\(\)\)/);
   assert.match(main, /state\.settings = settingsStore\.set\(settingsPreview\);[\s\S]*?renderSessionDeliveryControls\(\);[\s\S]*?ensureCodexLocalSyncStatus\(\)/);
 });
 

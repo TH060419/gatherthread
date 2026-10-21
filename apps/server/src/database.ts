@@ -4836,6 +4836,10 @@ export class CollaborationDatabase {
 
   private supportsControlHarness(kind: SnapshotRequestKind, harness: string): boolean {
     const normalized = harness.trim().toLowerCase();
+    if (normalized === "claude-code") {
+      return isCodeSyncRequestKind(kind) || isGitHubCodeSyncRequestKind(kind)
+        || ["local_sync_status", "local_auto_upload_enable", "local_auto_upload_disable", "local_turn_upload"].includes(kind);
+    }
     if (kind === "github_auth_connect") return normalized === "codex";
     return normalized === "codex" || ((isCodeSyncRequestKind(kind) || isGitHubCodeSyncRequestKind(kind)) && normalized === "deepseek-harness");
   }

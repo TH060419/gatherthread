@@ -22,6 +22,8 @@ Public-registration Beta: verify your email and choose a password to create an a
 
 For today's projects, connect Codex or DeepSeek Harness, or use the cloud trial Agent for a small task without local setup. Choose from that Agent's supported models and options; cloud usage allowances are shown in the workspace.
 
+Developing with Claude Code? The [native plugin and Launcher integration](docs/CLAUDE_CODE.md) is available in this source preview; matching published installers and npm artifacts are tracked separately.
+
 ![People share discussion and file versions while keeping their own Agents](docs/assets/product/collaboration.en.jpg)
 
 A phone or tablet can request your computer Agent from another network. Keep that computer and its connector online, and use a GatherThread server the mobile device can reach. You do not install a local Agent on the phone.

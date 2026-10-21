@@ -26,6 +26,7 @@ Start with the product story and illustrated workflow, then choose the setup or 
 
 - [Connect Codex](CODEX_CONNECT.md) · [中文](CODEX_CONNECT.zh-CN.md)
 - [Connect DeepSeek Harness](DSH_CONNECT.md) · [中文](DSH_CONNECT.zh-CN.md)
+- [Claude Code plugin and Launcher](CLAUDE_CODE.md): bilingual source-preview setup and capability boundaries.
 - [Git-backed code collaboration](CODE_SYNC.md)
 
 ## Run and operate GatherThread

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -20,6 +21,9 @@ from urllib.request import urlopen
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 LAUNCHER = HERE.parent
+CLAUDE_BUNDLE_SPEC = importlib.util.spec_from_file_location("launcher_claude_bundle", LAUNCHER / "claude_bundle.py")
+CLAUDE_BUNDLE = importlib.util.module_from_spec(CLAUDE_BUNDLE_SPEC)
+CLAUDE_BUNDLE_SPEC.loader.exec_module(CLAUDE_BUNDLE)
 BUILD = LAUNCHER / ".build-macos"
 DIST = LAUNCHER / "dist"
 APP = BUILD / "GatherThread Launcher.app"
@@ -52,6 +56,7 @@ REQUIRED_BUNDLE_FILES = (
     "Contents/Resources/plugins/gatherthread/scripts/hook-forwarder.mjs",
     "Contents/Resources/plugins/gatherthread/scripts/mcp-launcher.mjs",
     "Contents/Resources/plugins/gatherthread/skills/gatherthread/SKILL.md",
+    *("Contents/Resources/" + relative for relative in CLAUDE_BUNDLE.CLAUDE_RESOURCE_FILES),
 )
 
 
@@ -155,7 +160,8 @@ def validate_bundle(app: Path) -> None:
         if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?", version):
             raise ValueError("Application release version is missing")
         for relative in ("Contents/Resources/connector/package.json",
-                         "Contents/Resources/plugins/gatherthread/.codex-plugin/plugin.json"):
+                         "Contents/Resources/plugins/gatherthread/.codex-plugin/plugin.json",
+                         "Contents/Resources/claude-marketplace/plugins/gatherthread/.claude-plugin/plugin.json"):
             if json.loads((app / relative).read_text(encoding="utf-8")).get("version") != version:
                 raise ValueError("Application, connector and plugin versions differ")
         license_path = app / "Contents/Resources/runtime/Node-LICENSE.txt"
@@ -163,6 +169,7 @@ def validate_bundle(app: Path) -> None:
                 b"Node.js is licensed for use as follows:"):
             raise ValueError("Matching Node notices are missing")
         validate_bundle_icon(app)
+        CLAUDE_BUNDLE.validate_claude_marketplace(app / "Contents/Resources/claude-marketplace")
     except (OSError, ValueError, plistlib.InvalidFileException) as error:
         raise SystemExit("macOS bundle validation failed: " + str(error)) from error
 
@@ -487,6 +494,9 @@ def main() -> None:
     windows_source = (LAUNCHER / "launcher.py").read_text(encoding="utf-8")
     if plugin_version != version or f"@gatherthread/codex-connect@{version}" not in windows_source:
         raise SystemExit("Launcher, connector, and plugin versions must match")
+    if (json.loads((ROOT / "packages/claude-connect/package.json").read_text(encoding="utf-8"))["version"] != version
+            or json.loads((ROOT / "plugins/gatherthread-claude/.claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"] != version):
+        raise SystemExit("Claude Code connector and plugin must match the bundle version")
     node_command = shutil.which("node")
     if not node_command:
         raise SystemExit("Node 24 is required on the build machine")
@@ -501,6 +511,7 @@ def main() -> None:
         raise SystemExit("npm is required on the build machine")
     subprocess.run([npm, "run", "build:ts"], cwd=ROOT, check=True)
     subprocess.run([npm, "run", "build:connector"], cwd=ROOT, check=True)
+    subprocess.run([npm, "--workspace", "@gatherthread/claude-connect", "run", "build"], cwd=ROOT, check=True)
     if BUILD.exists():
         if BUILD.resolve().parent != LAUNCHER.resolve():
             raise SystemExit("Refusing to remove a directory outside the launcher project")
@@ -524,6 +535,7 @@ def main() -> None:
     shutil.copytree(connector, RESOURCES / "connector")
     for name in ("package.json", "LICENSE", "NOTICE"):
         copy(ROOT / "packages/codex-connect" / name, RESOURCES / "connector" / name)
+    CLAUDE_BUNDLE.copy_claude_resources(ROOT, RESOURCES, node)
     copy_reviewed_plugin(RESOURCES / "plugins/gatherthread")
     copy(ROOT / ".agents/plugins/marketplace.json", RESOURCES / "marketplace.json")
     binary = APP / "Contents/MacOS/GatherThreadLauncher"

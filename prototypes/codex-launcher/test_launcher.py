@@ -575,5 +575,184 @@ class NativeCodexCommandTests(unittest.TestCase):
                     launcher.native_codex_command(str(wrapper))
 
 
+class ClaudeLauncherTests(unittest.TestCase):
+    def test_claude_discovery_skips_older_path_before_a_compatible_existing_install(self):
+        probes = {"/old/claude": "2.1.150 (Claude Code)", "/new/claude": "2.1.306 (Claude Code)"}
+        self.assertEqual(launcher.preferred_claude_command(list(probes), probes.get), ("/new/claude", True))
+        self.assertEqual(launcher.preferred_claude_command(["/old/claude"], probes.get), ("/old/claude", False))
+
+    def test_claude_discovery_version_gate_rejects_invalid_or_unsupported_metadata(self):
+        for version in ("", "unknown", "2.1.150 (Claude Code)", "2.1.258 (Claude Code)", "debug 2.1.306"):
+            self.assertFalse(launcher.compatible_claude_version(version), version)
+        for version in ("2.1.259 (Claude Code)", "2.1.306 (Claude Code)", "2.2.0", "3.0.0"):
+            self.assertTrue(launcher.compatible_claude_version(version), version)
+
+    def test_claude_version_probe_is_metadata_only_bounded_and_shell_free(self):
+        result = types.SimpleNamespace(returncode=0, stdout="2.1.306 (Claude Code)")
+        with patch.object(launcher.subprocess, "run", return_value=result) as run:
+            self.assertEqual(launcher.probe_claude_version("/fixture/claude"), result.stdout)
+        self.assertEqual(run.call_args.args[0], ["/fixture/claude", "--version"])
+        self.assertLessEqual(run.call_args.kwargs["timeout"], 1)
+        self.assertFalse(run.call_args.kwargs.get("shell", False))
+        with patch.object(launcher.subprocess, "run", side_effect=launcher.subprocess.TimeoutExpired("claude", 1)):
+            self.assertEqual(launcher.probe_claude_version("/fixture/claude"), "")
+
+    def test_claude_candidate_list_deduplicates_and_ignores_windows_wrappers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, new, shim = root / "old/claude.exe", root / "home/.local/bin/claude.exe", root / "old/claude.cmd"
+            for candidate in (old, new, shim):
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                candidate.touch()
+            candidates = launcher.claude_command_candidates(path=f"{old.parent};{old.parent}", home=root / "home", windows=True)
+            self.assertEqual(candidates, [str(old), str(new)])
+
+    def test_claude_discovery_never_overwrites_manual_or_stale_path(self):
+        allowed = dict(harness="claude-code", generation=4, current_generation=4, selected="/old/claude",
+                       original="/old/claude", manual=False, busy=False)
+        self.assertTrue(launcher.can_apply_claude_discovery(**allowed))
+        for changed in ({"manual": True}, {"selected": "/manual/claude"}, {"current_generation": 5},
+                        {"harness": "codex"}, {"busy": True}):
+            self.assertFalse(launcher.can_apply_claude_discovery(**{**allowed, **changed}))
+
+    def test_manual_path_edit_cancels_an_already_running_default_discovery(self):
+        fake = types.SimpleNamespace(harness="claude-code", setting_cli_path=False, codex=FixtureValue("/manual/claude"),
+            claude_manual_path=None, claude_discovery_generation=4, claude_discovery_pending=True,
+            busy=False, connector=None, status=FixtureValue(), _set_busy=MagicMock())
+        launcher.Launcher._cli_path_changed(fake)
+        self.assertEqual(fake.claude_manual_path, "/manual/claude")
+        self.assertFalse(fake.claude_discovery_pending)
+        launcher.Launcher._apply_claude_discovery(fake, 4, "/manual/claude", "/new/claude", True)
+        self.assertEqual(fake.codex.get(), "/manual/claude")
+
+    def test_discovery_updates_only_automatic_path_and_retains_an_unsupported_path(self):
+        fake = types.SimpleNamespace(harness="claude-code", setting_cli_path=False, codex=FixtureValue("/old/claude"),
+            claude_manual_path=None, claude_discovery_generation=4, claude_discovery_pending=True,
+            busy=False, connector=None, status=FixtureValue(), _set_busy=MagicMock())
+        launcher.Launcher._apply_claude_discovery(fake, 4, "/old/claude", "/new/claude", True)
+        self.assertEqual(fake.codex.get(), "/new/claude")
+        fake.claude_discovery_pending = True
+        launcher.Launcher._apply_claude_discovery(fake, 4, "/new/claude", "/other/claude", False)
+        self.assertEqual(fake.codex.get(), "/new/claude")
+        self.assertIn("2.1.259", fake.status.get())
+
+    def test_new_claude_handoff_resets_previous_local_file_consent(self):
+        fake = email_launcher_fixture()
+        fake.code_sync = FixtureValue(True)
+        fake.target_label, fake.cli_label, fake.codex = FixtureValue(), FixtureValue(), FixtureValue()
+        fake.title, fake._refresh_authorization_form = MagicMock(), MagicMock()
+        fake._discover_claude = MagicMock()
+        fake.code_sync_row, fake.model_settings = MagicMock(), MagicMock()
+        fake.codex_only_settings = []
+        with patch.object(launcher, "find_claude", return_value="/fixture/claude"):
+            launcher.Launcher._apply_link(fake, email_link(v="3", harness="claude-code", model="claude-sonnet-4-6"))
+        self.assertFalse(fake.code_sync.get())
+        self.assertEqual(fake.harness, "claude-code")
+        self.assertEqual(fake.codex.get(), "/fixture/claude")
+        fake.code_sync_row.pack.assert_called_once()
+
+    def test_claude_file_sync_requires_explicit_checkbox_consent(self):
+        fake = email_launcher_fixture()
+        fake.harness, fake.link_version = "claude-code", "3"
+        fake.model.set("claude-sonnet-4-6")
+        fake.code_sync = FixtureValue(True)
+        fake._paths = lambda: (Path("node.exe"), "claude.exe")
+        def thread(target, args=(), **_kwargs):
+            return types.SimpleNamespace(start=lambda: target(*args))
+        with patch.object(launcher, "bundled_connector", return_value=Path(__file__)), \
+                patch.object(launcher, "claim_email_authorization", return_value="gta_" + "x" * 43), \
+                patch.object(launcher.threading, "Thread", side_effect=thread), \
+                patch.object(launcher.subprocess, "Popen", return_value=MagicMock()) as spawn:
+            launcher.Launcher._connect(fake)
+        self.assertIn("--code-sync", spawn.call_args.args[0])
+
+    def test_v3_password_claim_launches_only_claude_connector(self):
+        fake = email_launcher_fixture()
+        fake.harness, fake.link_version = "claude-code", "3"
+        fake.model.set("claude-sonnet-4-6")
+        fake._paths = lambda: (Path("node.exe"), "claude.exe")
+
+        def thread(target, args=(), **_kwargs):
+            return types.SimpleNamespace(start=lambda: target(*args))
+
+        with patch.object(launcher, "bundled_connector", return_value=Path(__file__)) as selected, \
+                patch.object(launcher, "claim_email_authorization", return_value="gta_" + "x" * 43) as claim, \
+                patch.object(launcher.threading, "Thread", side_effect=thread), \
+                patch.object(launcher.subprocess, "Popen", return_value=MagicMock()) as spawn:
+            launcher.Launcher._connect(fake)
+        selected.assert_called_once_with("claude-code")
+        args, kwargs = spawn.call_args.args[0], spawn.call_args.kwargs
+        self.assertEqual(args[args.index("--claude-command") + 1], "claude.exe")
+        self.assertEqual(args[args.index("--model") + 1], "claude-sonnet-4-6")
+        self.assertNotIn("--code-sync", args)
+        self.assertFalse(kwargs["shell"])
+        self.assertEqual(fake.password.get(), "")
+        self.assertNotIn("private-fixture-password", repr(args))
+        self.assertEqual(claim.call_args.args[5], "Windows Claude Code Launcher")
+
+    def test_claude_plugin_configuration_uses_private_node_and_claude_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / "claude-marketplace/plugins/gatherthread"
+            for file in (".claude-plugin/plugin.json", "scripts/hook-forwarder.mjs", "scripts/mcp-launcher.mjs"):
+                path = plugin / file
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("fixture")
+            (plugin / "hooks").mkdir()
+            (plugin / "hooks/hooks.json").write_text(json.dumps({"hooks": {
+                "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "old-node"}]}]}}))
+            launcher.configure_claude_plugin(root)
+            mcp = json.loads((plugin / ".mcp.json").read_text())
+            self.assertEqual(mcp["mcpServers"]["gatherthread"]["command"], str(root / "runtime/node.exe"))
+            self.assertIn("${CLAUDE_PLUGIN_ROOT}", (plugin / "hooks/hooks.json").read_text())
+            self.assertNotIn("old-node", (plugin / "hooks/hooks.json").read_text())
+
+    def test_v3_selects_exact_harness_and_keeps_account_handoff(self):
+        for harness in ("claude-code", "codex"):
+            parsed = launcher.parse_link(email_link(v="3", harness=harness,
+                                                    model="claude-sonnet-4-6" if harness == "claude-code" else "gpt-6-sol"))
+            self.assertEqual(parsed[5:], ("tester+desktop@example.com", AUTHORIZATION_ID, harness))
+        self.assertEqual(len(launcher.parse_link(email_link())), 7)
+
+    def test_harness_selection_is_strict_and_cannot_change_legacy_links(self):
+        for changes in ({"v": "3"}, {"v": "3", "harness": "other"},
+                        {"v": "3", "harness": "Claude-Code"}, {"harness": "claude-code"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                launcher.parse_link(email_link(**changes))
+
+    def test_claude_connector_args_do_not_launch_codex_or_bypass_permissions(self):
+        args = launcher.connector_args(Path("node"), Path("claude-connect.js"), launcher.TEST_SERVER_ORIGIN,
+                                       "project-example", "claude-sonnet-4-6", 65536, "never", "claude.exe",
+                                       harness="claude-code")
+        self.assertIn("--claude-command", args)
+        self.assertNotIn("--codex-command", args)
+        self.assertIn("--plugin-hooks", args)
+        self.assertNotIn("--code-sync", args)
+        approved = launcher.connector_args(Path("node"), Path("claude-connect.js"), launcher.TEST_SERVER_ORIGIN,
+                                           "project-example", "claude-sonnet-4-6", 65536, "never", "claude.exe",
+                                           harness="claude-code", code_sync=True)
+        self.assertIn("--code-sync", approved)
+        self.assertNotIn("--visible-history-sync", args)
+        self.assertNotIn("--context-window-tokens", args)
+        self.assertNotIn("--dangerously-skip-permissions", args)
+
+    def test_bundled_connector_path_selects_exact_harness(self):
+        self.assertEqual(launcher.bundled_connector("claude-code").name, "claude-connect.js")
+        self.assertEqual(launcher.bundled_connector().name, "codex-connect.js")
+        with self.assertRaises(ValueError):
+            launcher.bundled_connector("unknown")
+
+    def test_claude_model_alias_or_other_harness_model_cannot_cross_launcher_boundary(self):
+        for model in ("sonnet", "opus", "haiku", "default", "gpt-6-sol", "claude-", "claude-model with spaces"):
+            with self.subTest(model=model), self.assertRaises(ValueError):
+                launcher.parse_link(email_link(v="3", harness="claude-code", model=model))
+
+    def test_claude_plugin_install_uses_official_explicit_commands(self):
+        commands = launcher.plugin_install_commands("claude.exe", Path("C:/Launcher"), "claude-code")
+        self.assertEqual(commands[0][1:4], ["plugin", "marketplace", "add"])
+        self.assertEqual(commands[1][1:], ["plugin", "install", "gatherthread@gatherthread-launcher-claude", "--scope", "user"])
+        self.assertNotIn("--dangerously-skip-permissions", " ".join(sum(commands, [])))
+
+
 if __name__ == "__main__":
     unittest.main()

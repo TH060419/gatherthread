@@ -52,7 +52,7 @@ export function mountGithubCodeSync({ document: doc, api, localizer, confirm, mo
     el("github-code-device").hidden = !connection || stage !== "device";
     const runtimes = codeRuntimeChoices(context);
     const options = [{ value: "", label: t("Choose a local Agent device") }, ...runtimes.map((runtime) => ({
-      value: runtime.id, label: `${runtime.harness === "codex" ? "Codex" : "DeepSeek Harness"} · ${context.devices?.find((device) => device.id === runtime.deviceId)?.name ?? runtime.deviceId ?? t("Unnamed device")}`,
+      value: runtime.id, label: `${runtime.harness === "codex" ? "Codex" : runtime.harness === "claude-code" ? "Claude Code" : "DeepSeek Harness"} · ${context.devices?.find((device) => device.id === runtime.deviceId)?.name ?? runtime.deviceId ?? t("Unnamed device")}`,
     }))];
     if (state.runtimeId && !runtimes.some((runtime) => runtime.id === state.runtimeId)) options.push({ value: state.runtimeId, label: t("Selected device is offline") });
     const select = el("github-code-runtime");

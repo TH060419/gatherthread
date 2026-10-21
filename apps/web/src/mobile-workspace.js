@@ -13,7 +13,7 @@ export function usesMobileWorkspace(navigator, width) {
 }
 
 export function mobileAgentLabel(harness, effort, t = text => text) {
-  const agent = harness === "shared" ? t("Shared Agent") : harness === "cloud" ? t("Cloud") : harness === "deepseek-harness" ? "DSH" : "Codex";
+  const agent = harness === "shared" ? t("Shared Agent") : harness === "cloud" ? t("Cloud") : harness === "claude-code" ? "Claude" : harness === "deepseek-harness" ? "DSH" : "Codex";
   return effort ? `${agent} · ${t(effort)}` : agent;
 }
 
@@ -155,7 +155,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     for (const note of doc.querySelectorAll(".mobile-device-note")) note.hidden = !mobileDevice || !active;
     const harnessSelect = el("agent-harness-select"), rawHarness = harnessSelect.value;
     const harness = rawHarness.startsWith('["shared",') ? "shared" : rawHarness;
-    const effortSelect = el(harness === "shared" ? "agent-sharing-effort" : harness === "deepseek-harness" ? "agent-dsh-effort-select" : "agent-effort-select");
+    const effortSelect = el(harness === "shared" ? "agent-sharing-effort" : ["deepseek-harness", "claude-code"].includes(harness) ? "agent-dsh-effort-select" : "agent-effort-select");
     const effort = harness === "cloud" || effortSelect?.hidden || effortSelect?.closest("[hidden]") ? "" : effortSelect?.value;
     const sharedLabel = harness === "shared" ? harnessSelect.selectedOptions[0]?.textContent : null;
     el("mobile-agent-label").textContent = sharedLabel ? `${sharedLabel}${effort ? ` · ${t(effort)}` : ""}` : mobileAgentLabel(harness, effort, t);

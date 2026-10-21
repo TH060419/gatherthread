@@ -227,6 +227,8 @@ GitHub file-write receipts are small metadata, not source snapshots. A per-user/
 
 ## MCP and local relay boundaries
 
+Claude adds an optional validated `claude-code` local relay namespace; omitting it retains the legacy Codex endpoint. Its plugin MCP discovers only the selected workspace/harness, not an arbitrary matching global registration. This changes no bearer, ACL, canonical event or claim authority. Claude's native Hook envelope is distinct from Codex's `turn_id`/model contract and must never be interpreted as a Codex Hook. [ADR-0060](adr/0060-claude-code-plugin-and-local-connector.md) owns these integration decisions.
+
 The published MCP surface is intentionally narrower than the internal collaboration API.
 
 - User-facing tools/resources expose authorized project/session discovery, canonical event reads/writes, and explicit local sync controls.
@@ -260,6 +262,8 @@ Hosted memory, explicit single-CPU cpuset and Docker-client settings are private
 The Cloud Git dialog keeps `project-code-button` and `project-code-dialog` as its single entry/container. `code-provider-gt-cloud` and `code-provider-github` select peer views with `aria-pressed` and `aria-controls`; switching views has no repository mutation. Existing `github-code-*` local controls are retained. Private `cloud-github-*` account/task controls are inline in the GitHub view; the preview's separate `cloud-github-dialog`, `cloud-github-open`, `settings-cloud-github-open` and close button are removed with their bindings. The current release opens the shared Cloud Agent Web entry for trial and eligible repository tasks without changing their separately configured server enablement, exact profile routing or default local Codex selection, as specified in [Product specification](PRODUCT_SPEC.md).
 
 ### Windows/macOS Codex Launcher URI v1/v2
+
+The Claude-compatible source Launcher additionally accepts v3: exactly the v2 fields plus `harness=codex|claude-code`. Web continues emitting v2 for the unchanged Codex flow and emits v3 for Claude. Unsupported/duplicate/unknown harness fields fail closed. v3 routes locally to the separately bundled connector/plugin; it reuses the same password-protected account/project handoff and does not claim the existing grant is harness-bound. Old installed Launchers will reject v3 and must be updated using matching reviewed artifacts. No old Release asset is silently overwritten. Shared contract vectors cover all three versions.
 
 Windows and macOS Launchers use `gatherthread-connect://connect`. The primary Web flow emits v2 with the six original settings plus `email` and `authorization_id`. It is offered only on the exact HTTPS production/test origins for desktop Windows/macOS, never phones/tablets. Terminal instructions are collapsed on supported desktops and remain available for Linux/self-hosted instances. The Windows handler and branded shortcut are per-user; macOS uses its `.app` URL Scheme. The browser cannot assume installation.
 

@@ -4,6 +4,14 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Add a source-preview Claude Code connector, native commands/MCP tools and
+  separately reviewed Hooks, with exact device/model routing, streamed public
+  work, Pause/Resume and per-conversation upload consent. Extend the Windows/Mac
+  Launcher handoff without changing existing Codex links, and reuse the separate
+  project-file synchronization controls. Matching installers/npm artifacts must
+  be published before this source feature is available in existing downloads.
+  See [Claude Code setup](docs/CLAUDE_CODE.md) and [ADR-0060](docs/adr/0060-claude-code-plugin-and-local-connector.md).
+
 ## [0.1.0-beta.3] - 2026-10-21
 
 Beta 3 packages the reviewed main-branch changes since Beta 2 for the authorized
