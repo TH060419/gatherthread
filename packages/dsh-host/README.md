@@ -121,9 +121,10 @@ bounded retries.
 Host and browser lifecycles are intentionally separate. Disabling the Host
 Loader entry immediately unregisters the status and RPC routes. Client bundle HMR uses
 the official client-module SSE/fiber refresh path, which drains the previous
-Slot and timer before registering one replacement. At this pinned DSH version,
-adding or removing a package from the client graph is observed by a newly loaded
-page; it is not treated as Host-entry disposal.
+Slot and timer before registering one replacement. The earlier `0.1.7-rc.2`
+native/browser gate checked that adding or removing a package from the client
+graph is observed by a newly loaded page, not treated as Host-entry disposal.
+That complete flow has not yet been re-run with the new `0.2.1-rc.2` pin.
 
 ## Project binding
 
