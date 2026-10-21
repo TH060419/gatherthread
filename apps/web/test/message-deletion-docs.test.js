@@ -86,7 +86,7 @@ test("desktop and compact beginner guides retain the author's trash control in t
   for (const layout of ["desktop", "mobile"]) {
     const basics = guideSteps("basics", { layout });
     const answer = basics.find(item => item.id === "answer");
-    assert.equal(basics.length, 14);
+    assert.equal(basics.length, 16);
     assert.match(answer.text[0], /trash icon.*your message or AI reply/);
     assert.match(answer.text[1], /垃圾桶.*自己的消息或 AI 回复/);
     const original = guideSteps("summaries", { layout }).find(item => item.id === "original");
