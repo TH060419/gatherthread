@@ -41,7 +41,7 @@ send({type:'stream_event',session_id,event:{type:'content_block_delta',index:0,d
 if(mode==='rich'){
 for(const delta of ['token=','gta_0123456789012345678901234567890123456789',' visible\\n'])send({type:'stream_event',session_id,event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:delta}}});
 send({type:'assistant',session_id,message:{model:'claude-sonnet-fixture',content:[{type:'tool_use',id:'native-tool-private',name:'Read',input:{file_path:process.cwd()+'/app.ts',privateInstructions:'DO_NOT_SHARE',password:'TEST_SECRET'}}]}});
-send({type:'user',session_id,message:{content:[{type:'tool_result',tool_use_id:'native-tool-private',content:'public result password=veryprivate',is_error:true}]}});
+send({type:'user',session_id,message:{content:[{type:'tool_result',tool_use_id:'native-tool-private',content:'PRIVATE_INSTRUCTION_SENTINEL from /Users/synthetic/private/CLAUDE.md password=veryprivate',is_error:true}]}});
 send({type:'assistant',session_id,message:{model:'claude-sonnet-fixture',content:[{type:'tool_use',id:'native-plan-private',name:'TodoWrite',input:{todos:[{content:'Run tests',status:'in_progress'}]}}]}});
 send({type:'assistant',session_id,message:{model:'claude-sonnet-fixture',content:[{type:'tool_use',id:'native-task-create',name:'TaskCreate',input:{subject:'Check files'}}]}});
 send({type:'user',session_id,message:{content:[{type:'tool_result',tool_use_id:'native-task-create',content:'Task #1 created successfully'}]}});
@@ -107,6 +107,21 @@ test("Claude prompt honors the derived context and excludes deleted content and 
   const folded = renderClaudeCanonicalPrompt(request);
   assert.match(folded, /Summary only/);
   assert.doesNotMatch(folded, /Public context|ERASED_BODY/);
+});
+
+test("Claude requests preserve the exact public quote independently of a summarized context", () => {
+  const request = input();
+  request.request.replyTo = "history-1";
+  request.historyContext = { view: "summary", through_sequence: 1, content_revision: 0,
+    items: [{ kind: "summary", event_id: "summary-1", sequence: 1, actor_user_id: "user-2", content: "Folded public discussion", source_event_ids: ["history-1"] }] };
+  const quoted = renderClaudeCanonicalPrompt(request);
+  assert.match(quoted, /"event_id":"history-1"/);
+  assert.match(quoted, /"content":"Public context"/);
+  request.request.replyTo = "unavailable-message";
+  assert.notEqual(renderClaudeCanonicalPrompt(request), quoted);
+  request.request.replyTo = "history-1";
+  request.canonicalHistory[0]!.deleted = { deletedAt: "2026-10-21T00:00:01Z", reason: "author" };
+  assert.doesNotMatch(renderClaudeCanonicalPrompt(request), /Public context/);
 });
 
 test("Claude refuses a wrong route before spawning or persisting a run", async () => {
@@ -181,10 +196,26 @@ test("Claude live answer, tools and actual plans interleave without hidden work,
   assert.ok(result.events.some(event => event.kind === "tool_call" && event.toolName === "Read"));
   assert.ok(updates.some(update => update.streamKind === "tool"));
   assert.ok(updates.some(update => update.streamKind === "plan" && update.plan?.some(step => step.status === "completed")));
-  assert.doesNotMatch(JSON.stringify(updates), /native-tool-private|native-plan-private|HIDDEN_THINKING|UNRELATED_SUBAGENT|DO_NOT_SHARE|gta_012345|veryprivate/);
+  assert.doesNotMatch(JSON.stringify(updates), /native-tool-private|native-plan-private|HIDDEN_THINKING|UNRELATED_SUBAGENT|DO_NOT_SHARE|gta_012345|veryprivate|PRIVATE_INSTRUCTION_SENTINEL|\/Users\/synthetic\/private/);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_INSTRUCTION_SENTINEL|\/Users\/synthetic\/private/);
   const noTools = new ClaudeCodeCliExecutor({ ...options, statePath: `${options.statePath}.no-tools`, shareToolEvents: false, permissionMode: "plan" });
   const answerOnly = await noTools.execute(input());
   assert.deepEqual(answerOnly.events.map(event => event.kind), ["assistant"]);
+});
+
+test("a silent Claude process cannot fabricate activity to renew its claim", async t => {
+  const { executor, capture } = await fixture("hang");
+  const controller = new AbortController(), updates: HarnessProgressUpdate[] = [];
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const pending = executor.execute({ ...input(), signal: controller.signal,
+    publishProgress: async update => { updates.push(update); } });
+  const stopped = assert.rejects(pending, /stopped/);
+  try {
+    await waitForCapture(capture);
+    t.mock.timers.tick(31_000);
+    await Promise.resolve();
+  } finally { controller.abort(); await stopped; t.mock.timers.reset(); }
+  assert.deepEqual(updates, []);
 });
 
 test("malformed-output failure and close both force-stop a process that ignores SIGTERM", async t => {

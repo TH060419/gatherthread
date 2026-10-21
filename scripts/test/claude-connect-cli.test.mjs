@@ -34,6 +34,14 @@ test("Claude Hook projection strips provider metadata, private instructions and 
   assert.throws(() => normalizeClaudeNativeHookEvent({ ...event, cwd: path.dirname(root) }, root), /Unbound/u);
   assert.throws(() => normalizeClaudeNativeHookEvent({ ...event, prompt: "x".repeat(65537) }, root), /Invalid/u);
 });
+test("terminal Claude metadata survives an uncapturable answer or invalid proof path", () => {
+  const stop = { hook_event_name: "Stop", session_id: randomUUID(), cwd: root,
+    last_assistant_message: "x".repeat(262145), transcript_path: "not-an-absolute-path" };
+  const normalized = normalizeClaudeNativeHookEvent(stop, root);
+  assert.equal(normalized.hook_event_name, "Stop");
+  assert.equal(normalized.last_assistant_message, undefined);
+  assert.equal(normalized.transcript_path, undefined);
+});
 
 test("Claude native private state rejects a symlink in any state ancestor", async () => {
   const temporary = await realpath(await mkdtemp(process.platform === "darwin" ? "/private/tmp/gch-link-" : "/tmp/gch-link-"));
@@ -73,13 +81,15 @@ test("Claude Hook blocks only an authenticated explicit prompt conflict and keep
   const temporary = await realpath(await mkdtemp("/tmp/gch-block-")), workspacePath = path.join(temporary, "w"), homeDirectory = path.join(temporary, "h");
   await Promise.all([workspacePath, homeDirectory].map(directory => mkdir(directory)));
   let mode = "block";
-  const relay = new ClaudeNativeHookRelay({ workspacePath, homeDirectory, onEvent: async () => {
+  const received = [];
+  const relay = new ClaudeNativeHookRelay({ workspacePath, homeDirectory, onEvent: async event => {
+    received.push(event);
     if (mode === "throw") throw new Error("PRIVATE_TRANSPORT_DIAGNOSTIC");
     return mode === "block" ? { block: true, reason: "PRIVATE_INTERNAL_STATE", additionalContext: "PRIVATE_CONFLICT_CONTEXT" }
       : { additionalContext: "Public shared context" };
   } });
   await relay.start(); t.after(() => relay.close());
-  const forward = name => new Promise((resolve, reject) => {
+  const forward = (name, body = {}) => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(root, "plugins/gatherthread-claude/scripts/hook-forwarder.mjs")], {
       env: { ...process.env, HOME: homeDirectory, USERPROFILE: homeDirectory }, stdio: ["pipe", "pipe", "pipe"],
     });
@@ -88,7 +98,7 @@ test("Claude Hook blocks only an authenticated explicit prompt conflict and keep
     child.stdout.on("data", value => { stdout += value; }); child.stderr.on("data", value => { stderr += value; });
     child.once("error", reject); child.once("close", status => resolve({ status, stdout, stderr }));
     child.stdin.end(JSON.stringify({ hook_event_name: name, session_id: randomUUID(), cwd: workspacePath,
-      prompt: "Public prompt", last_assistant_message: "Public answer", block: true, reason: "PRIVATE_INJECTED_REASON" }));
+      prompt: "Public prompt", last_assistant_message: "Public answer", block: true, reason: "PRIVATE_INJECTED_REASON", ...body }));
   });
   const blocked = await forward("UserPromptSubmit");
   assert.equal(blocked.status, 0); assert.equal(blocked.stderr, "");
@@ -103,4 +113,7 @@ test("Claude Hook blocks only an authenticated explicit prompt conflict and keep
   assert.deepEqual(JSON.parse((await forward("UserPromptSubmit")).stdout), {
     hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "Public shared context" },
   });
+  assert.deepEqual(JSON.parse((await forward("Stop", { last_assistant_message: "x".repeat(300000) })).stdout), {});
+  assert.equal(received.at(-1).hook_event_name, "Stop");
+  assert.equal(received.at(-1).last_assistant_message, undefined);
 });

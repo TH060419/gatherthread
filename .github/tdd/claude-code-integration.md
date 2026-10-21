@@ -90,7 +90,28 @@ and the assertion that the process is dead. The corrected executor file passed
 all 24 tests; the unchanged password-reset file passed all 5 in an isolated run.
 No assertion, product limit or test was removed. A fresh single-run full-suite
 pass is still required before treating the canonical release gate as green;
-targeted reruns are not presented as that evidence.
+targeted reruns are not presented as that evidence. A subsequent PR-preparation
+serial run completed with 1,283 tests: 1,277 passed, zero failed and six skipped.
+This clean run predates the additional independent-review fixes below; its
+counts are not attributed to the later revision.
+
+## PR review follow-up
+
+Independent Standards and Spec reviews identified native manual-command
+ordering, exact saved-profile drift, terminal cleanup, failed-turn context
+cursor recovery, and overly broad/generated work telemetry. New synthetic
+regressions reproduced the failures before correction. Explicit manual upload
+now flushes only completed outbox entries even during its own native command;
+active drafts remain private. Claude profiles refuse passive model/effort
+replacement without changing existing DSH behavior. Terminal Hook metadata
+releases draft/activity state even when the answer cannot be captured, and
+failed turns preserve the previously committed context cursor. Tool results
+share fixed completion status rather than raw bodies; silent processes generate
+no fabricated work progress. Claude requests also retain their explicit public
+quote independently of a summary, without restoring erased content.
+
+Follow-up verification and review are recorded against the new PR revision;
+neither the original review nor earlier green counts certify a changed tree.
 
 The browser check uses only the local MockCollaborationApi with synthetic data.
 It covers desktop enablement and connection dialog, the missing-Claude refusal

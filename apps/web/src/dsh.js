@@ -80,6 +80,10 @@ export function resolveDshRuntime(runtimes, devices, profile, harness = DSH_HARN
       : choices.find((runtime) => runtime.deviceId === profile.deviceId
         && runtime.provider === profile.provider
         && runtime.model === profile.model);
+    if (selected && harness === "claude-code") {
+      try { assertClaudeProfileAvailable(selected, profile); }
+      catch { return { runtime: null, choices, reason: "The selected Claude Code runtime is unavailable." }; }
+    }
     if (selected?.status === "online") return { runtime: selected, choices, reason: "" };
     if (selected) return { runtime: null, choices, reason: `The selected ${nativeName} runtime is offline.` };
     return { runtime: null, choices, reason: `The selected ${nativeName} runtime is unavailable.` };
@@ -147,6 +151,7 @@ export function dshExecutionSelection(runtime, requested, harness = DSH_HARNESS)
   if (!normalized || normalized.status !== "online") {
     throw new Error("A matching online DeepSeek Harness runtime is required.");
   }
+  if (harness === "claude-code") assertClaudeProfileAvailable(normalized, requested);
   const profiles = normalized.executionProfiles ?? [];
   if (profiles.length === 0) {
     return {
@@ -178,6 +183,7 @@ export function dshExecutionProfile(runtime, selection, harness = DSH_HARNESS) {
   if (!normalized || normalized.status !== "online") {
     throw new Error("A matching online DeepSeek Harness runtime is required.");
   }
+  if (harness === "claude-code") assertClaudeProfileAvailable(normalized, selection);
   const profiles = normalized.executionProfiles ?? [];
   if (profiles.length === 0) {
     return {
@@ -203,6 +209,21 @@ export function dshExecutionProfile(runtime, selection, harness = DSH_HARNESS) {
     ...(reasoningEffort ? { reasoningEffort } : {}),
     runtimeId: normalized.id,
   };
+}
+
+function assertClaudeProfileAvailable(runtime, requested) {
+  const provider = safeText(requested?.provider, 80);
+  const model = safeText(requested?.model, 160);
+  const effort = safeText(requested?.reasoningEffort ?? requested?.effort, 80);
+  const profiles = runtime.executionProfiles ?? [];
+  const selected = profiles.length ? profiles.find(profile => profile.provider === (provider || runtime.provider)
+    && profile.model === (model || runtime.model)) : runtime;
+  if (!selected || (provider && selected.provider !== provider) || (model && selected.model !== model)) {
+    throw new Error("The selected Claude Code model profile is unavailable. Select a connected profile explicitly.");
+  }
+  if (effort && !(selected.reasoningEfforts ?? []).includes(effort)) {
+    throw new Error("The selected Claude Code reasoning effort is unavailable. Select a connected profile explicitly.");
+  }
 }
 
 function normalizeExecutionProfiles(value) {

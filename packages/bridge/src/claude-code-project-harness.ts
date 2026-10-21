@@ -114,7 +114,7 @@ export class ClaudeCodeProjectHarness implements ProjectHarnessAdapter {
       }),
       uploadLocalTurns: ({ api, runtime }) => serial(async () => {
         const state = await this.#state(current);
-        if (state.draft || executor.isActive()) throw new Error("Wait for the active Claude turn to finish before uploading local turns");
+        if (executor.isActive()) throw new Error("Wait for the active remote Claude execution to finish before uploading local turns");
         const uploadedLocalTurns = await this.#flush(current, api, runtime, true);
         return { ...await this.#status(current), discoveredLocalTurns: uploadedLocalTurns, uploadedLocalTurns };
       }),
@@ -138,8 +138,15 @@ export class ClaudeCodeProjectHarness implements ProjectHarnessAdapter {
       reason: "GatherThread is synchronizing local project files or running a remote Claude request. Wait for it to finish, then submit this prompt again." });
     if (prompt) this.#pendingNativePrompts++;
     const run = async () => {
-      try { return await this.#handleHook(event, control); }
-      finally { if (prompt) this.#pendingNativePrompts--; }
+      let terminalId: string | undefined;
+      try {
+        if (record(event) && ["Stop", "StopFailure", "SessionEnd"].includes(text(event.hook_event_name)) && UUID.test(text(event.session_id))
+          && typeof event.cwd === "string" && await validateClaudeWorkspace(event.cwd) === await validateClaudeWorkspace(this.#options.workspacePath)) terminalId = text(event.session_id);
+        return await this.#handleHook(event, control);
+      } finally {
+        if (prompt) this.#pendingNativePrompts--;
+        if (terminalId) { this.#nativeActivities.delete(terminalId); await this.#clearTerminalDraft(terminalId); }
+      }
     };
     const operation = this.#hookQueue.then(run, run);
     this.#hookQueue = operation.catch(() => undefined);
@@ -228,10 +235,11 @@ export class ClaudeCodeProjectHarness implements ProjectHarnessAdapter {
         if (state.draft.promptDigest !== hash(text(event.prompt))) throw new Error("A prior native Claude prompt is unfinished; no second turn was captured");
         return { handled: true, additionalContext: state.draft.additionalContext };
       }
+      if (state.outbox.length >= 200) throw new Error("Claude local outbox is full; upload pending turns before sharing another turn");
       const capsule = nativeContextCapsule(context, state.nativeContextCursor, state.ownEventIds);
       const next: BindingState = { ...state, draft: { id: randomUUID(), prompt: redactText(text(event.prompt)), occurredAt: new Date().toISOString(),
         basedOnSequence: context.through_sequence, contentRevision: context.content_revision ?? 0,
-        additionalContext: capsule, promptDigest: hash(text(event.prompt)) }, nativeContextIdentity: identity, nativeContextCursor: context.through_sequence };
+        additionalContext: capsule, promptDigest: hash(text(event.prompt)) }, nativeContextIdentity: identity };
       // Reserve one MiB for the bounded final answer/proof before accepting a new
       // prompt. Refusal preserves every previously pending turn and its cursor.
       if (Buffer.byteLength(JSON.stringify(next)) > 3 * 1024 * 1024) throw new Error("Claude local outbox storage is nearly full; upload pending turns before starting another shared turn");
@@ -250,7 +258,7 @@ export class ClaudeCodeProjectHarness implements ProjectHarnessAdapter {
       proof: { transcriptPath: text(event.transcript_path), nativeSessionId: nativeId, promptDigest: draft.promptDigest,
         answerDigest: hash(event.last_assistant_message), startedAt: draft.occurredAt, endedAt: new Date().toISOString(),
         ...(transcriptAnchor ? { transcriptAnchor } : {}) } };
-    const next = { ...state, outbox: [...state.outbox, captured] }; delete next.draft;
+    const next = { ...state, nativeContextCursor: draft.basedOnSequence, outbox: [...state.outbox, captured] }; delete next.draft;
     await writeClaudePrivateJson(current.statePath, next); current.state = next;
     if (state.automaticUpload) {
       const runtime = await api.registerRuntime({ sessionId: session.id, deviceId: control.actorDeviceId, harness: "claude-code", provider: "anthropic",
@@ -296,16 +304,39 @@ export class ClaudeCodeProjectHarness implements ProjectHarnessAdapter {
 
   async #save(binding: Binding): Promise<void> { await writeClaudePrivateJson(binding.statePath, await this.#state(binding)); }
 
+  async #clearTerminalDraft(nativeId: string): Promise<void> {
+    const sessionId = (await this.#nativeIndex()).routes[nativeId];
+    if (!sessionId) return;
+    const current = this.#bindings.get(sessionId);
+    if (!current) {
+      const file = path.join(this.#options.stateRoot, `${hash(sessionId).slice(0, 24)}-claude-native.json`);
+      const state = await readClaudePrivateJson(file);
+      if (record(state) && state.nativeSessionId === nativeId && state.draft !== undefined) {
+        delete state.draft; await writeClaudePrivateJson(file, state);
+      }
+      return;
+    }
+    const previous = current.queue;
+    let release!: () => void;
+    current.queue = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try {
+      const state = await this.#state(current);
+      if (state.nativeSessionId === nativeId && state.draft) { delete state.draft; await this.#save(current); }
+    } finally { release(); }
+  }
+
   async #status(binding: Binding): Promise<LocalConversationSyncStatus> {
     const state = await this.#state(binding);
     return { sessionId: binding.session.id, localSessionId: binding.binding.localSessionId, automaticUpload: state.automaticUpload,
-      pendingLocalTurns: state.outbox.length, uploadableLocalTurns: state.draft ? 0 : state.outbox.length };
+      pendingLocalTurns: state.outbox.length, uploadableLocalTurns: binding.executor.isActive() ? 0 : state.outbox.length };
   }
 
   async #flush(binding: Binding, api: CollaborationApi, runtime: RegisteredRuntime, manual: boolean): Promise<number> {
     const state = await this.#state(binding);
     if ((!manual && !state.automaticUpload) || !state.outbox.length) return 0;
-    if (!binding.publishing || state.draft || binding.executor.isActive() || runtime.sessionId !== binding.session.id || runtime.harness !== "claude-code") throw new Error("Claude local publication is inactive or busy");
+    if (!manual && state.draft) return 0;
+    if (!binding.publishing || binding.executor.isActive() || runtime.sessionId !== binding.session.id || runtime.harness !== "claude-code") throw new Error("Claude local publication is inactive or busy");
     if (!api.commitLocalTurn || !api.readContext) throw new Error("Claude local upload requires the current atomic local-turn API");
     let count = 0;
     while (state.outbox.length) {

@@ -33,8 +33,9 @@ try {
     if (typeof input.prompt !== "string" || Buffer.byteLength(input.prompt) > 65536) throw new Error();
     event.prompt = input.prompt;
   } else if (input.hook_event_name === "Stop") {
-    if (typeof input.last_assistant_message !== "string" || Buffer.byteLength(input.last_assistant_message) > 262144) throw new Error();
-    event.last_assistant_message = input.last_assistant_message;
+    // Always deliver bound terminal metadata, even when its body cannot be
+    // captured. Otherwise an oversized answer leaves file sync busy forever.
+    if (typeof input.last_assistant_message === "string" && Buffer.byteLength(input.last_assistant_message) <= 128 * 1024) event.last_assistant_message = input.last_assistant_message;
     event.stop_hook_active = input.stop_hook_active === true;
     if (typeof input.transcript_path === "string" && input.transcript_path.length <= 4096 && !/[\r\n\0]/u.test(input.transcript_path)) event.transcript_path = input.transcript_path;
   } else if (input.hook_event_name === "SessionStart") {

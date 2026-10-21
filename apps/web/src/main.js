@@ -4234,7 +4234,9 @@ function updateComposerDshRuntime() {
     renderComposerPermissions();
     return;
   }
-  const executionSelection = nativeExecutionSelection(selected, nativeProjectProfile(state.settings, state.project.id));
+  // Choosing a device is explicit consent to its currently advertised Claude
+  // profile. Passive refresh and unrelated settings saves keep the old pin.
+  const executionSelection = nativeExecutionSelection(selected, selected.harness === "claude-code" ? null : nativeProjectProfile(state.settings, state.project.id));
   state.settings = settingsStore.set(withNativeProjectProfile(
     state.settings,
     state.project.id,
@@ -4402,7 +4404,7 @@ function readSettingsForm(baseSettings = settingsPreview) {
       const selected = dshRuntimeChoices(state.executionRuntimes, state.devices, element("settings-agent-harness").value)
         .find((runtime) => runtime.id === element("settings-dsh-runtime").value && runtime.status === "online");
       if (selected) {
-        const executionSelection = nativeExecutionSelection(selected, nativeProjectProfile(next, state.project.id));
+        const executionSelection = nativeExecutionSelection(selected, selected.harness === "claude-code" ? null : nativeProjectProfile(next, state.project.id));
         next = withNativeProjectProfile(next, state.project.id, dshStoredProjectProfile(selected, executionSelection));
       }
     }

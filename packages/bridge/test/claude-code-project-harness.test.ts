@@ -11,6 +11,50 @@ import type { CollaborationApi, CommitLocalTurnInput, HarnessExecutionInput, Pro
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const project: ProjectSummary = { id: "project-1", name: "Test", role: "owner", state: "active", sessionCount: 0 };
 
+async function nativeContextFixture() {
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "gt-claude-terminal-"))), sessions: SessionSummary[] = [];
+  const api = {
+    async listProjects() { return [project]; }, async listProjectSessions() { return sessions; },
+    async createSession(_id: string, body: { title: string; mode: "solo"; idempotencyKey: string }) {
+      const session: SessionSummary = { id: `session-${hash(`user-1\0${body.idempotencyKey}`).slice(0, 32)}`,
+        name: body.title, mode: body.mode, projectId: project.id, ownerUserId: "user-1", state: "active", latestSequence: 1 };
+      sessions.push(session); return session;
+    },
+    async readContext() { return { view: "summary", through_sequence: 1, content_revision: 0,
+      items: [{ kind: "original", event_id: "chat-1", sequence: 1, actor_user_id: "user-2", content: "UNDISPATCHED_CONTEXT_SENTINEL" }] }; },
+  } as unknown as CollaborationApi;
+  const harness = new ClaudeCodeProjectHarness({ workspacePath: dir, stateRoot: path.join(dir, "private"), model: "claude-sonnet-fixture" });
+  const session_id = randomUUID(), control = { api, actorUserId: "user-1", actorDeviceId: "device-1", project };
+  return { harness, event: { session_id, cwd: dir }, control };
+}
+
+test("rejected terminal Claude capture releases activity and preserves context for another prompt", async t => {
+  for (const answer of ["", "x".repeat(128 * 1024 + 1), undefined]) await t.test(answer === undefined ? "missing" : answer ? "oversized" : "empty", async () => {
+    const { harness, event, control } = await nativeContextFixture();
+    try {
+      await harness.handleNativeHook({ ...event, hook_event_name: "UserPromptSubmit", prompt: "First question" }, control);
+      await harness.handleNativeHook({ ...event, hook_event_name: "Stop", last_assistant_message: answer }, control).catch(() => undefined);
+      assert.equal(await harness.isWorkspaceBusy(), false);
+      assert.equal(await harness.withWorkspaceOperation(async () => "available"), "available");
+      const retry = await harness.handleNativeHook({ ...event, hook_event_name: "UserPromptSubmit", prompt: "Next question" }, control);
+      assert.match(retry.additionalContext ?? "", /UNDISPATCHED_CONTEXT_SENTINEL/);
+    } finally { await harness.close(); }
+  });
+});
+
+test("failed native prompts never advance the shared-context delivery cursor", async t => {
+  for (const terminal of ["StopFailure", "SessionEnd"]) await t.test(terminal, async () => {
+    const { harness, event, control } = await nativeContextFixture();
+    try {
+      const lost = await harness.handleNativeHook({ ...event, hook_event_name: "UserPromptSubmit", prompt: "Lost Hook response" }, control);
+      assert.match(lost.additionalContext ?? "", /UNDISPATCHED_CONTEXT_SENTINEL/);
+      await harness.handleNativeHook({ ...event, hook_event_name: terminal }, control);
+      const retry = await harness.handleNativeHook({ ...event, hook_event_name: "UserPromptSubmit", prompt: "Retry question" }, control);
+      assert.match(retry.additionalContext ?? "", /UNDISPATCHED_CONTEXT_SENTINEL/);
+    } finally { await harness.close(); }
+  });
+});
+
 test("Claude native Hooks create only generic Solo metadata, keep upload off, inject context and upload a completed turn idempotently", async () => {
   const dir = await realpath(await mkdtemp(path.join(tmpdir(), "gt-claude-hooks-")));
   const sessions: SessionSummary[] = [];
@@ -103,6 +147,48 @@ test("Claude native hook refuses another workspace and never creates cloud state
   const result = await harness.handleNativeHook({ hook_event_name: "UserPromptSubmit", session_id: randomUUID(), cwd: dir, prompt: "private" }, control);
   assert.equal(result.handled, false); assert.equal(created, 0);
   await harness.close();
+});
+
+test("native sync uploads completed turns during its own prompt without publishing the active draft", async () => {
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "gt-claude-native-sync-"))), config = path.join(dir, "config");
+  const sessions: SessionSummary[] = [], commits: CommitLocalTurnInput[] = [];
+  const api = {
+    async listProjects() { return [project]; }, async listProjectSessions() { return sessions; },
+    async createSession(_id: string, body: { title: string; mode: "solo"; idempotencyKey: string }) {
+      const session: SessionSummary = { id: `session-${hash(`user-1\0${body.idempotencyKey}`).slice(0, 32)}`,
+        name: body.title, mode: body.mode, projectId: project.id, ownerUserId: "user-1", state: "active", latestSequence: 0 };
+      sessions.push(session); return session;
+    },
+    async readContext() { return { view: "summary", through_sequence: 0, content_revision: 0, items: [] }; },
+    async commitLocalTurn(_id: string, value: CommitLocalTurnInput) {
+      commits.push(value); return { requestEvent: { id: "request-1" }, responseEvent: { id: "answer-1" } };
+    },
+  } as unknown as CollaborationApi;
+  const harness = new ClaudeCodeProjectHarness({ workspacePath: dir, stateRoot: path.join(dir, "private"), model: "claude-sonnet-fixture", nativeConfigDirectory: config });
+  const session_id = randomUUID(), control = { api, actorUserId: "user-1", actorDeviceId: "device-1", project };
+  try {
+    await harness.handleNativeHook({ hook_event_name: "UserPromptSubmit", session_id, cwd: dir, prompt: "Completed question" }, control);
+    const transcript = path.join(config, "projects", dir.replace(/[^A-Za-z0-9]/g, "-"), `${session_id}.jsonl`);
+    await mkdir(path.dirname(transcript), { recursive: true });
+    await writeFile(transcript, [
+      { type: "user", sessionId: session_id, cwd: dir, timestamp: new Date().toISOString(), message: { content: "Completed question" } },
+      { type: "assistant", sessionId: session_id, cwd: dir, timestamp: new Date().toISOString(), message: { model: "claude-sonnet-fixture", content: [{ type: "text", text: "Completed answer" }] } },
+    ].map(value => JSON.stringify(value)).join("\n") + "\n", { mode: 0o600 });
+    await harness.handleNativeHook({ hook_event_name: "Stop", session_id, cwd: dir, last_assistant_message: "Completed answer", transcript_path: transcript }, control);
+    const session = sessions[0]!, binding = harness.createSessionBinding({ session, sessionKey: "test", statePath: "" });
+    const runtime = { ...harness.descriptor, id: "runtime-1", userId: "user-1", deviceId: "device-1", sessionId: session.id, localSessionId: binding.localSessionId } as RegisteredRuntime;
+    await harness.handleNativeHook({ hook_event_name: "UserPromptSubmit", session_id, cwd: dir, prompt: "/gatherthread:sync upload completed turns" }, control);
+    assert.equal((await binding.getLocalSyncStatus!()).uploadableLocalTurns, 1);
+    assert.equal((await binding.uploadLocalTurns!({ api, runtime })).uploadedLocalTurns, 1);
+    assert.equal((await binding.uploadLocalTurns!({ api, runtime })).uploadedLocalTurns, 0);
+    assert.equal(commits.length, 1);
+    assert.equal((commits[0]!.requestPayload as { content: string }).content, "Completed question");
+    assert.equal(await binding.isLocalRunActive!(), true);
+    assert.equal((await binding.getLocalSyncStatus!()).automaticUpload, false);
+    await binding.setLocalAutoUpload!(true);
+    await binding.synchronizeLocalTurns!({ api, runtime });
+    assert.equal(commits.length, 1, "Automatic sync cannot publish the active draft");
+  } finally { await harness.close(); }
 });
 
 test("Claude native discovery locks workspace activity before ACL awaits, and source sync blocks a new native prompt", async () => {

@@ -27,6 +27,17 @@ test("Claude native selector never falls back to another harness or device", () 
   assert.deepEqual(dshExecutionProfile(runtime, selected, "claude-code"), { harness: "claude-code", provider: "anthropic", model: runtime.model, runtimeId: runtime.id });
   assert.throws(() => dshExecutionProfile(codex, selected, "claude-code"));
 });
+test("a re-registered Claude runtime never silently replaces a saved model or effort", () => {
+  const saved = { runtimeId: runtime.id, deviceId: "device-claude", provider: "anthropic", model: "claude-old-test", effort: "high" };
+  const changed = { ...runtime, execution_profiles: [{ provider: "anthropic", model: runtime.model, reasoning_efforts: ["low"], default_reasoning_effort: "low" }] };
+  assert.equal(resolveDshRuntime([changed], [], saved, "claude-code").runtime, null);
+  assert.throws(() => dshExecutionSelection(changed, saved, "claude-code"), /selected|profile|model/i);
+  assert.throws(() => dshExecutionProfile(runtime, saved, "claude-code"), /selected|profile|model/i);
+  const unsupportedEffort = { ...saved, model: runtime.model };
+  assert.equal(resolveDshRuntime([changed], [], unsupportedEffort, "claude-code").runtime, null);
+  assert.throws(() => dshExecutionSelection(changed, unsupportedEffort, "claude-code"), /effort/i);
+  assert.equal(dshExecutionSelection(changed, null, "claude-code").model, runtime.model);
+});
 test("Claude handoff is v3 with exact native harness and no credential", () => {
   const link = projectClaudeLauncherUrl({ baseUrl: "https://test.gatherthread.cn", projectId: "project-a", model: runtime.model,
     email: "user@example.com", authorizationId: "b9c8f2e1-457b-4c22-b19a-c0184d9a1123" });

@@ -25,7 +25,7 @@ After you approve an upload, the connector verifies a bounded region near that c
 
 ## Web execution and files / 网页调用与文件
 
-Each Web request runs in a separate GatherThread-owned Claude execution using current authorized public context. The connector does not continue an arbitrary private native conversation or reuse deleted/compacted private history. Answer text, selected tool activity and real plans can stream into the existing work log; final completion still requires a successful, stopped native process. Pause cancels that process. Resume is a new request with the recorded target, not restoration of private thinking or an interrupted shell.
+Each Web request runs in a separate GatherThread-owned Claude execution using current authorized public context and its explicit public quote. The connector does not continue an arbitrary private native conversation or reuse deleted/compacted private history. Answer text, selected tool calls, tool completion states and real plans can stream into the existing work log; raw tool-result bodies stay local. Final completion still requires a successful, stopped native process. Pause cancels that process. Resume is a new request with the recorded target, not restoration of private thinking or an interrupted shell.
 
 Unattended Web execution uses Claude Code's restricted directory mode, explicit file/plan tools and denied permission prompts. It does not enable arbitrary shell, network, other Agents or permission bypass. Use your native Claude Code session for operations needing those interactive permissions. This is deliberately narrower than handing a remote request all of your local Claude settings.
 

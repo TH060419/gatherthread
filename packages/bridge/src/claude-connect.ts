@@ -232,12 +232,11 @@ export function normalizeClaudeNativeHookEvent(input: unknown, workspacePath: st
     if (typeof raw.prompt !== "string" || !raw.prompt.trim() || Buffer.byteLength(raw.prompt) > 65536) throw new Error("Invalid Claude public prompt");
     event.prompt = raw.prompt;
   } else if (raw.hook_event_name === "Stop") {
-    if (typeof raw.last_assistant_message !== "string" || Buffer.byteLength(raw.last_assistant_message) > 262144) throw new Error("Invalid Claude public answer");
-    event.last_assistant_message = raw.last_assistant_message; event.stop_hook_active = raw.stop_hook_active === true;
+    if (typeof raw.last_assistant_message === "string" && Buffer.byteLength(raw.last_assistant_message) <= 128 * 1024) event.last_assistant_message = raw.last_assistant_message;
+    event.stop_hook_active = raw.stop_hook_active === true;
     if (raw.transcript_path !== undefined) {
-      if (typeof raw.transcript_path !== "string" || raw.transcript_path.length > 4096 || /[\r\n\0]/u.test(raw.transcript_path)
-        || !path.isAbsolute(raw.transcript_path)) throw new Error("Invalid Claude exact-turn proof path");
-      event.transcript_path = raw.transcript_path;
+      if (typeof raw.transcript_path === "string" && raw.transcript_path.length <= 4096 && !/[\r\n\0]/u.test(raw.transcript_path)
+        && path.isAbsolute(raw.transcript_path)) event.transcript_path = raw.transcript_path;
     }
   } else if (raw.hook_event_name === "SessionStart") {
     if (typeof raw.model === "string" && /^claude-[A-Za-z0-9][A-Za-z0-9._-]{0,112}$/u.test(raw.model)) event.model = raw.model;
