@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -72,7 +73,7 @@ test("Claude package help and MCP never inherit runtime tools or credentials", (
 });
 
 test("matching local Claude plugin refuses bundle tampering and output replacement", async () => {
-  const temporary = await realpath(await mkdtemp(process.platform === "darwin" ? "/private/tmp/gc-stage-" : "/tmp/gc-stage-"));
+  const temporary = await realpath(await mkdtemp(path.join(tmpdir(), "gc-stage-")));
   const destination = path.join(temporary, "marketplace");
   assert.equal(await prepareSourcePlugin(root, { destination }), destination);
   const prepared = path.join(destination, "plugins/gatherthread");
@@ -84,7 +85,7 @@ test("matching local Claude plugin refuses bundle tampering and output replaceme
 });
 
 test("Claude hook forwarder is offline fail-open without capturing secrets or scanning transcripts", async () => {
-  const temporary = await realpath(await mkdtemp(process.platform === "darwin" ? "/private/tmp/gc-offline-" : "/tmp/gc-offline-"));
+  const temporary = await realpath(await mkdtemp(path.join(tmpdir(), "gc-offline-")));
   const workspace = path.join(temporary, "w"); await mkdir(workspace);
   const result = spawnSync(process.execPath, [path.join(plugin, "scripts/hook-forwarder.mjs")], {
     env: { ...process.env, HOME: temporary, USERPROFILE: temporary }, encoding: "utf8", timeout: 5000,

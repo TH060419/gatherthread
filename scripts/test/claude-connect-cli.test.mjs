@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, symlink } from "node:fs/promises";
 import net from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -44,7 +45,7 @@ test("terminal Claude metadata survives an uncapturable answer or invalid proof 
 });
 
 test("Claude native private state rejects a symlink in any state ancestor", async () => {
-  const temporary = await realpath(await mkdtemp(process.platform === "darwin" ? "/private/tmp/gch-link-" : "/tmp/gch-link-"));
+  const temporary = await realpath(await mkdtemp(path.join(tmpdir(), "gch-link-")));
   const workspacePath = path.join(temporary, "w"), homeDirectory = path.join(temporary, "h"), outside = path.join(temporary, "outside");
   await Promise.all([workspacePath, homeDirectory, outside].map(directory => mkdir(directory)));
   await symlink(outside, path.join(homeDirectory, ".gatherthread"), process.platform === "win32" ? "junction" : "dir");
