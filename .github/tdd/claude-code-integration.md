@@ -112,6 +112,15 @@ quote independently of a summary, without restoring erased content.
 
 Follow-up verification and review are recorded against the new PR revision;
 neither the original review nor earlier green counts certify a changed tree.
+The first fix revision passed a fresh full serial unit run (1,287 passed, six
+skipped, zero failed), 747 Web tests plus three output checks, 154 script tests
+and the Git-less package check. A second review then exercised stale open
+Settings forms and Hook frames larger than 1 MiB. The final follow-up preserves
+profile pins on unrelated saves, adopts a profile only on explicit device
+selection, and reads selected Hook fields incrementally so an oversized answer
+cannot discard terminal metadata. Windows CI identified a path-separator-only
+test assertion; the test now normalizes host separators while retaining exact
+namespace/hash and named-pipe checks. No test was removed or skipped for it.
 
 The browser check uses only the local MockCollaborationApi with synthetic data.
 It covers desktop enablement and connection dialog, the missing-Claude refusal

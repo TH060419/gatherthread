@@ -56,8 +56,8 @@ test("Claude and Codex user relays have distinct deterministic private endpoints
   const codex = resolveWorkspaceConnectorApiPath(workspace, "/home/test", "linux");
   const claude = resolveWorkspaceConnectorApiPath(workspace, "/home/test", "linux", "claude-code");
   assert.notEqual(codex, claude);
-  assert.match(codex, /\.gatherthread\/codex\/ipc\/[a-f0-9]{24}\/user-api\.sock$/u);
-  assert.match(claude, /\.gatherthread\/claude-code\/ipc\/[a-f0-9]{24}\/user-api\.sock$/u);
+  assert.match(codex.split(path.sep).join("/"), /\.gatherthread\/codex\/ipc\/[a-f0-9]{24}\/user-api\.sock$/u);
+  assert.match(claude.split(path.sep).join("/"), /\.gatherthread\/claude-code\/ipc\/[a-f0-9]{24}\/user-api\.sock$/u);
   assert.match(resolveWorkspaceConnectorApiPath(workspace, "/home/test", "win32", "claude-code"),
     /^\\\\\.\\pipe\\gatherthread-claude-code-[a-f0-9]{24}-user-api$/u);
 });

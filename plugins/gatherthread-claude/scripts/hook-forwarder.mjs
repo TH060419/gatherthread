@@ -7,7 +7,7 @@ import path from "node:path";
 
 const LIMIT = 1024 * 1024;
 try {
-  const input = JSON.parse(await readInput());
+  const input = await readInput();
   if (!input || typeof input !== "object" || !["UserPromptSubmit", "Stop", "SessionStart", "PostModelSwitch", "StopFailure", "SessionEnd"].includes(input.hook_event_name)
     || typeof input.cwd !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu.test(input.session_id ?? "")) throw new Error();
   const cwd = await realpath(input.cwd), comparable = process.platform === "win32" ? cwd.toLowerCase() : cwd;
@@ -57,9 +57,77 @@ try {
 
 function readInput() {
   return new Promise((resolve, reject) => {
-    let value = ""; process.stdin.setEncoding("utf8");
-    process.stdin.on("data", chunk => { value += chunk; if (Buffer.byteLength(value) > LIMIT) { process.stdin.destroy(); reject(new Error()); } });
-    process.stdin.once("end", () => resolve(value)); process.stdin.once("error", reject);
+    // Select top-level Hook fields while streaming. A huge answer or unrelated
+    // native metadata must not discard the small terminal identity or require
+    // buffering a whole transcript-sized JSON frame in memory.
+    const fields = new Set(["hook_event_name", "session_id", "cwd", "prompt", "last_assistant_message", "stop_hook_active", "transcript_path", "model", "source", "to_model"]);
+    const selected = Object.create(null), seen = new Set();
+    let phase = "open", key = "", mode = "", role = "", raw = "", size = 0, overflow = false, escaped = false;
+    let compound = [], empty = true, failed = false;
+    const finish = value => {
+      if (fields.has(key)) {
+        if (seen.has(key)) throw new Error();
+        seen.add(key); if (value !== undefined) selected[key] = value;
+      }
+      phase = "after"; mode = "";
+    };
+    const beginString = nextRole => {
+      mode = "string"; role = nextRole; raw = '"'; size = 1; overflow = false; escaped = false;
+    };
+    const consume = character => {
+      if (mode === "string") {
+        const capture = role === "key" || role === "value" && fields.has(key);
+        if (capture && !overflow) {
+          size += Buffer.byteLength(character);
+          if (size > (role === "key" ? 4096 : LIMIT)) { overflow = true; raw = ""; }
+          else raw += character;
+        }
+        if (escaped) { escaped = false; return true; }
+        if (character === "\\") { escaped = true; return true; }
+        if (character === '"') {
+          if (role === "nested") mode = "compound";
+          else if (role === "key") {
+            if (overflow) throw new Error();
+            key = JSON.parse(raw); phase = "colon"; mode = "";
+          } else finish(capture && !overflow ? JSON.parse(raw) : undefined);
+        } else if (character.charCodeAt(0) < 32) throw new Error();
+        return true;
+      }
+      if (mode === "compound") {
+        if (character === '"') beginString("nested");
+        else if (character === "{" || character === "[") { if (compound.length >= 64) throw new Error(); compound.push(character); }
+        else if (character === "}" || character === "]") {
+          if (compound.pop() !== (character === "}" ? "{" : "[")) throw new Error();
+          if (!compound.length) finish(undefined);
+        }
+        return true;
+      }
+      if (mode === "primitive") {
+        if (/[\s,}]/u.test(character)) { finish(JSON.parse(raw)); return false; }
+        if (raw.length >= 64) throw new Error(); raw += character; return true;
+      }
+      if (/\s/u.test(character)) return true;
+      if (phase === "open" && character === "{") phase = "key";
+      else if (phase === "key" && character === '"') beginString("key");
+      else if (phase === "key" && character === "}" && empty) phase = "done";
+      else if (phase === "colon" && character === ":") phase = "value";
+      else if (phase === "value") {
+        if (character === '"') beginString("value");
+        else if (character === "{" || character === "[") { mode = "compound"; compound = [character]; }
+        else { mode = "primitive"; raw = character; }
+      } else if (phase === "after" && character === ",") { phase = "key"; empty = false; }
+      else if (phase === "after" && character === "}") phase = "done";
+      else throw new Error();
+      return true;
+    };
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => {
+      if (failed) return;
+      try { for (const character of chunk) while (!consume(character)) { /* Consume a primitive's delimiter in the next state. */ } }
+      catch { failed = true; reject(new Error()); }
+    });
+    process.stdin.once("end", () => phase === "done" && !failed ? resolve(selected) : reject(new Error()));
+    process.stdin.once("error", reject);
   });
 }
 function forward(endpoint, request) {

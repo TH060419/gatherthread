@@ -4404,12 +4404,27 @@ function readSettingsForm(baseSettings = settingsPreview) {
       const selected = dshRuntimeChoices(state.executionRuntimes, state.devices, element("settings-agent-harness").value)
         .find((runtime) => runtime.id === element("settings-dsh-runtime").value && runtime.status === "online");
       if (selected) {
-        const executionSelection = nativeExecutionSelection(selected, selected.harness === "claude-code" ? null : nativeProjectProfile(next, state.project.id));
-        next = withNativeProjectProfile(next, state.project.id, dshStoredProjectProfile(selected, executionSelection));
+        try {
+          const executionSelection = nativeExecutionSelection(selected, nativeProjectProfile(next, state.project.id));
+          next = withNativeProjectProfile(next, state.project.id, dshStoredProjectProfile(selected, executionSelection));
+        } catch (error) {
+          // A stale picker must not repin a re-registered Claude device just
+          // because the user saved an unrelated preference.
+          if (selected.harness !== "claude-code") throw error;
+        }
       }
     }
   }
   return next;
+}
+
+function selectSettingsNativeRuntime() {
+  if (!state.project || element("settings-agent-harness").value !== "claude-code") return;
+  const selected = dshRuntimeChoices(state.executionRuntimes, state.devices, "claude-code")
+    .find(runtime => runtime.id === element("settings-dsh-runtime").value && runtime.status === "online");
+  if (!selected) return;
+  const next = withProjectAgentHarness(settingsPreview, state.project.id, "claude-code");
+  settingsPreview = withNativeProjectProfile(next, state.project.id, dshStoredProjectProfile(selected, nativeExecutionSelection(selected, null)));
 }
 
 function openSettingsDialog(sectionId) {
@@ -4675,6 +4690,7 @@ function handleSettingsControlInput(event) {
 }
 
 function handleSettingsControlChange(event) {
+  if (event.target.id === "settings-dsh-runtime") selectSettingsNativeRuntime();
   if (event.target.id === "settings-default-model") {
     updateEffortControl(event.target, element("settings-default-effort"), element("settings-default-effort").value, settingsPreview);
   }

@@ -113,7 +113,8 @@ test("Claude Hook blocks only an authenticated explicit prompt conflict and keep
   assert.deepEqual(JSON.parse((await forward("UserPromptSubmit")).stdout), {
     hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "Public shared context" },
   });
-  assert.deepEqual(JSON.parse((await forward("Stop", { last_assistant_message: "x".repeat(300000) })).stdout), {});
+  assert.deepEqual(JSON.parse((await forward("Stop", { last_assistant_message: "x".repeat(1024 * 1024 + 1),
+    unused_metadata: { nested: ["quoted } \\\" and \\ private text".repeat(40000)] } })).stdout), {});
   assert.equal(received.at(-1).hook_event_name, "Stop");
   assert.equal(received.at(-1).last_assistant_message, undefined);
 });

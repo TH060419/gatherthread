@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
-import { normalizeSettings, withProjectAgentHarness, projectAgentHarness, projectClaudeProfile, withProjectClaudeProfile } from "../src/settings.js";
+import { normalizeSettings, withProjectAgentHarness, projectAgentHarness, projectClaudeProfile, withProjectClaudeProfile,
+  withProjectCodexProfile, withProjectCloudProfile, withProjectEnabledHarnesses } from "../src/settings.js";
 import { projectClaudeLauncherUrl } from "../src/domain.js";
 import { dshRuntimeChoices, resolveDshRuntime, dshExecutionSelection, dshExecutionProfile } from "../src/dsh.js";
 
@@ -73,4 +74,41 @@ test("an unconnected native Agent has a visible device placeholder, not an empty
   assert.equal(options.length, 1);
   assert.equal(options[0].textContent, "No connected Agent runtime");
   assert.equal(options[0].value, "");
+});
+
+test("unrelated Settings saves preserve Claude's pin; only the device change handler adopts a new profile", async () => {
+  const source = (await readFile(new URL("../src/main.js", import.meta.url), "utf8")).replace(/\r\n?/gu, "\n");
+  const functions = ["readSettingsForm", "isAlternativeNative", "nativeProjectProfile", "withNativeProjectProfile", "nativeExecutionSelection", "dshStoredProjectProfile", "selectSettingsNativeRuntime"];
+  const bodies = functions.map(name => {
+    const start = source.search(new RegExp(`^function ${name}\\(`, "m"));
+    assert.notEqual(start, -1, name);
+    const tail = source.slice(start), end = tail.indexOf("\n}\n");
+    if (tail.split("\n")[0].endsWith("}")) return tail.split("\n")[0];
+    return end >= 0 ? tail.slice(0, end + 2) : tail.slice(0, tail.indexOf("\n"));
+  });
+  const projectId = "project-a";
+  let saved = withProjectAgentHarness(normalizeSettings({}), projectId, "claude-code");
+  saved = withProjectClaudeProfile(saved, projectId, { runtimeId: runtime.id, deviceId: "device-claude", provider: "anthropic", model: "claude-old-test", effort: "high" });
+  const nodes = new Map(), element = id => {
+    if (!nodes.has(id)) nodes.set(id, { value: "", checked: false });
+    return nodes.get(id);
+  };
+  element("settings-agent-harness").value = "claude-code";
+  element("settings-dsh-runtime").value = runtime.id;
+  const context = vm.createContext({ state: { project: { id: projectId }, executionRuntimes: [{ ...runtime, execution_profiles: [
+    { provider: "anthropic", model: runtime.model, reasoning_efforts: ["low"], default_reasoning_effort: "low" },
+  ] }], devices: [], settings: saved }, settingsPreview: saved, element,
+    DSH_HARNESS: "deepseek-harness", normalizeSettings, projectDshProfile: () => null, projectClaudeProfile,
+    withProjectDshProfile: () => { throw new Error("Not a DSH preference"); }, withProjectClaudeProfile,
+    withProjectCodexProfile, withProjectCloudProfile, withProjectEnabledHarnesses, withProjectAgentHarness,
+    currentProjectHarness: settings => projectAgentHarness(settings, projectId), advertisedCodexModels: () => [],
+    settingsEnabledHarnesses: () => ["claude-code"], dshRuntimeChoices, dshExecutionSelection });
+  vm.runInContext(bodies.join("\n"), context);
+  const passive = context.readSettingsForm(saved);
+  assert.equal(projectClaudeProfile(passive, projectId).model, "claude-old-test");
+  assert.equal(projectClaudeProfile(passive, projectId).effort, "high");
+  context.selectSettingsNativeRuntime();
+  const explicit = context.readSettingsForm(context.settingsPreview);
+  assert.equal(projectClaudeProfile(explicit, projectId).model, runtime.model);
+  assert.equal(projectClaudeProfile(explicit, projectId).effort, "low");
 });
