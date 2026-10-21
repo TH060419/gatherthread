@@ -1,4 +1,7 @@
-import { avatarImage } from "./avatars.js?v=20261012-content-1";
+import { avatarImage } from "./avatars.js?v=20261018-tabs-2";
+import { MockFileWorkspace } from "./file-workspace-mock.js";
+import { FileBranchesResultSchema, FileTreeResultSchema, FileContentResultSchema,
+  FileHistoryResultSchema, FileChangesResultSchema, FileMutationResultSchema, FileMutationInputSchema } from "@gatherthread/protocol";
 import { HostedGithubStatusSchema, HostedGithubAuthorizationSchema, HostedGithubConnectionSchema, HostedGithubDisconnectionSchema,
   HostedGithubTaskSchema, HostedGithubTaskListSchema, HostedAgentAcceptedSchema, HostedAgentPausedSchema,
   ProjectInvitationPreviewSchema, DeleteMessageResultSchema, CloudApiStatusSchema, CloudApiSavedSchema,
@@ -11,7 +14,7 @@ import {
   isExecutionRuntime,
   normalizeInvitation,
   normalizeSnapshotRequest,
-} from "./domain.js?v=20261012-content-1";
+} from "./domain.js?v=20261018-tabs-2";
 
 const TITLE_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
 
@@ -281,6 +284,24 @@ export class HttpCollaborationApi {
   async getProjectCode(projectId) {
     return this.request(`/v1/projects/${encodeURIComponent(projectId)}/code`);
   }
+
+  async fileRequest(projectId, action, schema, { signal, ...input } = {}, mutation = false) {
+    const query = new URLSearchParams();
+    if (!mutation) for (const [key, value] of Object.entries(input)) if (value !== undefined) query.set(key, String(value));
+    const path = `/v1/projects/${encodeURIComponent(projectId)}/files/${action}${mutation ? "" : `?${query}`}`;
+    const parsed = mutation ? FileMutationInputSchema.safeParse(input) : null;
+    if (parsed && !parsed.success) throw new ApiError("Invalid file operation. Check file sizes and paths before retrying.", { status: 422, code: "validation_error" });
+    const value = await this.request(path, mutation ? { method: "POST", body: JSON.stringify(parsed.data), signal } : { signal });
+    const result = schema.safeParse(value);
+    if (!result.success) throw new ApiError("File response is invalid. Refresh files and try again.", { status: 502, code: "invalid_file_response" });
+    return result.data;
+  }
+  getFileBranches(projectId, input) { return this.fileRequest(projectId, "branches", FileBranchesResultSchema, input); }
+  getFileTree(projectId, input) { return this.fileRequest(projectId, "tree", FileTreeResultSchema, input); }
+  getFileContent(projectId, input) { return this.fileRequest(projectId, "content", FileContentResultSchema, input); }
+  getFileHistory(projectId, input) { return this.fileRequest(projectId, "history", FileHistoryResultSchema, input); }
+  getFileChanges(projectId, input) { return this.fileRequest(projectId, "changes", FileChangesResultSchema, input); }
+  mutateFiles(projectId, input, { signal } = {}) { return this.fileRequest(projectId, "mutations", FileMutationResultSchema, { ...input, signal }, true); }
 
   async getProjectGithub(projectId) {
     return this.request(`/v1/projects/${encodeURIComponent(projectId)}/github`);
@@ -752,7 +773,7 @@ export class HttpCollaborationApi {
       }), HOSTED_AGENT_RESPONSE_ERROR);
       return this.#event(receipt.request_event);
     }
-    const { historySummaryExecutionWire } = await import("./history-summaries.js?v=20261012-content-1");
+    const { historySummaryExecutionWire } = await import("./history-summaries.js?v=20261018-tabs-2");
     const { event } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/history-summaries`, {
       method: "POST",
       body: JSON.stringify({
@@ -1181,6 +1202,13 @@ export class MockCollaborationApi {
       repository: { enabled: false, main_commit: null }, branches: [], own_branch_id: null,
     });
   }
+
+  getFileBranches(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).branches(projectId, input); }
+  getFileTree(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).tree(projectId, input); }
+  getFileContent(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).content(projectId, input); }
+  getFileHistory(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).history(projectId, input); }
+  getFileChanges(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).changes(projectId, input); }
+  mutateFiles(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).mutate(projectId, input); }
 
   async getProjectGithub(projectId) {
     const project = await this.getProject(projectId);
@@ -1882,7 +1910,7 @@ export class MockCollaborationApi {
     const existing = this.idempotentEvents.get(`${sessionId}:${input.idempotencyKey}`);
     if (existing) return structuredClone(existing);
     const contentRevision = this.#findSession(sessionId).contentRevision ?? 0;
-    const { historyWireEvents, historySummaryExecutionWire } = await import("./history-summaries.js?v=20261012-content-1");
+    const { historyWireEvents, historySummaryExecutionWire } = await import("./history-summaries.js?v=20261018-tabs-2");
     const { selectHistorySummarySources, historySummarySourceJson, buildHistorySummaryPrompt } = await import("./history-summary-policy.js");
     historySummaryExecutionWire(input.executionProfile);
     let sources;

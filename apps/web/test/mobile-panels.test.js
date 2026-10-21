@@ -46,6 +46,9 @@ function fixture() {
   for (const id of ["mentions-button", "history-summary-select-button", "history-summary-view-button", "history-summary-versions-button", "project-code-button", "mobile-members-button", "settings-button", "rename-session-button", "delete-session-button", "session-context-details", "logout-button"]) {
     const button = add(id, tools, "button", "icon-button"); button.setAttribute("aria-label", id); originalTools.set(id, button);
   }
+  const summaryMenu = add("history-summary-menu", tools), optionsMenu = add("session-options-menu", tools);
+  for (const id of ["history-summary-select-button", "history-summary-view-button", "history-summary-versions-button"]) summaryMenu.append(originalTools.get(id));
+  for (const id of ["rename-session-button", "delete-session-button", "session-context-details"]) optionsMenu.append(originalTools.get(id));
   let notify;
   const window = { MutationObserver: class { constructor(callback) { notify = callback; } observe() {} } };
   const panels = mountMobilePanels({ document, window });
@@ -95,8 +98,26 @@ test("mobile panels move the original controls and restore their precise desktop
   assert.equal(f.list.parentNode, f.rail);
   assert.equal(f.owner.parentNode, f.memberPanel);
   assert.equal(f.joinSection.parentNode, f.memberPanel);
-  for (const button of f.originalTools.values()) assert.equal(button.parentNode, f.tools);
+  for (const [id, button] of f.originalTools) {
+    const parent = id.startsWith("history-summary-") ? f.el("history-summary-menu")
+      : ["rename-session-button", "delete-session-button", "session-context-details"].includes(id) ? f.el("session-options-menu") : f.tools;
+    assert.equal(button.parentNode, parent);
+  }
   assert.equal(f.owner.hidden, true, "presentation never grants owner permissions");
+});
+
+test("mobile tools move summary and session options as intact units and never move the transient mention jump", () => {
+  const f = fixture(), summaries = f.el("history-summary-menu"), options = f.el("session-options-menu");
+  const select = f.el("history-summary-select-button"), mentions = f.el("mentions-button");
+  select.hidden = true;
+  f.panels.setActive(true);
+  assert.equal(summaries.parentNode.className, "mobile-tool-group-items");
+  assert.equal(options.parentNode, summaries.parentNode);
+  assert.equal(select.parentNode, summaries); assert.equal(select.hidden, true);
+  assert.equal(mentions.parentNode, f.tools, "mention jump is not pulled into a tools group");
+  f.panels.setActive(false);
+  assert.equal(summaries.parentNode, f.tools); assert.equal(options.parentNode, f.tools);
+  assert.equal(select.parentNode, summaries);
 });
 
 test("search filters newly rendered conversations and clears before desktop restoration", () => {

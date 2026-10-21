@@ -8,6 +8,11 @@ export function sessionNavigationLeavesPanel(button) {
     && (button.classList?.contains("session-button") || DIALOG_ACTION_IDS.has(button.id)));
 }
 
+export function toolsActionLeavesPanel(button) {
+  return Boolean(button && !button.disabled && !button.closest(".session-toolbar-trigger")
+    && !button.closest("#session-context-panel"));
+}
+
 export function sessionMatchesQuery(text, query) {
   return String(text ?? "").normalize("NFKC").toLocaleLowerCase()
     .includes(String(query ?? "").trim().normalize("NFKC").toLocaleLowerCase());
@@ -102,7 +107,9 @@ export function mountMobilePanels({ document: doc, window: win, t = value => val
 
   // Members: overview first; creating an invitation and joining another project
   // are distinct pages. The original owner-only visibility remains authoritative.
-  const membersHost = el("mobile-members-content");
+  // Keep mobile member pages inside their workspace tab, not beside the file
+  // tabs. The original membership controls still move and retain their IDs.
+  const membersHost = el("file-workspace-host") ? el("member-panel") : el("mobile-members-content");
   const members = node("div", "mobile-members-navigation", "mobile-members-navigation"); members.hidden = true;
   const membersHome = node("section", "mobile-panel-page", "mobile-members-home");
   const membersHeading = node("div", "mobile-members-heading");
@@ -176,9 +183,9 @@ export function mountMobilePanels({ document: doc, window: win, t = value => val
   const toolsHost = el("mobile-tools-content");
   const toolSections = [];
   const toolCaptions = [];
-  for (const [title, ids] of [["Conversation", ["mentions-button", "history-summary-select-button", "history-summary-view-button", "history-summary-versions-button"]],
+  for (const [title, ids] of [["Conversation", ["history-summary-menu", "session-options-menu"]],
     ["Project", ["project-code-button", "mobile-members-button"]],
-    ["More", ["settings-button", "rename-session-button", "delete-session-button", "session-context-details", "logout-button"]]]) {
+    ["More", ["settings-button", "logout-button"]]]) {
     const section = node("section", "mobile-tool-group"); section.hidden = true;
     section.append(text("h3", title, "mobile-panel-eyebrow"));
     const items = node("div", "mobile-tool-group-items"); section.append(items); toolsHost?.append(section); toolSections.push(section);

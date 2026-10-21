@@ -1,4 +1,4 @@
-import { mountMobilePanels, sessionNavigationLeavesPanel } from "./mobile-panels.js";
+import { mountMobilePanels, sessionNavigationLeavesPanel, toolsActionLeavesPanel } from "./mobile-panels.js";
 
 // Presentation only: move the existing controls, never duplicate request paths.
 export const MOBILE_WORKSPACE_MAX_WIDTH = 1366;
@@ -54,17 +54,20 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   remember(rail, el("mobile-sessions-content"));
   // One settings dialog on every screen, preserving IDs and event handlers.
   el("mobile-agent-content").append(profile, el("send-cloud-agent-help"));
-  remember(el("member-panel"), el("mobile-members-content"));
+  remember(el("file-workspace-host") ?? el("member-panel"), el("mobile-members-content"));
   for (const id of ["project-code-button", "settings-button", "mobile-members-button", "logout-button",
-    "rename-session-button", "delete-session-button", "session-context-details",
-    "history-summary-select-button", "mentions-button", "history-summary-view-button",
-    "history-summary-versions-button", "download-codex-button"]) {
+    "history-summary-menu", "session-options-menu"]) {
     remember(el(id), el("mobile-tools-content"));
   }
   const panels = mountMobilePanels({ document: doc, window: win, t });
 
   function closeAll() {
     el("session-context-details").open = false;
+    for (const id of ["history-summary-menu-button", "session-options-button"]) {
+      const trigger = el(id), panel = el(trigger?.getAttribute("aria-controls"));
+      trigger?.setAttribute("aria-expanded", "false");
+      if (panel) panel.hidden = true;
+    }
     for (const dialog of dialogs) if (dialog.open) closeDialog(dialog);
   }
   function open(dialog, trigger) {
@@ -127,7 +130,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   }, true);
   el("project-select").addEventListener("change", () => closeDialog(dialogs[0]));
   dialogs[2].addEventListener("click", event => {
-    if (event.target.closest("button") && !event.target.closest("#session-context-panel")) closeDialog(dialogs[2]);
+    if (toolsActionLeavesPanel(event.target.closest("button"))) closeDialog(dialogs[2]);
   }, true);
 
   function update() {

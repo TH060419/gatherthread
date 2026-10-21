@@ -96,8 +96,12 @@ async function setInterfaceMode(page, mode) {
 }
 
 async function tools(page, id) {
-  await page.locator("#mobile-tools-button").click();
+  if (!await page.locator("#mobile-tools-dialog[open]").isVisible()) await page.locator("#mobile-tools-button").click();
   await page.locator("#mobile-tools-dialog[open]").waitFor();
+  if (id?.startsWith("history-summary-") && id !== "history-summary-menu-button"
+    && !await page.locator("#history-summary-menu-panel").isVisible()) await page.locator("#history-summary-menu-button").click();
+  if (["rename-session-button", "delete-session-button", "session-context-details"].includes(id)
+    && !await page.locator("#session-options-panel").isVisible()) await page.locator("#session-options-button").click();
   if (id) await page.locator(`#${id}`).click();
 }
 
@@ -241,14 +245,16 @@ try {
           await page.keyboard.press("Escape");
           await tools(page);
           await page.screenshot({ path: join(output, `${name}-${locale}-tools.png`) });
+          await page.locator("#session-options-button").click();
           await page.locator("#session-context-details > summary").click();
           await page.keyboard.press("Tab");
           assert.equal(await page.locator("#session-context-panel").evaluate(node => node.closest("dialog")?.id), "mobile-tools-dialog");
           assert.equal(await page.locator("#session-context-panel").isVisible(), true);
           await page.locator("#mobile-tools-dialog [data-mobile-close]").click();
-          await tools(page, "mentions-button");
-          await page.locator("#mentions-dialog[open]").waitFor();
-          await page.keyboard.press("Escape");
+          await tools(page);
+          assert.equal(await page.locator("#mobile-tools-dialog #mentions-button").count(), 0,
+            "mentions are a transient timeline jump, not a permanent tools item");
+          await page.locator("#mobile-tools-dialog [data-mobile-close]").click();
           // Generation is a normal exact-runtime request; the fixture, not a model, supplies its result.
           await chooseAgent(page, "codex", "gpt-6-sol");
           await tools(page, "history-summary-select-button");

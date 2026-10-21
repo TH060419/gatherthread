@@ -1,5 +1,10 @@
 import { HostedGithub, type HostedGithubOptions } from "./hosted-github.js";
 import { AgentSharing } from "./agent-sharing.js";
+import { FileWorkspace } from "./file-workspace.js";
+import { GithubFileWorkspace } from "./github-file-workspace.js";
+import { FileBranchesInputSchema, FileTreeInputSchema, FileContentInputSchema, FileHistoryInputSchema,
+  FileChangesInputSchema, FileMutationInputSchema, FileBranchesResultSchema, FileTreeResultSchema,
+  FileContentResultSchema, FileHistoryResultSchema, FileChangesResultSchema, FileMutationResultSchema } from "@gatherthread/protocol";
 import { SaveAgentShareInputSchema, ControlAgentShareInputSchema, AgentSharesResponseSchema, AgentShareResponseSchema,
   SharedAgentRequestInputSchema, ClaimAgentShareJobInputSchema, AgentShareJobLeaseInputSchema, AgentShareJobProgressInputSchema,
   CompleteAgentShareJobInputSchema, AbortAgentShareJobInputSchema, ReportAgentShareAvailabilityInputSchema,
@@ -201,7 +206,7 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 }
 
 function setSecurityHeaders(response: ServerResponse, secureTransport: boolean): void {
-  response.setHeader("content-security-policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'");
+  response.setHeader("content-security-policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'");
   response.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("x-content-type-options", "nosniff");
@@ -216,6 +221,9 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".bcmap": "application/octet-stream",
+  ".pfb": "application/octet-stream",
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".txt": "text/plain; charset=utf-8",
@@ -1184,6 +1192,36 @@ export async function startCollaborationServer(
         const input = UpdateContextPolicyInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 200, { data: service.setProjectContextPolicy(actor, projectId, input.mode) });
         return;
+      }
+      if (projectId && parts[3] === "files" && parts.length === 5) {
+        // Read content only on demand. The larger body budget applies to this
+        // authenticated file write route, not chat, registration or WebSockets.
+        assertRequestCurrent();
+        service.requireProjectMembership(actor, projectId);
+        const files = new FileWorkspace(database, codeRepository, hostedGithub
+          ? new GithubFileWorkspace(service, hostedGithub, assertRequestCurrent) : undefined);
+        if (request.method === "POST" && parts[4] === "mutations") {
+          const input = FileMutationInputSchema.parse(await readAuthenticatedJson(12 * 1024 * 1024));
+          const result = await files.mutate(actor, projectId, input);
+          assertRequestCurrent();
+          sendJson(response, 200, { data: FileMutationResultSchema.parse(result) }); return;
+        }
+        if (request.method === "GET") {
+          const query: Record<string, unknown> = {};
+          for (const [key, value] of url.searchParams) {
+            if (Object.hasOwn(query, key)) throw new ApiError(422, "validation_error", "Duplicate file query field");
+            query[key] = key === "limit" ? Number(value) : value;
+          }
+          let result: unknown;
+          switch (parts[4]) {
+            case "branches": result = FileBranchesResultSchema.parse(await files.branches(actor, projectId, FileBranchesInputSchema.parse(query))); break;
+            case "tree": result = FileTreeResultSchema.parse(await files.tree(actor, projectId, FileTreeInputSchema.parse(query))); break;
+            case "content": result = FileContentResultSchema.parse(await files.content(actor, projectId, FileContentInputSchema.parse(query))); break;
+            case "history": result = FileHistoryResultSchema.parse(await files.history(actor, projectId, FileHistoryInputSchema.parse(query))); break;
+            case "changes": result = FileChangesResultSchema.parse(await files.changes(actor, projectId, FileChangesInputSchema.parse(query))); break;
+          }
+          if (result !== undefined) { assertRequestCurrent(); sendJson(response, 200, { data: result }); return; }
+        }
       }
       if (projectId && parts[3] === "code") {
         service.requireProjectMembership(actor, projectId);

@@ -103,6 +103,8 @@ A session writer may select public, completed conversation messages and use thei
 
 Web Settings gives Summaries its own navigation section, separate from Sync & context. It contains the per-user context choice and browser-local summary instructions without changing either setting's behavior.
 
+The conversation header groups summary selection, summary/original display and earlier versions under one Summaries entry. Rename, delete and synchronization details are disclosed through Session options. A small timeline-corner shortcut appears only for unread mentions and jumps directly to the message, including in another readable conversation. A mention is marked read only after its message is actually visible, not when its inbox metadata is fetched or navigation merely starts. Bounded read IDs are scoped by account/project in this browser tab's session storage, survive reloads and fall back to page memory when storage is unavailable. Message content is not retained and these are not cross-device read receipts.
+
 ## Permissions
 
 | Project role | `multi` | `solo` | Project administration |

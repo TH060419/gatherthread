@@ -12,7 +12,7 @@ Collaborators need to refer to a particular shared message and notify a particul
 
 Reuse `reply_to_event_id` for user-authored quotes without reinterpreting Agent-response linkage. Resolve sources only within the same session and prevent public quotes of owner-only events. Preserve the source event rather than adding a client-authored quotation snapshot.
 
-Store bounded, membership-validated mention identity and UTF-16 text ranges in the user-message payload. An authenticated project inbox derives the caller's mentions from canonical storage with current ACL and visibility checks. Picking a member is explicit; `@` text alone is not a notification. This release uses temporary per-tab read markers, not a separate durable notification database.
+Store bounded, membership-validated mention identity and UTF-16 text ranges in the user-message payload. An authenticated project inbox derives the caller's mentions from canonical storage with current ACL and visibility checks. Picking a member is explicit; `@` text alone is not a notification. The Web uses a transient timeline-corner shortcut instead of a persistent header inbox button. Only actually visible messages become read. Bounded account/project-scoped read IDs in session storage survive same-tab reloads, with a memory fallback when storage is unavailable; message text is not stored. This does not introduce a server notification database or cross-device read receipts.
 
 ## Consequences and validation
 

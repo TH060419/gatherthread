@@ -1,8 +1,8 @@
 # Project code collaboration / 项目代码协作
 
-Choose where your project files are stored, authorize the local device, then save progress to your personal branch. Prefer GitHub for actual development and GT Cloud for small trials. Use the matching Codex connector and DSH plugin; build a reviewed source checkout when a corresponding package is unavailable. [Illustrated guide](PRODUCT_GUIDE.md).
+Choose where your project files are stored, then save progress to your personal branch. Local computer transfers require separate device authorization; the browser file workspace below edits the selected online branch. Prefer GitHub for actual development and GT Cloud for small trials. Use the matching Codex connector and DSH plugin for computer synchronization; build a reviewed source checkout when a corresponding package is unavailable. [Illustrated guide](PRODUCT_GUIDE.md).
 
-选择项目文件的存储服务，单独授权本地设备，再把进度保存到个人分支。实际开发优先 GitHub，小项目体验可用 GT Cloud。连接器与 DSH 插件需使用匹配版本；对应包不可用时，从经过审核的源码构建。[图文指南](PRODUCT_GUIDE.zh-CN.md)。
+选择项目文件的存储服务，再把进度保存到个人分支。本机传输需要单独授权设备；下方的网页文件工作区直接编辑所选在线分支。实际开发优先 GitHub，小项目体验可用 GT Cloud。电脑同步需要匹配的连接器与 DSH 插件；对应包不可用时，从经过审核的源码构建。[图文指南](PRODUCT_GUIDE.zh-CN.md)。
 
 ## Choose source storage / 选择代码存储
 
@@ -23,6 +23,25 @@ The two services are independent. Choosing GitHub does not move or delete GT Clo
 GitHub uploads do not count against GatherThread storage quotas. The numbers above are local memory and file-handling safeguards, not a GitHub storage allowance; repositories beyond them can still use native Git with the same GitHub repository. The first fetch also caches the selected branches' Git history locally and can require more disk space and time than a single source snapshot. GitHub repository visibility and collaborator permissions are independent of GatherThread project membership. A private GatherThread project does not make a public GitHub repository private, and a GatherThread invitation does not grant GitHub access.
 
 GitHub 上传不计入共序的存储额度。表中数字是本地同步器的内存与文件处理保护，并非 GitHub 存储额度；超出范围的仓库仍可使用原生 Git 操作同一仓库。首次获取还会在本机缓存所选分支的 Git 历史，占用空间和耗时可能大于单次源码快照。GitHub 仓库的可见性和协作者权限独立管理：共序中的私有项目不会把公开 GitHub 仓库变成私有仓库，共序邀请也不会自动授予 GitHub 权限。
+
+## Browser file workspace / 网页文件工作区
+
+Open **Files** in the right workspace, choose **GT Cloud** or **GitHub**, then select a branch. Open **Members** for member and invitation controls. Each function or file has its own closeable tab; use **+** to reopen Files or Members and **More (…)** to find open tabs, expand the workspace, or close several tabs. Drag tabs to reorder them. The small sidebar button in the app header hides or shows the panel without closing tabs or losing drafts. Unsaved edits are confirmed before closing a tab. Expand folders or search by path; open several files in separate tabs. Mobile uses the same controls on a full-screen page.
+
+打开右侧工作区的“文件”，选择“GatherThread 云端”或“GitHub”，再选择分支。“成员”标签保留原有成员与邀请入口。可展开文件夹、按路径搜索，并同时打开多个文件标签。电脑可展开工作区，手机使用同一组操作的全屏页面。
+
+1. Select **Your branch** to edit. Before your first save it starts from the shared version. Shared main/base, teammates' branches and historical versions are read-only; project viewers can inspect but cannot save. For GitHub, first connect your own account and explicitly select the repository matching the project's enabled GitHub connection. For GT Cloud, the owner must enable file collaboration.
+2. Open a text file, edit it, and press **Save** or `⌘S` / `Ctrl+S`. For Markdown, **Code** edits the source and **Preview** renders the current unsaved draft. Inside a file tab, **Changes** compares the draft with the loaded version, and **History → View version / Compare with parent** opens prior versions. In the explorer, **Changes** shows **Latest saved changes** for the selected branch; **History → View changes** also finds files deleted from the current tree. Supported images and PDFs have previews; other binary files can be downloaded.
+3. Use **File actions** for new files/folders, import, rename, copy, cut, paste, move or delete. Copy/cut/paste stay within your own selected branch. New folders contain `.gitkeep`; downloading applies to individual files. Source and preview tab switches keep the draft. Confirming a dirty tab close or branch/project switch discards that draft; download it first if needed. Drafts are kept in page memory and do not survive a page reload or sign-out.
+4. If another writer changes the branch, your draft remains available for review or download. **Reload server version** asks before discarding it. If a save result is unknown, use **Retry operation** to recover the same request; avoid starting another save for that change. A browser save creates a personal-branch commit, without merging main, opening a PR, running the project or updating local computer files.
+
+选择“我的分支”后即可编辑，首次保存前以共享版本为起点。共享主分支、同伴分支、历史版本与项目查看者均只读。文本文件可“保存”，或按 `⌘S` / `Ctrl+S`；Markdown 的“代码”编辑源码，“预览”显示当前尚未保存的内容。文件标签内的“更改”对比当前编辑与载入版本，“历史”可查看旧版或与上一版本比较。文件列表中的“更改”显示所选分支“最近一次保存的更改”；“历史 → 查看更改”还能找到当前文件树中已删除的文件。图片、PDF 提供预览，其他二进制文件可下载。“文件操作”支持新建、导入、重命名、复制、剪切、粘贴、移动和删除；复制粘贴限于自己的当前分支，新文件夹使用 `.gitkeep`，下载针对单个文件。
+
+切换文件标签或代码/预览时会保留编辑。关闭有修改的标签、切换分支或项目时，请确认是否放弃；需要留存时先下载。草稿仅在当前页面内存中，刷新页面或退出登录后不会保留。分支冲突会保留草稿供检查或下载；“重新加载服务器版本”会先确认。“操作结果尚未确认”时，使用“重试操作”确认同一请求。网页保存只提交到个人分支，不会自动合并、发 PR、运行代码或更新电脑目录。
+
+Text editing is limited to 2 MiB. GT Cloud retains its 2 MiB/file and 8 MiB/tree bounds; GitHub browser reads and writes are limited to 8 MiB/file, separately from the larger local-sync file limit above. Private/generated/workflow paths and unsupported repository entries can require GitHub or native Git. GitHub browser access passes selected source through the authenticated GatherThread server, using server-held GitHub authorization; direct local synchronization below still transfers from the computer to GitHub. [Exact contracts and errors](INTERFACE_CONTRACTS.md#browser-file-workspace-local-implementation).
+
+文本编辑上限为 2 MiB；GT Cloud 仍为单文件 2 MiB、单树 8 MiB；GitHub 网页读写单文件上限为 8 MiB，与上表的本机同步限制不同。私有路径、生成目录、工作流及不支持的仓库内容需使用 GitHub 或原生 Git。网页 GitHub 访问由已认证的共序服务器按需转发所选源码，GitHub 凭据留在服务器；下方的本机同步仍直接在电脑与 GitHub 之间传输。[接口、限制与错误](INTERFACE_CONTRACTS.md#browser-file-workspace-local-implementation)。
 
 ## Connect GitHub / 连接 GitHub
 

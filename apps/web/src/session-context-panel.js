@@ -68,11 +68,17 @@ export function bindSessionContextPanel(doc) {
       event.preventDefault(); details.open = false; positionSessionContextPanel(doc); summary.focus();
     }
     if (event.key !== 'Tab') return;
-    if (details.closest('dialog')) return; // Native modal focus traversal.
-    const following = [...summary.closest('.session-header').querySelectorAll('button')]
-      .find((node) => !details.contains(node) && usable(node) && Boolean(summary.compareDocumentPosition(node) & 4));
+    const dialog = details.closest('dialog');
+    // Keep native modal traversal except for an informational disclosure with
+    // no controls. WebKit can otherwise leave Tab on that summary indefinitely.
+    if (dialog && (nodes.length || event.target !== summary || event.shiftKey)) return;
+    // The compact header can end with this disclosure. Continue through the
+    // logical document order, not the portalled panel's position at body end.
+    const following = [...(dialog ?? doc).querySelectorAll('button, input, select, textarea, a[href], summary, [tabindex]')]
+      .find((node) => !details.contains(node) && !panel.contains(node) && node.tabIndex >= 0
+        && usable(node) && Boolean(summary.compareDocumentPosition(node) & 4));
     let destination;
-    if (!event.shiftKey && event.target === summary) destination = nodes[0];
+    if (!event.shiftKey && event.target === summary) destination = nodes[0] ?? following;
     if (event.shiftKey && event.target === nodes[0]) destination = summary;
     if (panel.contains(event.target) && nodes.includes(event.target)) {
       const index = nodes.indexOf(event.target);

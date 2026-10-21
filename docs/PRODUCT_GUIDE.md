@@ -34,19 +34,19 @@ Type `@` and select a member from the list. Simply typing someone's name is not 
 
 ![Full interface with annotations: quote preview and selected mention](assets/product/en/annotated/05-quote-and-mention.jpg)
 
-The recipient can open the mentions inbox and jump to the relevant conversation and message. This is an in-app shortcut, not a cross-device read receipt or a promise of push notifications.
+For unread mentions, the recipient sees a small corner shortcut that jumps to the message. It disappears after the message is read in that browser tab. This is an in-app reminder, not a cross-device read receipt or a promise of push notifications.
 
-![Full interface with annotations: the mentions inbox](assets/product/en/annotated/06-mentions.jpg)
+![Full interface with annotations: locating a mentioned message](assets/product/en/annotated/06-mentions.jpg)
 
 Quoting or mentioning someone does not run their Agent. Chat and Agent requests remain separate actions.
 
 ## 3. Turn a long discussion into a short checklist
 
-Choose your own connected computer Agent (Codex/DSH) or a Cloud Agent, select completed messages, and ask it to summarize them. In this example, the summary keeps the agreed time, place, and button behavior and leaves photos out of the first version. This step is optional and uses the selected Agent's quota.
+Choose your own connected computer Agent (Codex/DSH) or a Cloud Agent, then open **Summaries** beside the conversation title and choose **Select history to summarize**. Select completed messages and confirm. In this example, the summary keeps the agreed time, place, and button behavior and leaves photos out of the first version. This step is optional and uses the selected Agent's quota.
 
 ![Full interface with annotations: the signup-page summary and original view](assets/product/en/annotated/03-summary.jpg)
 
-Undeleted original messages and valid older summary versions stay available. Switch a paragraph back to its sources, switch the whole view, or select an existing summary with other messages for a new summary. Members who can write in that conversation can generate summaries; viewers can read them.
+Undeleted original messages and valid older summary versions stay available. **Summaries** also contains the whole-view toggle and version history. Switch a paragraph back to its sources, or select an existing summary with other messages for a new summary. Members who can write in that conversation can generate summaries; viewers can read them.
 
 Future GatherThread Agent requests default to the summarized history. In **Settings → Summaries**, choose original history when precise wording or complete details matter, and customize the summary instructions. The reading-view toggle does not change this preference or remove history already loaded into a native Agent conversation.
 
@@ -119,6 +119,8 @@ Alex makes the page. Maya changes one line in `src/signup.js` to say “You’re
 ![Full interface with annotations: reviewing the confirmation-message change](assets/product/en/annotated/08-review-changes.jpg)
 
 On GitHub, use the repository's own pull-request review and permissions. GatherThread project membership does not grant GitHub access. Leaving a GatherThread project does not revoke GitHub access either.
+
+The small sidebar button at the top right shows or hides the **Files / Members** workspace without closing its tabs. Each file or function opens in its own tab: close tabs individually, reopen **Files** or **Members** with **+**, and use **More (…)** to find an open page or expand the workspace. Choose a storage provider and your branch, open a file, edit and save; for Markdown, switch between **Code** and the rendered **Preview** of your current draft. **Changes** and **History** support review. Teammates' branches and historical versions are read-only, and tab switches keep unsaved drafts in the page. The [browser file-workspace guide](CODE_SYNC.md#browser-file-workspace--网页文件工作区) covers file actions, mobile use and save-conflict recovery.
 
 A personal branch separates uploaded versions, **not local folders**. Use separate working copies when people or multiple tools edit files at the same time. GatherThread does not lock all Agents out of a shared directory.
 

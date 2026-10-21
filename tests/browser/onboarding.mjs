@@ -41,6 +41,7 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`${origin}/app/?mock=1`);
   await page.locator('#auth-view').waitFor({ state: 'visible' });
+  if (mobile) await page.locator('#interface-mode-use-mobile').click();
   await page.evaluate(async ({ locale, empty, viewer, deniedStorage }) => {
     if (locale === 'zh-CN') document.querySelector('#auth-language-button').click();
     window.realWrites = [];
@@ -211,6 +212,10 @@ async function assertStep(frame, item, size) {
   assert.equal(state.closeOutline, 'none', 'close has no green outline');
   if (item.target) {
     assert.notEqual(state.target, 'driver-dummy-element', item.id);
+    if (/^#history-summary-(?:select|view|versions)-button$/u.test(item.target)) {
+      assert.equal(await frame.locator('#history-summary-menu-button').getAttribute('aria-expanded'), 'true', 'guide discloses the shared summary menu');
+    }
+    if (item.id === 'mention') assert.equal(state.target, 'message-input', 'the mention guide never relies on an unread-only reminder');
     if (item.id === 'create-conversation') assert.equal(state.target, 'new-session-button');
     if (item.id === 'invite') assert.equal(state.inviteSubmit, true);
     assert.ok(state.overlap < 1, `${item.id} card covers control: ${JSON.stringify(state)}`);
@@ -373,6 +378,7 @@ try {
   await page.locator('.onboarding-example-dialog').waitFor({ state: 'detached' });
   // The ordinary disclosure stays unclipped and preserves keyboard order.
   const disclosure = page.locator('#session-context-details > summary');
+  await page.locator('#session-options-button').click();
   await disclosure.click();
   await page.waitForFunction(() => document.querySelector('.session-context-panel').parentElement === document.body);
   await disclosure.press('Tab');
@@ -412,14 +418,32 @@ try {
   }
   assert.equal(reachedLastPanelControl, true, 'Tab must reach the last panel control');
   await page.keyboard.press('Tab');
-  assert.equal(await page.locator('#mentions-button').evaluate((node) => node === document.activeElement), true, 'disabled summary never traps focus');
-  await page.locator('#mentions-button').press('Shift+Tab');
-  assert.equal(await page.locator('#upload-local-turns-button').evaluate((node) => node === document.activeElement), true,
-    JSON.stringify(await page.evaluate(() => ({ active: document.activeElement?.id, driverActive: document.body.classList.contains('driver-active'), open: document.querySelector('#session-context-details').open,
-      controls: [...document.querySelector('.session-context-panel').querySelectorAll('button, input, select, a[href]')].map(node => ({ id: node.id, disabled: node.disabled, hidden: Boolean(node.closest('[hidden]')), rects: node.getClientRects().length })) }))));
-  await page.locator('#upload-local-turns-button').press('Tab');
+  const afterPanel = await page.evaluate(() => {
+    const node = document.activeElement;
+    return { id: node.id, inPanel: document.querySelector('.session-context-panel').contains(node),
+      inOptions: document.querySelector('#session-options-panel').contains(node),
+      usable: node !== document.body && !node.disabled && !node.closest('[hidden]') && node.getClientRects().length > 0 };
+  });
+  assert.equal(afterPanel.usable, true, 'disabled or unread-only controls never receive focus');
+  assert.equal(afterPanel.inPanel, false, 'Tab leaves status details without a focus trap');
+  await page.keyboard.press('Shift+Tab');
+  if (browserName === 'webkit' && !afterPanel.inOptions) {
+    // macOS WebKit may skip ordinary buttons in native reverse traversal when
+    // full keyboard access is off. It must still land on a visible page control.
+    assert.equal(await page.evaluate(() => {
+      const node = document.activeElement;
+      return node !== document.body && !node.closest('[hidden]') && node.getClientRects().length > 0
+        && !document.querySelector('.session-context-panel').contains(node);
+    }), true, 'native reverse traversal never enters hidden options');
+  } else {
+    assert.equal(await page.evaluate(() => document.activeElement.id), afterPanel.inOptions ? 'upload-local-turns-button' : 'session-options-button',
+      'reverse traversal returns to the open details or the compact options trigger after automatic dismissal');
+  }
+  await page.keyboard.press('Tab');
   assert.equal(await page.locator('#history-summary-select-button').isDisabled(), true, 'disabled-control fixture survives polling');
-  assert.equal(await page.locator('#mentions-button').evaluate((node) => node === document.activeElement), true);
+  if (browserName !== 'webkit' || afterPanel.inOptions) {
+    assert.equal(await page.evaluate(() => document.activeElement.id), afterPanel.id, 'forward traversal rejoins the document at the same visible control');
+  }
   let reachedDocumentEnd = false;
   for (let i = 0; i < 200; i++) {
     const focus = await page.evaluate(() => {
@@ -443,6 +467,7 @@ try {
     delete window.__disabledSummaryFixture;
   });
   await page.keyboard.press('Escape');
+  if (await page.locator('#session-options-button').getAttribute('aria-expanded') !== 'true') await page.locator('#session-options-button').click();
   await disclosure.click(); await page.locator('#logout-button').click();
   await page.locator('#auth-view:not([hidden])').waitFor();
   assert.equal(await page.locator('.session-context-panel').isVisible(), false, 'logout hides private disclosure');

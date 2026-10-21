@@ -38,6 +38,10 @@ The script uses only `/app/?mock=1`, disposable browser profiles and mock API fi
 
 ## Client contract
 
+### File workspace browser regression
+
+After building TypeScript and the web app, run `tests/browser/file-workspace.mjs` with `PLAYWRIGHT_MODULE_PATH` pointing to an existing Playwright module. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an installed Chrome, or `FILE_WORKSPACE_WEBKIT=1` for Playwright WebKit. The disposable loopback fixture uses synthetic accounts, real cookies/HTTP/Git, and no model or GitHub requests. It covers desktop/mobile editing, unsaved Markdown source/preview switches, saves, diffs, branch history and deleted files, PDF/raster previews, read-only teammate branches, original member controls, independent function-tab close/reopen, cancelled batch closes, reordering, tab lists, and the empty-workspace picker. Screenshots include expanded, dark, desktop and mobile states, and go to `output/playwright/file-workspace` unless `BROWSER_OUTPUT_DIRECTORY` is set. WebKit is not a native Safari or physical-device certification. See the [file-workspace contracts](../../docs/INTERFACE_CONTRACTS.md#browser-file-workspace-local-implementation).
+
 ### Compact composer and guided GitHub settings
 
 Desktop, phone and tablet use the same small Agent-settings button. It opens the existing Agent/model/reasoning and cloud-workspace controls in a scrollable dialog, never extending the message composer. Chat and Agent sends remain distinct. The test banner's height is excluded from the workspace viewport.

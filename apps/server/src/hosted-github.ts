@@ -18,6 +18,14 @@ export interface HostedGithubOptions {
 }
 interface Credentials { access_token: string; refresh_token?: string; expires_at: number; refresh_expires_at: number }
 interface Binding { repository: string; repository_id: number; base_branch: string; revision: string }
+/** Internal requester-owned capability; credentials and arbitrary remote URLs remain private. */
+export interface HostedGithubRepositoryGuard {
+ repository: string; repository_id: number; base_branch: string; binding_revision: string;
+ connection_revision: string; authorization_generation: number; own_branch: string; can_write: boolean;
+ assertCurrent(): void;
+ request(path: string, method?: "GET" | "POST" | "PATCH", body?: unknown): Promise<any>;
+ fingerprint(input: string): string;
+}
 interface Task extends Binding {
  id: string; request_event_id: string; user_id: string; device_id: string; session_id: string; project_id: string;
   binding_revision: string; input_json: string; original_task_reference_ids: string | null; state: string; base_sha: string | null; base_tree: string | null;
@@ -240,6 +248,80 @@ export class HostedGithub {
    this.service.database.assertActiveDevice(actor);
    authorize?.();
    return this.apiWithToken(token, path, method, body, signal);
+ }
+ /** Acquire browser source access using this requester's private App consent. */
+ async repositoryGuard(actor: Actor, projectId: string, write = false, authorize: () => void = () => {}): Promise<HostedGithubRepositoryGuard> {
+   const unavailable = () => new ApiError(403, "github_connection_required",
+     "Connect your GitHub account and explicitly select this project's repository before browsing its files.",
+     { action: "connect_github" });
+   authorize(); this.service.requireProjectMembership(actor, projectId);
+   const target = this.service.database.getProjectGitHub(actor, projectId);
+   const binding = this.sqlite.prepare("SELECT * FROM hosted_github_bindings WHERE user_id=? AND project_id=?")
+     .get(actor.user_id, projectId) as unknown as Binding | undefined;
+   const authorization = this.sqlite.prepare(`SELECT generation FROM hosted_github_accounts
+     JOIN hosted_github_authorizations USING(user_id) WHERE user_id=?`).get(actor.user_id);
+   if (!target.connection?.enabled || !binding || !authorization
+     || binding.repository.toLowerCase() !== target.connection.repository.toLowerCase()
+     || binding.base_branch !== target.connection.base_branch) throw unavailable();
+   const generation = Number(authorization.generation), revision = target.connection.revision;
+   const assertCurrent = () => {
+     authorize();
+     if (this.closing) throw new ApiError(503, "github_access", "GitHub file access is shutting down. Retry after reconnecting.");
+     const role = this.service.requireProjectMembership(actor, projectId);
+     if (write && (role === "viewer" || this.service.database.requireProject(projectId).state !== "active")) {
+       throw new ApiError(403, "file_read_only", "Only an active project writer can edit their own branch.");
+     }
+     const current = this.service.database.getProjectGitHub(actor, projectId).connection;
+     const row = this.sqlite.prepare(`SELECT repository,repository_id,base_branch,revision,generation
+       FROM hosted_github_bindings JOIN hosted_github_accounts USING(user_id)
+       JOIN hosted_github_authorizations USING(user_id) WHERE user_id=? AND project_id=?`).get(actor.user_id, projectId);
+     if (!current?.enabled || current.revision !== revision || !row || Number(row.generation) !== generation
+       || row.repository_id !== binding.repository_id || row.repository !== binding.repository
+       || row.base_branch !== binding.base_branch || row.revision !== binding.revision) {
+       throw new ApiError(409, "github_binding_changed", "GitHub authorization or project repository changed. Reconnect and refresh the files.",
+         { action: "connect_github" });
+     }
+   };
+   const prefix = `/repos/${binding.repository}`;
+   const request = async (path: string, method: "GET" | "POST" | "PATCH" = "GET", body?: unknown) => {
+     if (!(path === prefix || path.startsWith(`${prefix}/`)) || path.includes("#") || path.includes("\\")
+       || /(?:^|\/)\.\.(?:\/|$)|%2e|%5c|[\u0000-\u001f\u007f]/iu.test(path)) {
+       throw new ApiError(400, "github_path", "Unsupported GitHub request.");
+     }
+     if (method !== "GET") {
+       const data = body as Record<string, unknown> | undefined;
+       const ownRef = `refs/heads/${target.branch}`;
+       const createObject = method === "POST" && ["/git/blobs", "/git/trees", "/git/commits"].some(suffix => path === prefix + suffix);
+       const createOwnRef = method === "POST" && path === `${prefix}/git/refs` && data?.ref === ownRef
+         && typeof data.sha === "string" && /^[a-f0-9]{40}$/u.test(data.sha) && Object.keys(data).every(key => ["ref", "sha"].includes(key));
+       const updateOwnRef = method === "PATCH" && path === `${prefix}/git/refs/heads/${encodeURIComponent(target.branch)}`
+         && data?.force === false && typeof data.sha === "string" && /^[a-f0-9]{40}$/u.test(data.sha)
+         && Object.keys(data).every(key => ["sha", "force"].includes(key));
+       if (!write || !(createObject || createOwnRef || updateOwnRef)) {
+         throw new ApiError(403, "file_read_only", "GitHub writes are restricted to your stable personal branch.");
+       }
+     }
+     assertCurrent();
+     const value = await this.api(actor, path, method, body, assertCurrent);
+     assertCurrent();
+     return value;
+   };
+   assertCurrent();
+   const repository = await request(prefix);
+   if (repository.id !== binding.repository_id || repository.full_name?.toLowerCase() !== binding.repository.toLowerCase()
+     || !repository.permissions || !(repository.permissions.pull || repository.permissions.push || repository.permissions.admin)
+     || write && (!repository.permissions.push || repository.archived || repository.disabled)) {
+     throw new ApiError(403, "github_access", "Your GitHub account cannot access this repository with the required permission.");
+   }
+   const canWrite = () => {
+     assertCurrent();
+     return this.service.database.getProjectGitHub(actor, projectId).can_write
+       && Boolean(repository.permissions.push) && !repository.archived && !repository.disabled;
+   };
+   return { repository: binding.repository, repository_id: binding.repository_id, base_branch: binding.base_branch,
+     binding_revision: binding.revision, connection_revision: revision, authorization_generation: generation,
+     own_branch: target.branch, get can_write() { return canWrite(); },
+     assertCurrent, request, fingerprint: (input: string) => this.inputFingerprint(actor.user_id, `files:${projectId}`, input) };
  }
  authorize(actor: Actor) {
    this.prune(); this.service.database.assertActiveDevice(actor);

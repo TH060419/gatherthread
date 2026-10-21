@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -30,12 +30,14 @@ await cp(resolve(productRoot, "assets"), resolve(dist, "assets"), { recursive: t
 await cp(resolve(root, "index.html"), resolve(applicationDist, "index.html"));
 await cp(resolve(root, "src"), resolve(applicationDist, "src"), { recursive: true });
 await cp(resolve(root, "brand"), resolve(applicationDist, "brand"), { recursive: true });
-await build({
+const webBuild = await build({
   entryPoints: {
     api: resolve(root, "src/api.js"),
     markdown: resolve(root, "src/markdown.js"),
     onboarding: resolve(root, "src/onboarding.js"),
     "history-summary-policy": resolve(root, "src/history-summary-policy.js"),
+    "file-editor": resolve(root, "src/file-editor.js"),
+    "file-pdf": resolve(root, "src/file-pdf.js"),
     styles: resolve(root, "src/styles.css"),
   },
   outdir: resolve(applicationDist, "src"),
@@ -52,6 +54,7 @@ await build({
   },
   minify: true,
   sourcemap: false,
+  metafile: true,
 });
 // A self-contained classic bundle avoids WebKit's opaque-origin 'self' asset
 // restriction. The only script is authored build output; no backend is reachable.
@@ -73,6 +76,26 @@ for (const path of new Set([...exampleHtml.matchAll(/src="(\.\/(?:brand\/[^" ]+|
 await writeFile(resolve(applicationDist, "example.html"), exampleHtml);
 await mkdir(resolve(applicationDist, "licenses"), { recursive: true });
 await cp(resolve(repositoryRoot, "node_modules/driver.js/license"), resolve(applicationDist, "licenses/driver.js.txt"));
+const pdfRoot = resolve(repositoryRoot, "node_modules/pdfjs-dist");
+const pdfAssets = resolve(applicationDist, "src/pdfjs");
+await mkdir(pdfAssets, { recursive: true });
+await cp(resolve(pdfRoot, "legacy/build/pdf.worker.min.mjs"), resolve(pdfAssets, "pdf.worker.min.mjs"));
+for (const directory of ["cmaps", "standard_fonts"]) await cp(resolve(pdfRoot, directory), resolve(pdfAssets, directory), { recursive: true });
+for (const [name, license] of [["codemirror", "LICENSE"], ["@codemirror/merge", "LICENSE"], ["pdfjs-dist", "LICENSE"]]) {
+  await cp(resolve(repositoryRoot, "node_modules", name, license), resolve(applicationDist, "licenses", `${name.replaceAll("/", "-")}.txt`));
+}
+// Include the actual bundled parsers' copyright/license notices as well as the
+// top-level editor/PDF licenses. These files never contain project source.
+const bundledPackages = new Set(Object.keys(webBuild.metafile.inputs).flatMap(path => {
+  if (!path.includes("node_modules/")) return [];
+  const parts = path.split("node_modules/").at(-1).split("/");
+  return [parts[0].startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]];
+}));
+for (const name of bundledPackages) {
+  const directory = resolve(repositoryRoot, "node_modules", name);
+  const notices = (await readdir(directory)).filter(file => /^(?:licen[cs]e|copying|notice)(?:[._-].*)?$/iu.test(file));
+  for (const notice of notices) await cp(resolve(directory, notice), resolve(applicationDist, "licenses", `${name.replaceAll("/", "-")}-${notice}`), { recursive: true });
+}
 for (const asset of [
   "android-chrome-192x192.png",
   "android-chrome-512x512.png",

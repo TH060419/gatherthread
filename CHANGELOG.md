@@ -5,6 +5,11 @@ All notable changes to GatherThread are documented here. The project follows Sem
 ## [Unreleased]
 
 - Install the DeepSeek Harness plugin into the desktop application's `desktop` profile. DSH `0.2.1-rc.2` renamed Connection's trust service from `webRuntime` to `webStartup`, so the previous profile layer left the required Connection row pending and failed startup. The current layer targets `0.2.1-rc.2` for both the `desktop` and `web` profiles, declares `engines.dsh` so a mismatched runtime disables the row instead of crashing, and keeps the `0.1.7-rc.2` layer frozen as `cordis.patch.dsh-0.1.yml` for the `0.1.0-beta.2` artifact. The settings panel now lists every verified release/profile pair instead of claiming one release while running another. See [ADR-0058](docs/adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md).
+
+- Simplify the conversation header to Summaries and Session options. Group summary generation, original/summary display and version history; replace the persistent mentions inbox button with an unread corner jump that clears only after the message is visible. Keep bounded account/project-scoped read IDs across same-tab reloads without storing message content. Update desktop/mobile guides and keyboard paths.
+
+- Add a right-hand file workspace with a project tree, independently closeable function/file tabs, a new-tab picker and open-tab list, code editing, Markdown source/preview, PDF/raster previews, saved changes and branch history. The flush sidebar keeps only new-tab and More controls above the content; its small header toggle hides the panel without closing tabs or drafts. Reorder tabs and safely close groups of tabs. Browse teammate branches read-only; manage and save files on your own GT Cloud or authorized GitHub branch with stale-version protection and recoverable retries. See [ADR-0059](docs/adr/0059-right-file-workspace.md).
+
 - Redesign mobile conversations, members, invitations, settings and project-file connections as focused pages. Add a browser-local Mobile/Desktop choice on login and in General, with confirmation after device detection. Preserve drafts, exact remote/Cloud Agent selection and Pause/Resume; desktop-only file transfers and native setup stay off the phone interface.
 
 ## [0.1.0-beta.2] - 2026-10-15
