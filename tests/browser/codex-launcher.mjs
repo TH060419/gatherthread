@@ -13,7 +13,7 @@ const name = process.env.LAUNCHER_UI_BROWSER ?? "chrome";
 const browser = name === "webkit" ? await webkit.launch() : await chromium.launch({ channel: name, headless: true });
 const errors = [];
 const downloadSource = "a".repeat(40), downloadIndex = `/downloads/${downloadSource}/index.html`;
-const githubRelease = "https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-beta.2";
+const githubRelease = "https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-beta.3";
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".woff2": "font/woff2" };
 async function fixture(origin, locale, platform, width = 1440, touch = 0) {
   const userAgent = platform === "iPhone" ? "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1" : undefined;
