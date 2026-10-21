@@ -1203,11 +1203,12 @@ export class MockCollaborationApi {
     });
   }
 
-  getFileBranches(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).branches(projectId, input); }
-  getFileTree(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).tree(projectId, input); }
-  getFileContent(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).content(projectId, input); }
-  getFileHistory(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).history(projectId, input); }
-  getFileChanges(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).changes(projectId, input); }
+  // Match HTTP's transport boundary: AbortSignal is not a protocol field.
+  getFileBranches(projectId, { signal, ...input } = {}) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).branches(projectId, input); }
+  getFileTree(projectId, { signal, ...input } = {}) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).tree(projectId, input); }
+  getFileContent(projectId, { signal, ...input } = {}) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).content(projectId, input); }
+  getFileHistory(projectId, { signal, ...input } = {}) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).history(projectId, input); }
+  getFileChanges(projectId, { signal, ...input } = {}) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).changes(projectId, input); }
   mutateFiles(projectId, input) { return (this.fileWorkspace ??= new MockFileWorkspace(this)).mutate(projectId, input); }
 
   async getProjectGithub(projectId) {

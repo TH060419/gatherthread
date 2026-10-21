@@ -27,7 +27,7 @@ export class ExampleCollaborationApi extends MockCollaborationApi {
       text('Alex, shall we make a signup page for our club event? People just need to see when and where it is, then click “Sign me up”. Should we add photos too?', '陈晓，咱们给社团做个活动报名页吧？大家看见时间、地点，再点“我要报名”就行。要不要再放几张照片？'),
       text('Yes! Let’s leave photos for later. Put Saturday at 2 pm, at the school sports field. Clicking “Sign me up” should show “You’re signed up”. I’ll ask my AI agent to make it; could you check it afterwards?', '好！照片以后再说。这次写清“周六下午两点，学校操场”，点“我要报名”后显示“报名成功”。我请我的 AI agent 来做，你帮忙检查一下？'),
       text('Build the page using the requirements in the summary above. Keep it to those agreed features, then tell us what you made and checked.', '按上面的摘要把报名页做出来吧，只做已经确定的功能。完成后告诉我们做了什么、检查了什么。'),
-      text('The signup page is ready. Open `index.html` and try the button.\n\n**Project files**\n', '报名页做好了。打开 `index.html`，就能试一下按钮。\n\n**项目文件**\n')
+      text('The signup page is ready. Use Result at the top to try the button, or Project files to browse its code in the file workspace.\n\n**Project files**\n', '报名页做好了。点顶部“成果”可试用按钮，点“项目文件”可在文件工作区查看代码。\n\n**项目文件**\n')
         + '```text\nclub-signup/\n├── index.html\n├── styles.css\n├── src/signup.js\n├── tests/signup.test.cjs\n├── package.json\n└── README.md\n```\n\n'
         + text('`index.html` holds the event; `styles.css` sets the appearance. The button behavior lives in `src/signup.js`:\n\n', '`index.html` 放活动内容，`styles.css` 管外观。按钮动作在 `src/signup.js`：\n\n')
         + '```javascript\n' + buttonCode + '```\n\n'

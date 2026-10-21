@@ -25,8 +25,10 @@ export function visibleGuideTarget(doc, selectors) {
           || (/(auto|scroll|hidden|clip)/u.test(css.overflowX) && (rect.left < bounds.left - 1 || rect.right > bounds.right + 1))) { clipped = true; break; }
       }
       if (clipped) continue;
-      if (rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.left >= 0
-        && rect.bottom <= viewport.innerHeight && rect.right <= viewport.innerWidth) return node;
+      // Match the ancestor clipping tolerance: scrollIntoView can settle on a
+      // fractional CSS pixel at the viewport edge in Safari and Chromium.
+      if (rect.width > 0 && rect.height > 0 && rect.top >= -1 && rect.left >= -1
+        && rect.bottom <= viewport.innerHeight + 1 && rect.right <= viewport.innerWidth + 1) return node;
     }
   }
   return undefined;
@@ -74,7 +76,7 @@ export function prepareMemberGuideTab(doc, view) {
   }
 }
 
-export function mountOnboarding({ document: doc, getContext, openSettings, storage = browserStorage(), createDriver = driver, prepareScenario, exampleApi }) {
+export function mountOnboarding({ document: doc, getContext, openSettings, storage = browserStorage(), createDriver = driver, prepareScenario, exampleApi, fileWorkspace }) {
   if (doc.documentElement.dataset.example !== "true") return mountExampleGateway({ document: doc, getContext, openSettings, storage });
   const win = doc.defaultView;
   const el = (id) => doc.getElementById(id);
@@ -97,6 +99,9 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
   let toolbar;
   let line;
   let lastTarget;
+  let fileGuideKey;
+  let fileGuideState;
+  let fileGuideGeneration = 0;
   const originalAttributes = new Map();
   const text = (pair) => guideText(pair, getContext().locale);
   const key = () => onboardingKey(getContext());
@@ -105,6 +110,21 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
   function prepare(item) {
     prepareScenario?.(item);
     const view = item.view;
+    const nextFileGuideKey = item.fileSelection ? `${activeTopic}:${item.id}` : null;
+    if (nextFileGuideKey !== fileGuideKey) {
+      const ticket = ++fileGuideGeneration;
+      fileWorkspace?.cancelExampleNavigation();
+      if (fileGuideKey && !nextFileGuideKey) fileWorkspace?.close();
+      fileGuideKey = nextFileGuideKey;
+      fileGuideState = nextFileGuideKey ? "loading" : null;
+      if (nextFileGuideKey) {
+        Promise.resolve(fileWorkspace?.navigateExample(item.fileSelection)).catch(() => false).then(ready => {
+          if (ticket !== fileGuideGeneration || fileGuideKey !== nextFileGuideKey || !tour) return;
+          fileGuideState = ready ? "ready" : "blocked";
+          tour.drive(tour.getActiveIndex());
+        });
+      }
+    }
     if (view !== 'example-result') toolbar?.closeResult();
     const mobile = getContext().layout === "mobile";
     const settingsView = ["summary-settings", "account-device", "account-delete"].includes(view);
@@ -113,11 +133,11 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       ownedSettingsDialog = true; openSettings();
     }
     if (mobile) {
-      const wanted = ({ "mobile-rail": "mobile-sessions-dialog", "mobile-project": "mobile-sessions-dialog", "mobile-agent": "mobile-agent-dialog",
+      const wanted = item.fileSelection ? "mobile-members-dialog" : ({ "mobile-rail": "mobile-sessions-dialog", "mobile-project": "mobile-sessions-dialog", "mobile-agent": "mobile-agent-dialog",
         "mobile-tools": "mobile-tools-dialog", "mobile-details": "mobile-tools-dialog",
         "mobile-members": "mobile-members-dialog", "mobile-invite": "mobile-members-dialog", "mobile-join": "mobile-members-dialog" })[view];
       for (const id of mobileDialogs) if (el(id).open && id !== wanted) el(id).close();
-      if (wanted && !el(wanted).open) {
+      if (wanted && !el(wanted).open && !item.fileSelection) {
         const trigger = ({ "mobile-sessions-dialog": "toggle-session-rail-button", "mobile-agent-dialog": "mobile-agent-button",
           "mobile-tools-dialog": "mobile-tools-button", "mobile-members-dialog": "mobile-members-button" })[wanted];
         if (wanted === "mobile-members-dialog" && !el("mobile-tools-dialog").open) el("mobile-tools-button").click();
@@ -190,6 +210,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
 
   function cleanup() {
     tour = null;
+    fileWorkspace?.cancelExampleNavigation(); fileGuideGeneration += 1; fileGuideKey = null; fileGuideState = null;
     toolbar?.closeResult();
     const toolbarElement = doc.querySelector(".example-toolbar"); if (toolbarElement) doc.body.append(toolbarElement);
     line?.remove(); line = null;
@@ -414,7 +435,9 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
         popover.closeButton.setAttribute("aria-label", text(GUIDE_COPY.skip));
         if (!lastTarget && items[tour.getActiveIndex()]?.target) {
           const hint = doc.createElement("p"); hint.className = "onboarding-hint";
-          hint.textContent = getContext().locale === "zh-CN" ? "正在准备示例中的功能…" : "Preparing this example control…";
+          hint.textContent = fileGuideState === "blocked"
+            ? (getContext().locale === "zh-CN" ? "暂时无法打开此文件视图。请先处理尚未保存的示例编辑，再重新打开引导；草稿不会被自动丢弃。" : "This file view could not open. Resolve any unsaved example edits, then reopen the guide. Drafts are never discarded automatically.")
+            : (getContext().locale === "zh-CN" ? "正在准备示例中的功能…" : "Preparing this example control…");
           popover.description.append(hint);
         }
         const note = items[tour.getActiveIndex()]?.note;
@@ -456,6 +479,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
   }
   function resolveExampleTarget(item) {
     if (!item.target) return undefined;
+    if (item.fileSelection && fileGuideState !== "ready") return undefined;
     if (!visibleGuideTarget(doc, item.target)) {
       // A read-only panel can finish loading after the step first opens. Retry
       // its scroll when data arrives, not only on the initial Driver callback.
@@ -499,7 +523,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       if (!initialOffer) return;
       initialOffer = false;
       const topic = win.__examplePresentation?.topic;
-      toolbar = exampleToolbar(doc, { start, cancel: () => end(null), onExit: (status) => exitExample(status), api: exampleApi });
+      toolbar = exampleToolbar(doc, { start, cancel: () => end(null), onExit: (status) => exitExample(status), api: exampleApi, fileWorkspace });
       if (topic && topic !== "browse") win.requestAnimationFrame(() => start(topic));
     },
     cancel() { pendingKey = null; win.cancelAnimationFrame(autoFrame); end(null); },

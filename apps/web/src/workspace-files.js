@@ -19,6 +19,8 @@ export const WORKSPACE_FILES_ZH_CN = {
   "Compare with parent": "与上一版本比较", "View version": "查看此版本", "No changes": "没有更改",
   "This file is available as a download.": "此文件可供下载。", "Editor unavailable": "编辑器暂不可用",
   "PDF preview unavailable": "PDF 预览暂不可用", "File preview": "文件预览", "Close file": "关闭文件",
+  "PDF preview is not included in the isolated example.": "独立示例不提供 PDF 预览。",
+  "Save or discard your example edits before switching branches.": "请先保存或放弃自己的示例编辑，再切换分支。",
   "Discard unsaved changes?": "放弃尚未保存的修改？", "Delete the selected file or folder?": "删除选中的文件或文件夹？",
   "File path": "文件路径", "Folder path": "文件夹路径", "Destination path": "目标路径", "Rename path": "重命名路径",
   "Enter a safe relative file path.": "请输入安全的相对文件路径。", "A file or folder already exists at this path.": "此路径已有文件或文件夹。",
@@ -70,6 +72,7 @@ export function mountFileWorkspace({
   let context = getContext() ?? {};
   let scope = fileContextKey(context);
   let generation = 0; let viewGeneration = 0; let branchGeneration = 0; let explorerGeneration = 0;
+  let exampleNavigationRevision = 0;
   let sequence = 0; let disposed = false; let visible = false; let visibilityRevision = 0;
   let provider = "gt-cloud"; let branches = []; let branchId = ""; let tree = null;
   let loading = false; let treeError = ""; let active = "files"; let selectedPath = "";
@@ -551,7 +554,7 @@ export function mountFileWorkspace({
   async function openFile(path, { commit, beforeCommit, emptyBefore = false, emptyAfter = false, connectionRevision = tree?.connection_revision } = {}) {
     try { normalizeFilePath(path); } catch { return; }
     let tab = [...tabs.values()].find((item) => item.path === path && item.commit === commit && item.beforeCommit === beforeCommit && item.emptyBefore === emptyBefore && item.emptyAfter === emptyAfter && item.connectionRevision === connectionRevision);
-    if (tab) { activate(tab.id); return; }
+    if (tab) { activate(tab.id); return tab; }
     tab = { id: `file-${++sequence}`, path, branchId, commit, beforeCommit, emptyBefore, emptyAfter, connectionRevision, mode: beforeCommit || emptyBefore || emptyAfter ? "diff" : "preview", loading: true, error: "", original: undefined, draft: undefined };
     tabs.set(tab.id, tab); activate(tab.id);
     const epoch = generation;
@@ -560,7 +563,7 @@ export function mountFileWorkspace({
       // renderDiff fetches the before-side from the acknowledged parent instead.
       tab.bytes = new Uint8Array(); tab.description = { kind: "text", text: "", mime: "text/plain;charset=utf-8" };
       tab.original = ""; tab.draft = ""; tab.baseCommit = commit; tab.loading = false;
-      if (active === tab.id) { renderTabs(); renderActive(); } return;
+      if (active === tab.id) { renderTabs(); renderActive(); } return tab;
     }
     try {
       const result = await read("getFileContent", { provider, branch_id: branchId, path, ...(commit ? { commit } : {}),
@@ -571,6 +574,7 @@ export function mountFileWorkspace({
       tab.executable = result.executable ?? false; tab.original = tab.description.text;
       tab.draft = tab.original; tab.loading = false;
       if (active === tab.id) { renderTabs(); renderActive(); }
+      return tab;
     } catch (error) { if (epoch !== generation || !tabs.has(tab.id)) return; tab.loading = false; tab.error = errorMessage(error, "Could not load this file."); if (active === tab.id) renderActive(); }
   }
 
@@ -585,7 +589,7 @@ export function mountFileWorkspace({
     tools.append(button("Back to files", () => activate("files"), { className: "fw-back" }));
     if (tab.original !== undefined) {
       for (const [mode, label] of [["preview", "Preview"], ["code", "Code"], ["diff", "Changes"], ["history", "History"]]) {
-        const choice = button(label, () => { tab.mode = mode; renderActive(); }, { className: tab.mode === mode ? "is-selected" : "" }); choice.setAttribute("aria-pressed", String(tab.mode === mode)); tools.append(choice);
+        const choice = button(label, () => { tab.mode = mode; renderActive(); }, { className: tab.mode === mode ? "is-selected" : "" }); choice.dataset.fileMode = mode; choice.setAttribute("aria-pressed", String(tab.mode === mode)); tools.append(choice);
       }
     } else {
       for (const [mode, label] of [["preview", "Preview"], ["history", "History"]]) {
@@ -638,6 +642,9 @@ export function mountFileWorkspace({
       const image = el("img", "fw-image"); image.src = url; image.alt = tab.path; content.append(image);
       mountedView = { destroy() { if (!exampleMode) revoke(url); } };
     } else if (tab.description.kind === "pdf") {
+      // Workers are forbidden by the opaque example's CSP. Do not relax that
+      // boundary merely to demonstrate a format the authored fixture lacks.
+      if (exampleMode) { content.append(el("p", "fw-empty", t("PDF preview is not included in the isolated example."))); return; }
       if (!pdfFactory) { content.append(el("p", "fw-empty", t("PDF preview unavailable"))); return; }
       try { const view = await pdfFactory({ host: content, bytes: tab.bytes.slice(), t }); if (ticket !== viewGeneration) view.destroy?.(); else mountedView = view; }
       catch { if (ticket === viewGeneration) content.append(el("p", "fw-empty fw-error", t("PDF preview unavailable"))); }
@@ -893,6 +900,51 @@ export function mountFileWorkspace({
     renderTabPickers(); revealActiveTab();
     if (active === "files" && !tree && !loading) await loadBranches();
   }
+  // Authored tutorial navigation only. All content still uses the same fenced
+  // readers and tabs as real files. Never confirm/discard a practice draft or
+  // submit a mutation on behalf of a guide.
+  async function navigateExample({ provider: requestedProvider = "gt-cloud", branchId: requestedBranch, path, mode = "preview", compareWithParent = false } = {}) {
+    if (!exampleMode || disposed || !["gt-cloud", "github"].includes(requestedProvider)
+      || !["preview", "code", "diff", "history"].includes(mode)) return false;
+    if (path !== undefined) { try { normalizeFilePath(path); } catch { return false; } }
+    const ticket = ++exampleNavigationRevision; const requestedScope = fileContextKey(getContext() ?? {});
+    const isCurrent = () => !disposed && ticket === exampleNavigationRevision && requestedScope === scope
+      && requestedScope === fileContextKey(getContext() ?? {});
+    await open("files");
+    if (!isCurrent() || mutationBusy || mutation) return false;
+    if (requestedProvider !== provider) {
+      if (hasDirty()) { setNotice(t("Save or discard your example edits before switching branches.")); return false; }
+      resetBranch(); provider = requestedProvider; branches = []; branchId = ""; await loadBranches();
+    } else if (!tree || loading) await loadBranches();
+    if (!isCurrent() || !tree) return false;
+    const nextBranch = requestedBranch === "own"
+      ? branches.find(branch => canEditFileBranch(context, branch))?.id : requestedBranch;
+    if (nextBranch && nextBranch !== branchId) {
+      if (!branches.some(branch => branch.id === nextBranch)) return false;
+      if (hasDirty()) { setNotice(t("Save or discard your example edits before switching branches.")); return false; }
+      resetBranch(); branchId = nextBranch; await loadTree();
+    }
+    if (!isCurrent() || !tree) return false;
+    const epoch = generation; const current = () => isCurrent() && epoch === generation;
+    if (!path) { explorerView = "files"; renderExplorer(); return true; }
+    let selection = {};
+    if (compareWithParent) {
+      let changes;
+      try { changes = await read("getFileChanges", { provider, branch_id: branchId, commit: tree.commit,
+        ...(tree.connection_revision !== undefined ? { connection_revision: tree.connection_revision } : {}) }); }
+      catch { if (current()) setNotice(t("Could not load history."), "error"); return false; }
+      if (!changes || !current()) return false;
+      const file = changes.files?.find(file => file.path === path);
+      if (!file) return false;
+      selection = { commit: changes.commit, beforeCommit: file.status === "added" ? undefined : changes.base_commit,
+        emptyBefore: file.status === "added", emptyAfter: file.status === "deleted" };
+    }
+    if (!current()) return false;
+    const tab = await openFile(path, selection);
+    if (!tab || !current() || active !== tab.id) return false;
+    tab.mode = mode; renderActive(); return true;
+  }
+  function cancelExampleNavigation() { exampleNavigationRevision += 1; }
   function close() { visibilityRevision += 1; visible = false; closeTabMenu(); newTabPicker.open = false; openTabsPicker.open = false; onClose(); }
   function keydown(event) {
     if (event.key === "Escape") {
@@ -935,5 +987,6 @@ export function mountFileWorkspace({
     root.remove();
   }
   renderTabs(); renderExplorer(); renderActive();
-  return { updateContext, open, show, close, clear, hasDirty, confirmLeave, refreshLanguage, destroy };
+  return { updateContext, open, show, close, clear, hasDirty, confirmLeave, refreshLanguage, destroy,
+    navigateExample, cancelExampleNavigation };
 }

@@ -523,6 +523,7 @@ const onboarding = mountOnboarding({
   openSettings: openSettingsDialog,
   prepareScenario: exampleMode ? prepareExampleScenario : undefined,
   exampleApi: exampleMode ? api : undefined,
+  fileWorkspace: exampleMode ? filesUi : undefined,
 });
 for (const button of document.querySelectorAll("[data-onboarding-topic]")) {
   button.addEventListener("click", () => {
@@ -552,6 +553,11 @@ const historySummaryUi = mountHistorySummaries({
 });
 function prepareExampleScenario(item) {
   if (!exampleMode || !state.project || !state.session) return;
+  if (item.fileSelection) {
+    // Tutorial-only fixture preparation, never a real repository mutation.
+    const repository = api.codeRepositories.get(state.project.id)?.repository;
+    if (repository) repository.enabled = true;
+  }
   if (item.view === "code-github" && !api.githubConnections.has(state.project.id)) {
     api.githubConnections.set(state.project.id, { repository: "example-club/signup-page",
       base_branch: "main", enabled: true, revision: "example-revision" });

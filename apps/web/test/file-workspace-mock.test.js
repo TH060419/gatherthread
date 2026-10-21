@@ -34,6 +34,21 @@ test("mock file APIs seed authored Example snapshots and preserve historical con
   assert.equal(FileTreeResultSchema.parse(await files.tree(projectId, { provider: "gt-cloud", branch_id: "branch-maya" })).can_write, false);
 });
 
+test("example file API reads keep AbortSignal outside strict protocol validation", async () => {
+  const api = new ExampleCollaborationApi(), project = "project-orbit", signal = new AbortController().signal;
+  const branches = FileBranchesResultSchema.parse(await api.getFileBranches(project, { provider: "gt-cloud", signal }));
+  assert.ok(branches.branches.some(branch => branch.id === "branch-maya"));
+  const selection = { provider: "gt-cloud", branch_id: "branch-maya", signal };
+  const tree = FileTreeResultSchema.parse(await api.getFileTree(project, selection)); assert.equal(tree.entries.length, 6);
+  const content = FileContentResultSchema.parse(await api.getFileContent(project, { ...selection, path: "src/signup.js" }));
+  assert.match(atob(content.content_base64), /addEventListener/u);
+  assert.ok(FileHistoryResultSchema.parse(await api.getFileHistory(project, selection)).commits.length);
+  assert.deepEqual(FileChangesResultSchema.parse(await api.getFileChanges(project, selection)).files,
+    [{ path: "src/signup.js", status: "modified" }]);
+  await assert.rejects(api.getFileBranches(project, { provider: "gt-cloud", signal, unknown_field: true }),
+    error => error.issues?.some(issue => issue.code === "unrecognized_keys" && issue.keys.includes("unknown_field")));
+});
+
 test("mock manager preserves original-operation receipts, CAS, metadata changes and branch history", async () => {
   const f = await fixture();
   const first = await edit(f, "own", f.initial, [write("folder/a.txt", "a"), write("folder/nested/b.txt", "b")], "mock-file-seed");

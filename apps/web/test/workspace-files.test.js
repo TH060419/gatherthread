@@ -417,6 +417,53 @@ test("the isolated example previews only sniffed raster images as data URLs", as
   assert.equal(f.host.querySelector("img").src, "data:image/png;base64,iVBORw0KGgo="); assert.equal(blobs, 0); f.controller.destroy();
 });
 
+test("authored file navigation reuses independent tabs and never saves or discards practice drafts", async () => {
+  let confirms = 0; const f = fixture({ exampleMode: true, confirm: () => { confirms += 1; return true; } });
+  assert.equal(await f.controller.navigateExample({ branchId: "own", path: "a.js", mode: "code" }), true);
+  await flush(); f.editors.at(-1).change("my practice draft");
+  assert.equal(await f.controller.navigateExample({ branchId: "own", path: "b.js" }), true); await flush();
+  assert.deepEqual(tabOrder(f), ["files", "file-1", "file-2"]);
+  assert.equal(await f.controller.navigateExample({ branchId: "main", path: "a.js" }), false);
+  assert.equal(confirms, 0, "a tutorial never answers a discard prompt for the user");
+  assert.equal(f.controller.hasDirty(), true); assert.equal(f.calls.some(([kind]) => kind === "mutate"), false);
+  await f.tab("file-1").click(); await flush(); assert.equal(f.editors.at(-1).doc, "my practice draft"); f.controller.destroy();
+});
+
+test("authored teammate review uses the pinned saved parent diff and stays read-only", async () => {
+  const head = "b".repeat(40), parent = "a".repeat(40); const diffs = [];
+  const f = fixture({ exampleMode: true, diffFactory: async options => { diffs.push(options); return { destroy() {} }; }, api: {
+    async getFileBranches() { return { branches: [
+      { id: "own", user_id: "alice", can_write: true }, { id: "branch-maya", user_id: "maya", can_write: false }], default_branch_id: "own" }; },
+    async getFileTree(_project, input) { return { commit: input.branch_id === "branch-maya" ? head : parent, can_write: input.branch_id === "own", entries: [{ path: "a.js", size: 5 }] }; },
+    async getFileChanges(_project, input) { assert.equal(input.branch_id, "branch-maya"); assert.equal(input.commit, head); return { base_commit: parent, commit: head, files: [{ path: "a.js", status: "modified" }] }; },
+    async getFileContent(_project, input) { return { path: input.path, commit: input.commit, size: 5, content_base64: textToBase64(input.commit === parent ? "old()" : "new()") }; },
+  } });
+  assert.equal(await f.controller.navigateExample({ branchId: "branch-maya", path: "a.js", mode: "diff", compareWithParent: true }), true); await flush();
+  assert.equal(diffs.at(-1).before, "old()"); assert.equal(diffs.at(-1).after, "new()");
+  assert.match(f.host.querySelector(".fw-file-heading").textContent, /Read only/u);
+  assert.equal(f.host.querySelector("[data-save-for]"), null); assert.equal(f.calls.some(([kind]) => kind === "mutate"), false); f.controller.destroy();
+});
+
+test("tutorial navigation is example-only and rejects stale account scope before opening a file", async () => {
+  const ordinary = fixture(); assert.equal(await ordinary.controller.navigateExample({ path: "a.js" }), false);
+  assert.deepEqual(ordinary.calls, []); ordinary.controller.destroy();
+  const pending = deferred(); const f = fixture({ exampleMode: true, api: { async getFileTree() { return pending.promise; } } });
+  const navigation = f.controller.navigateExample({ path: "a.js" }); await flush();
+  f.setContext({ ...f.getContext(), userId: "bob", projectId: "project-b" }); const update = f.controller.updateContext();
+  pending.resolve({ commit: "a".repeat(40), can_write: true, entries: [{ path: "a.js", size: 3 }] });
+  await update; assert.equal(await navigation, false); await flush();
+  assert.equal(f.calls.some(([kind]) => kind === "content"), false); assert.deepEqual(tabOrder(f), ["files"]); f.controller.destroy();
+});
+
+test("the isolated example explains unsupported PDF without creating a worker", async () => {
+  let workers = 0; const f = fixture({ exampleMode: true, pdfFactory: async () => { workers += 1; }, api: {
+    async getFileTree() { return { commit: "a".repeat(40), entries: [{ path: "brief.pdf", size: 8 }] }; },
+    async getFileContent() { return { commit: "a".repeat(40), content_base64: textToBase64("%PDF-1.7"), size: 8 }; },
+  } });
+  await f.controller.open(); await f.treeItem("brief.pdf").click(); await flush();
+  assert.equal(workers, 0); assert.match(f.host.textContent, /PDF preview is not included in the isolated example/u); f.controller.destroy();
+});
+
 test("initial commit history compares additions against an empty tree", async () => {
   const root = "a".repeat(40); const diffs = [];
   const f = fixture({ diffFactory: async (input) => { diffs.push(input); return { destroy() {} }; }, api: {

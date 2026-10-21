@@ -38,7 +38,7 @@ Maya wants a club signup page. Alex confirms the time, place, and button behavio
 
 ### 2. Turn decisions into work
 
-Choose or connect your Agent, then explicitly ask it to build. The example shows a work plan, actual `index.html` and `src/signup.js` files, and behavior checks. Open **Result** to try the button or inspect the files. If discussion is long, summarize selected requirements with your local or cloud Agent; undeleted originals remain available.
+Choose or connect your Agent, then explicitly ask it to build. The example shows a work plan, actual `index.html` and `src/signup.js` files, and behavior checks. Open **Files** on the right to inspect the code, or **Result** to try the signup page. If discussion is long, summarize selected requirements with your local or cloud Agent; undeleted originals remain available.
 
 ![Full interface with annotations: Alex's Agent answer and model](docs/assets/product/en/annotated/04-agent-work.jpg)
 
@@ -89,6 +89,7 @@ Want to practice first? Open the [free example](https://gatherthread.cn/app/exam
 | Cloud trial Agent | Try small tasks in an isolated workspace without local installation or your own API key; workspace usage allowances apply. |
 | Personal model APIs | Add your own model account in Settings for cloud tasks and summaries. Your provider bills you; keys are not shared with teammates. |
 | GitHub cloud workspace | With a validated cloud coding model and your repository authorization, request an npm project change, review its saved source and explicitly create a draft PR. |
+| Online files | Browse cloud files in the right workspace, open code, Markdown, images and PDFs in tabs, inspect changes and edit your own branch. No connected computer Agent is needed to view online files. |
 | Members and invitations | Manage owner, participant, and viewer roles; leave another person's project or remove members after resolving shared files. |
 | Accounts and devices | Sign in on multiple devices, revoke a device independently, change your profile, or review the impact before deleting your account. |
 | Bilingual onboarding | Use Chinese or English and learn through visual guides tailored to computers, phones, and tablets. |

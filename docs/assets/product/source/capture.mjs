@@ -10,9 +10,12 @@ const root = resolve(fileURLToPath(new URL('../../../..', import.meta.url)));
 const product = resolve(root, 'docs/assets/product');
 const output = process.env.PRODUCT_CAPTURE_OUTPUT ?? '/tmp/gatherthread-product-captures';
 const origin = process.env.ONBOARDING_ORIGIN ?? 'http://127.0.0.1:4173';
+const filesOnly = process.env.PRODUCT_CAPTURE_SCENES === '16-project-code';
+assert.ok(!process.env.PRODUCT_CAPTURE_SCENES || filesOnly, 'supported focused capture: 16-project-code');
 assert.equal(new URL(origin).hostname, '127.0.0.1', 'capture uses only a loopback example');
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE)).href : 'playwright');
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+  ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {});
 await mkdir(output, { recursive: true });
 async function pageFor(locale, viewport = { width: 1440, height: 1000 }, mobile = false) {
   const context = await browser.newContext({ viewport, deviceScaleFactor: 2, reducedMotion: 'reduce',
@@ -62,10 +65,35 @@ async function capture(locale, name, page) {
   await rendered.close();
   return scene;
 }
+async function projectFiles(page) {
+  await page.locator('#example-files-open').click();
+  const workspace = page.locator('.file-workspace');
+  await workspace.locator('.fw-tree [data-path="README.md"]').click();
+  await workspace.locator('.fw-markdown h1').waitFor();
+  await workspace.locator('[data-tab="files"]').click();
+  await workspace.locator('.fw-tree [data-path="src"]').click();
+  await workspace.locator('.fw-tree [data-path="src/signup.js"]').click();
+  await workspace.locator('.fw-file-pane .cm-content').waitFor();
+  await workspace.locator('[data-file-mode="code"]').click();
+  await workspace.locator('.fw-tabs-list').click();
+  await workspace.locator('.fw-expand-command').click();
+  await page.waitForFunction(() => document.querySelector('.file-workspace').getBoundingClientRect().width > 700);
+}
 try {
   for (const locale of ['en', 'zh-CN']) {
     const geometry = [];
     const { page, context } = await pageFor(locale);
+    if (filesOnly) {
+      await projectFiles(page);
+      const measured = await capture(locale, '16-project-code', page);
+      const geometryPath = join(product, 'source', `capture-geometry.${locale}.json`);
+      const previous = JSON.parse(await readFile(geometryPath, 'utf8'));
+      assert.equal(previous.filter(scene => scene.name === measured.name).length, 1);
+      await writeFile(geometryPath, JSON.stringify(previous.map(scene => scene.name === measured.name ? measured : scene), null, 2) + '\n');
+      await context.close();
+      console.log(`Captured real Files workspace: ${locale}`);
+      continue;
+    }
     await page.locator('#history-summary-view-button').click(); // all originals for discussion
     await reveal(page, '#message-evt-seed-1');
     geometry.push(await capture(locale, '01-workspace', page));
@@ -114,9 +142,10 @@ try {
     await page.locator('#example-project-version').selectOption('branch-maya');
     await page.frameLocator('#example-project-frame').locator('#signup').click();
     geometry.push(await capture(locale, '14-working-result', page));
-    await page.locator('#example-files-tab').click();
-    geometry.push(await capture(locale, '16-project-code', page));
     await page.locator('#example-project-close').click();
+    await projectFiles(page);
+    geometry.push(await capture(locale, '16-project-code', page));
+    await page.locator('#open-files-button').click();
     await page.locator('.agent-worklog[data-request-id="evt-seed-3"] > summary').click();
     await page.locator('.agent-worklog-section').filter({ has: page.locator('.agent-plan') }).evaluate(node => { node.open = true; });
     await page.locator('#message-example-build-check .agent-worklog-section').evaluate(node => { node.open = true; });
@@ -148,7 +177,7 @@ try {
     console.log(`Captured ${geometry.length} full-view scenes: ${locale}`);
   }
   // Reuse the already approved composition; only its real app captures change.
-  for (const locale of ['en', 'zh-CN']) {
+  for (const locale of filesOnly ? [] : ['en', 'zh-CN']) {
     for (const name of ['cover', 'collaboration']) {
       const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1.5 });
       await page.goto(pathToFileURL(join(product, 'source', `${name}.${locale}.html`)).href);

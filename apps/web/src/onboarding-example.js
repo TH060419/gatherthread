@@ -65,23 +65,25 @@ export function mountExampleGateway({ document: doc, getContext, openSettings, s
     } };
 }
 
-export function exampleToolbar(doc, { cancel, onExit, api }) {
+export function exampleToolbar(doc, { cancel, onExit, api, fileWorkspace }) {
   const channel = doc.defaultView.__examplePresentation?.channel;
   const locale = () => doc.documentElement.lang;
   const zh = locale() === 'zh-CN';
-  const project = mountExampleProject({ document: doc, api });
+  const project = mountExampleProject({ document: doc, api, openFiles: selection => fileWorkspace?.navigateExample(selection) });
   const bar = doc.createElement('nav'); bar.className = 'example-toolbar'; bar.setAttribute('data-i18n-skip', ''); bar.setAttribute('aria-label', zh ? '示例导航' : 'Example navigation');
   const label = doc.createElement('span'); label.textContent = zh ? '示例项目 · 操作仅保留在本次演示' : 'Example project · changes stay in this demo';
   const choices = doc.createElement('select'); choices.setAttribute('aria-label', zh ? '选择教程' : 'Choose a guide');
   const browse = doc.createElement('option'); browse.value = ''; browse.textContent = zh ? '自由浏览' : 'Browse freely'; choices.append(browse);
   for (const [topic, pair] of Object.entries(GUIDE_LABELS)) { const option = doc.createElement('option'); option.value = topic; option.textContent = guideText(pair, doc.documentElement.lang); choices.append(option); }
   choices.addEventListener('change', () => { cancel(); if (choices.value) { doc.defaultView.parent.postMessage({ type: 'example-topic', topic: choices.value, locale: locale(), channel }, '*'); } });
-  const free = doc.createElement('button'); free.type = 'button'; free.textContent = zh ? '浏览' : 'Browse'; free.addEventListener('click', () => { cancel(); choices.value = ''; });
+  const free = doc.createElement('button'); free.className = 'example-browse-button'; free.type = 'button'; free.textContent = zh ? '浏览' : 'Browse'; free.addEventListener('click', () => { cancel(); choices.value = ''; });
   const close = doc.createElement('button'); close.type = 'button'; close.textContent = zh ? '退出' : 'Exit'; close.addEventListener('click', () => onExit('skipped'));
   const reset = doc.createElement('button'); reset.type = 'button'; reset.textContent = zh ? '重置' : 'Reset'; reset.addEventListener('click', () => { doc.defaultView.parent.postMessage({ type: 'example-topic', topic: 'browse', locale: locale(), channel }, '*'); });
   const result = doc.createElement('button'); result.id = 'example-project-open'; result.type = 'button'; result.textContent = zh ? '成果' : 'Result';
   result.addEventListener('click', () => { cancel(); choices.value = ''; project.open(); });
-  bar.append(label, choices, free, reset, result, close); doc.body.append(bar);
+  const files = doc.createElement('button'); files.id = 'example-files-open'; files.type = 'button'; files.textContent = zh ? '项目文件' : 'Project files';
+  files.addEventListener('click', () => { cancel(); choices.value = ''; project.close(); void fileWorkspace?.open('files'); });
+  bar.append(label, choices, free, reset, files, result, close); doc.body.append(bar);
   return { openResult: () => project.open(), closeResult: () => project.close(), refreshLanguage() {
     const zh = locale() === 'zh-CN';
     bar.setAttribute('aria-label', zh ? '示例导航' : 'Example navigation');
@@ -92,6 +94,7 @@ export function exampleToolbar(doc, { cancel, onExit, api }) {
     for (const option of choices.options) if (option.value) option.textContent = guideText(GUIDE_LABELS[option.value], locale());
     reset.textContent = zh ? '重置' : 'Reset';
     result.textContent = zh ? '成果' : 'Result';
+    files.textContent = zh ? '项目文件' : 'Project files';
     close.textContent = zh ? '退出' : 'Exit';
     project.refreshLanguage();
   } };

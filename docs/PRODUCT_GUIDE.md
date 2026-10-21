@@ -10,7 +10,7 @@ On Windows or macOS, choose **Connect Codex → Open Launcher** with [Launcher v
 
 ## Meet the workspace
 
-Pick a project and conversation on the left, discuss and request AI work in the middle, and find members and invitations on the right. Each person can connect Codex or DeepSeek Harness, or choose the cloud trial Agent for a small task without local setup. Cloud usage allowances are shown in the workspace.
+Pick a project and conversation on the left, discuss and request AI work in the middle, and switch between **Files** and **Members** in the right workspace. The small top-right button shows or hides it without closing tabs. Each person can connect Codex or DeepSeek Harness, or choose the cloud trial Agent for a small task without local setup. Cloud usage allowances are shown in the workspace.
 
 ![Full interface with annotations: conversation, members, and Agent controls](assets/product/en/annotated/01-workspace.jpg)
 
@@ -82,7 +82,9 @@ confirmation.hidden = false;
 signupButton.disabled = true;
 ```
 
-Open **Result → Project files** in the example. Choose a file on the left and inspect its code on the right, without installing tools. Compare what the team agreed with what was actually built.
+In the example, open **Files** on the right and choose **GT Cloud → Your branch**. Expand `src` and open `signup.js`: it opens in its own tab. Then open `README.md` and switch between **Code** and **Preview**. Compare the requirements with the actual files, without installing tools.
+
+Close file tabs individually or switch between them to keep working. Hiding the right workspace does not close its tabs; use **+** to reopen Files or Members when needed.
 
 ![Full interface with annotations: the project files and signup-button code](assets/product/en/annotated/16-project-code.jpg)
 
@@ -106,7 +108,7 @@ For a small trial, choose **GT Cloud**, GatherThread's file service with 128 MiB
 
 File access needs separate permission. Automatic file upload waits for Agent activity to stop and files to settle; it neither downloads nor merges automatically. A newly authorized GitHub connection starts with automatic upload on; GT Cloud starts with it off. You can change either preference or upload manually.
 
-Conversation uploads have their own switch. Turning them off does not turn file sharing off, and the reverse is also true. Local transfers and recovery need the authorized computer to be online.
+Conversation uploads have their own switch. Turning them off does not turn file sharing off, and the reverse is also true. Local transfers and recovery need the authorized computer to be online. Viewing or editing online files in the browser does not need a connected computer Agent.
 
 GitHub still enforces its own permissions and rules. Local transfer safety limits also apply; “not counted against GT quota” does not mean any repository size or file type is supported. See [file setup and limits](CODE_SYNC.md). Review repository workflows before automatic uploads, because a push may start GitHub Actions.
 
@@ -120,13 +122,13 @@ Alex makes the page. Maya changes one line in `src/signup.js` to say “You’re
 
 On GitHub, use the repository's own pull-request review and permissions. GatherThread project membership does not grant GitHub access. Leaving a GatherThread project does not revoke GitHub access either.
 
-The small sidebar button at the top right shows or hides the **Files / Members** workspace without closing its tabs. Each file or function opens in its own tab: close tabs individually, reopen **Files** or **Members** with **+**, and use **More (…)** to find an open page or expand the workspace. Choose a storage provider and your branch, open a file, edit and save; for Markdown, switch between **Code** and the rendered **Preview** of your current draft. **Changes** and **History** support review. Teammates' branches and historical versions are read-only, and tab switches keep unsaved drafts in the page. The [browser file-workspace guide](CODE_SYNC.md#browser-file-workspace--网页文件工作区) covers file actions, mobile use and save-conflict recovery.
+In **Files**, choose Maya's branch. In the file list, select **Changes** and open `src/signup.js` to see added lines in green and removed lines in red. A teammate's branch is read-only; switch back to **Your branch** to edit and **Save**. **History** opens earlier versions read-only. The [browser file-workspace guide](CODE_SYNC.md#browser-file-workspace--网页文件工作区) covers more file actions, PDF/image previews and save-conflict recovery.
 
 A personal branch separates uploaded versions, **not local folders**. Use separate working copies when people or multiple tools edit files at the same time. GatherThread does not lock all Agents out of a shared directory.
 
 ## 7. Check the result, not just the answer
 
-Open **Result → Try the page** at the top of the free example. Press “Sign me up”: the confirmation appears and the button disables. Switch to **Project files** to inspect the six files, and select Maya’s version to compare the new message. Once you merge it in file collaboration, the shared version also uses the new code.
+Open **Result** at the top of the free example to try the signup page. Press “Sign me up”: the confirmation appears and the button disables. Close the page and return to **Files** on the right to inspect the six files or compare Maya's branch. Once you merge it in file collaboration, the shared version also uses the new code.
 
 ![Full interface with annotations: the working signup-page confirmation](assets/product/en/annotated/14-working-result.jpg)
 

@@ -92,7 +92,10 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
   return { page, context, frame };
 }
 async function start(page, topic) {
-  await openSettings(page); await page.locator(`[data-onboarding-topic="${topic}"]`).click();
+  await openSettings(page);
+  const entry = page.locator(`[data-onboarding-topic="${topic}"]`);
+  if (!await entry.isVisible()) await page.locator('.settings-navigation a[href="#settings-general"]').click();
+  await entry.click();
   const frame = await example(page); if (topic !== 'browse') await frame.locator(popup).waitFor(); return frame;
 }
 async function openSettings(page) {
@@ -110,6 +113,17 @@ async function checkSummarySettingsNavigation(page, locale) {
   assert.equal(await page.locator('#settings-sync').evaluate(node => node.nextElementSibling?.id), 'settings-summaries');
   assert.equal(await page.locator('#settings-sync #settings-history-context-mode').count(), 0, 'summary controls are in their own section');
   const originalUrl = page.url();
+  if (await page.locator('#settings-dialog').getAttribute('data-mobile-settings') === 'true') {
+    await link.click();
+    await page.waitForFunction(() => document.activeElement?.id === 'settings-summaries');
+    assert.equal(await page.locator('#settings-history-context-mode').isVisible(), true, 'mobile opens the dedicated Summaries page');
+    assert.equal(page.url(), originalUrl, 'mobile Settings navigation keeps the project/session URL');
+    await page.locator('.mobile-settings-back').click();
+    await page.locator('.settings-navigation a[href="#settings-general"]').click();
+    assert.equal(await page.locator('[data-onboarding-topic="files"]').isVisible(), true, 'mobile General exposes the file guide');
+    await page.locator('#close-settings-button').click();
+    return;
+  }
   await page.waitForFunction(() => document.activeElement?.id === 'close-settings-button');
   let reachedSummaryLink = false;
   for (let index = 0; index < 12; index++) {
@@ -309,16 +323,15 @@ try {
     window.exampleResultReturnFocus = document.activeElement;
   }, { capture: true, once: true }));
   await fresh.locator('#example-project-open').click();
+  await fresh.locator('#example-project-frame[aria-busy="false"]').waitFor();
   const result = fresh.frameLocator('#example-project-frame');
   await result.locator('#signup').click();
+  await result.locator('#signup:disabled').waitFor();
   assert.equal(await result.locator('#confirmation').innerText(), 'You’re signed up.');
   assert.equal(await result.locator('#signup').isDisabled(), true);
-  await fresh.locator('#example-files-tab').click();
-  assert.equal(await fresh.locator('#example-file-list button').count(), 6);
-  assert.match(await fresh.locator('#example-source-code').innerText(), /addEventListener\('click'/);
   await fresh.locator('#example-project-version').selectOption('branch-maya');
-  await fresh.waitForFunction(() => document.getElementById('example-source-code').textContent.includes('See you Saturday'));
-  await fresh.locator('#example-preview-tab').click();
+  await fresh.locator('#example-project-frame[aria-busy="false"]').waitFor();
+  await result.locator('#signup:not([disabled])').waitFor();
   await result.locator('#signup').click();
   assert.equal(await result.locator('#confirmation').innerText(), 'You’re signed up! See you Saturday.');
   await fresh.locator('#example-project-close').click();
@@ -326,6 +339,12 @@ try {
   // Native close queues its event after removing the open attribute.
   await fresh.waitForFunction(() => document.activeElement === window.exampleResultReturnFocus, null, { timeout: 3000 });
   assert.equal(await fresh.evaluate(() => document.activeElement === window.exampleResultReturnFocus), true, 'closing result restores the actual previous focus in each browser');
+  await fresh.locator('#example-files-open').click();
+  await fresh.locator('.fw-tree [data-path="src"]').click();
+  await fresh.locator('.fw-tree [data-path="src/signup.js"]').click();
+  await fresh.locator('.fw-file-pane .cm-content').waitFor();
+  assert.match(await fresh.locator('.fw-file-pane .cm-content').innerText(), /addEventListener\('click'/);
+  assert.equal(await fresh.locator('#example-file-list, #example-source-code').count(), 0, 'source uses the real file workspace');
   // In-example language preview/cancel/save retains practice and stays local.
   await fresh.locator('#message-input').fill('Keep this practice message');
   await fresh.locator('#send-chat-button').click();
@@ -368,9 +387,11 @@ try {
   await fresh.waitForFunction(() => document.documentElement.lang === 'zh-CN');
   await fresh.locator('.example-toolbar select').selectOption('files');
   fresh = await example(page); await fresh.locator(popup).waitFor();
-  await fresh.locator('.driver-popover-next-btn').click(); await fresh.locator('#project-code-dialog[open]').waitFor();
+  await fresh.locator('.fw-tree').waitFor();
+  await fresh.locator('.driver-popover-next-btn').click();
+  await fresh.locator('.fw-file-pane .cm-content').waitFor();
   await fresh.locator('.example-toolbar button').first().click(); assert.equal(await fresh.locator(popup).count(), 0);
-  assert.equal(await fresh.locator('#project-code-dialog[open]').count(), 0);
+  assert.equal(await fresh.locator('#project-code-dialog[open]').count(), 0, 'browsing files never opens the old sync dialog');
   await fresh.locator('.example-toolbar select').selectOption('basics'); fresh = await example(page);
   await fresh.locator(popup).waitFor(); await fresh.locator('.driver-popover-next-btn').press('Escape');
   await page.locator('.onboarding-example-dialog').waitFor({ state: 'detached' });
