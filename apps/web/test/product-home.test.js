@@ -43,7 +43,7 @@ function mediaBlocks(css, condition) {
   return blocks.join("\n");
 }
 
-test("home names GatherThread and clearly presents people, devices and individually requested Agents", async () => {
+test("home distinguishes current collaboration from future multi-Agent teams", async () => {
   const [html] = await source;
   const headings = elements(html, "h1");
   assert.equal(headings.length, 1);
@@ -51,12 +51,46 @@ test("home names GatherThread and clearly presents people, devices and individua
   assert.equal(headings[0]["data-en"], "GatherThread. Build together.");
   const zh = authoredCopy(html, "zh");
   const en = authoredCopy(html, "en");
-  assert.match(zh, /多人、多端、多 Agent/u);
-  assert.match(en, /people[\s\S]*screens[\s\S]*Agents/iu);
+  assert.match(zh, /多人协作.*多端接续/u);
+  assert.match(en, /Work together.*Continue anywhere/iu);
   assert.match(zh, /普通聊天不会启动 AI/u);
   assert.match(en, /chat message does not start AI/iu);
-  assert.match(zh, /未来规划[\s\S]*自动分工[\s\S]*当前/u);
-  assert.match(en, /Future plans[\s\S]*automatic collaboration[\s\S]*Today/iu);
+  assert.match(zh, /多 Agent 团队.*后续版本上线/u);
+  assert.match(en, /Multi-Agent teams.*later release/iu);
+  assert.match(zh, /一个人连接的多个 Agent.*组成团队.*分工.*相互交流/u);
+  assert.match(en, /Agents connected by one person.*form a team.*divide work.*communicate directly/iu);
+  assert.match(zh, /成员明确授权后.*不同成员的 Agent.*自动交流协作/u);
+  assert.match(en, /members' explicit permission.*different teammates.*communicate and collaborate automatically/iu);
+  assert.doesNotMatch(zh, /多 Agent：每个人用合适的帮手/u);
+});
+
+test("readmes and product guides define multi-Agent teams with the same future scope", async () => {
+  for (const path of ["README.zh-CN.md", "docs/PRODUCT_GUIDE.zh-CN.md"]) {
+    const copy = await readFile(new URL(path, repositoryRoot), "utf8");
+    assert.match(copy, /多 Agent.*后续版本/u, path);
+    assert.match(copy, /一个人连接的多个 Agent.*组成团队.*分工.*相互交流/u, path);
+    assert.match(copy, /成员明确授权后.*不同成员的 Agent.*自动交流协作/u, path);
+    assert.doesNotMatch(copy, /多 Agent：每个人用合适的帮手|而不只是支持多种 Agent/u, path);
+  }
+  for (const path of ["README.md", "docs/PRODUCT_GUIDE.md"]) {
+    const copy = await readFile(new URL(path, repositoryRoot), "utf8");
+    assert.match(copy, /Multi-Agent teams.*later release/iu, path);
+    assert.match(copy, /Agents connected by one person.*form a team.*divide work.*communicate directly/iu, path);
+    assert.match(copy, /members' explicit permission.*different teammates.*communicate and collaborate automatically/iu, path);
+    assert.doesNotMatch(copy, /not just support for multiple Agent/iu, path);
+  }
+});
+
+test("home search and social descriptions mark Agent teams as a later release in both languages", async () => {
+  const [html, app] = await source;
+  const metadata = elements(html, "meta");
+  const description = metadata.find((meta) => meta.name === "description").content;
+  const social = metadata.find((meta) => meta.property === "og:description").content;
+  assert.match(description, /多 Agent 团队.*后续版本/u);
+  assert.match(social, /Multi-Agent teams.*later release/iu);
+  assert.match(app, /多 Agent 团队.*后续版本/u);
+  assert.match(app, /Multi-Agent teams.*later release/iu);
+  assert.match(app, /meta\[property="og:description"\]/u);
 });
 
 test("home prominently links the source and leads computer setup with the Codex Launcher and DSH plugin", async () => {
