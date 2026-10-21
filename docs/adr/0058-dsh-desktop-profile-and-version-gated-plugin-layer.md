@@ -1,7 +1,7 @@
 # ADR-0058: Gate the DSH plugin layer by release and serve desktop from the same package
 
-**Date**: 2026-10-18  
-**Status**: proposed / local implementation  
+**Date**: 2026-10-18
+**Status**: proposed / local implementation
 **Deciders**: project lead
 
 ## Context
