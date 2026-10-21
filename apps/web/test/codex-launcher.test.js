@@ -85,7 +85,7 @@ test("recommended GitHub installation stays pinned independently of the same-ori
   const source = "a".repeat(40);
   const f = fixture(undefined, { fetchResponse: async () => Response.json({ source_commit: source, index_path: `/downloads/${source}/index.html` }) });
   await f.ui.open();
-  assert.equal(f.get("download-codex-launcher-github-button").href, "https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-beta.2");
+  assert.equal(f.get("download-codex-launcher-github-button").href, "https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-beta.3");
   assert.equal(f.get("download-codex-launcher-button").href, `/downloads/${source}/index.html`);
   f.ui.clear();
 });

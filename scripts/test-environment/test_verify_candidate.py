@@ -35,7 +35,7 @@ def entry(name, data=b"", kind=tarfile.REGTYPE, link="", mode=0o644):
 def baseline():
     return [*(entry(name, kind=tarfile.DIRTYPE, mode=0o755) for name in DIRECTORIES),
             entry("candidate.json", json.dumps(METADATA).encode()),
-            entry("package.json", b'{"version":"0.1.0-beta.2"}'),
+            entry("package.json", b'{"version":"0.1.0-beta.3"}'),
             entry("apps/server/dist/src/cli.js", b"// synthetic fixture\n"),
             entry("apps/web/dist/index.html", b"<p>fixture</p>")]
 

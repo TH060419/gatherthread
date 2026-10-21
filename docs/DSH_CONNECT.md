@@ -46,7 +46,7 @@ To check the same pinned CLI, use `npx @deepseek-ai/dsh@0.2.1-rc.2 --version`.
 
 ### 3. Pair the current server
 
-Paste the selected GatherThread server address (`https://test.gatherthread.cn` for Beta 2 testing; `https://gatherthread.cn` for the independently deployed production service), choose **Sign in and pair**, and compare the short code. Approve it in a browser already signed in to that same environment. Test requires its own admitted email account, device authorization and workspace; do not reuse production pairing or credentials. The code is single-use and expires shortly.
+Paste the selected GatherThread server address (`https://test.gatherthread.cn` for the independent test environment; `https://gatherthread.cn` for the independently deployed production service), choose **Sign in and pair**, and compare the short code. Approve it in a browser already signed in to that same environment. Test requires its own admitted email account, device authorization and workspace; do not reuse production pairing or credentials. The code is single-use and expires shortly.
 
 ### 4. Select a DSH provider and model
 
@@ -61,7 +61,7 @@ git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
 npm ci
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.2.tgz
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.3.tgz
 npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 

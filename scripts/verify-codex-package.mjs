@@ -26,7 +26,7 @@ try {
     "--pack-destination", packDirectory,
   ], { cwd: root });
   const tarballs = (await readdir(packDirectory)).filter((name) => name.endsWith(".tgz"));
-  assert.deepEqual(tarballs, ["gatherthread-codex-connect-0.1.0-beta.2.tgz"]);
+  assert.deepEqual(tarballs, ["gatherthread-codex-connect-0.1.0-beta.3.tgz"]);
   const tarball = path.join(packDirectory, tarballs[0]);
   await runNpm(["--cache", npmCache, "install", "--prefix", installDirectory, tarball]);
   await assert.rejects(access(path.join(installDirectory, ".git")));
@@ -34,7 +34,7 @@ try {
 
   const packageRoot = path.join(installDirectory, "node_modules", "@gatherthread", "codex-connect");
   const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
-  assert.equal(manifest.version, "0.1.0-beta.2");
+  assert.equal(manifest.version, "0.1.0-beta.3");
   assert.deepEqual(manifest.dependencies ?? {}, {});
   const executable = path.join(installDirectory, "node_modules", ".bin", "gatherthread-codex-connect");
   const help = await runExecutable(executable, ["--help"]);

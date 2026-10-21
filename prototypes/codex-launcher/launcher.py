@@ -23,7 +23,7 @@ from urllib.request import Request, HTTPRedirectHandler, build_opener
 from urllib.error import HTTPError, URLError
 
 
-PACKAGE = "@gatherthread/codex-connect@0.1.0-beta.2"
+PACKAGE = "@gatherthread/codex-connect@0.1.0-beta.3"
 SERVER_ORIGIN = "https://gatherthread.cn"
 TEST_SERVER_ORIGIN = "https://test.gatherthread.cn"
 OFFICIAL_ORIGINS = {SERVER_ORIGIN, TEST_SERVER_ORIGIN}

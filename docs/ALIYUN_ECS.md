@@ -1,8 +1,8 @@
-# Alibaba Cloud ECS deployment: 0.1.0-beta.2
+# Alibaba Cloud ECS deployment: 0.1.0-beta.3
 
 This profile keeps the application on `127.0.0.1:18787` and Caddy on public 80/443. Never open 18787. The public Beta account path uses verified-email registration and password sign-in; signup stays closed by default until provider and security preflight passes. Use reviewed deployment commands and do not reinstall an existing host.
 
-This is the production profile, not the Beta 2 test-upgrade procedure. The current release targets only npm and the independent test service: use [TEST_ENVIRONMENT.md](TEST_ENVIRONMENT.md). Do not run this installer or switch production's current release as part of that test deployment.
+This is the initial production-install profile, not a command to reinstall an existing host. The authorized Beta 3 upgrade covers production and the independent test service from one frozen candidate. Use the reviewed versioned upgrade operator, preserving each environment's configuration and data. See [the release record](releases/0.1.0-beta.3.md) and [TEST_ENVIRONMENT.md](TEST_ENVIRONMENT.md).
 
 ## 1. Prerequisites
 
@@ -10,19 +10,19 @@ This is the production profile, not the Beta 2 test-upgrade procedure. The curre
 - A verified domain with an A record for the ECS public IP.
 - Complete the required ICP filing before opening a Web service on a mainland-China instance. Alibaba Cloud states that a domain pointing to a mainland server must be filed through the actual access provider regardless of port or use; follow the current [Alibaba Cloud filing guide](https://help.aliyun.com/zh/icp-filing/basic-icp-service/user-guide/icp-filing-application-overview) and the rules for the filing owner's province.
 - Security-group ingress: TCP 22 from fixed administrator addresses only, TCP 80/443 for intended users, and no rule for 18787. See the [Alibaba Cloud ECS security-group guide](https://help.aliyun.com/zh/ecs/user-guide/start-using-security-groups).
-- A local `v0.1.0-beta.2` release commit or archive that has passed `npm run release:verify`.
+- A local `v0.1.0-beta.3` release commit or archive that has passed `npm run release:verify`.
 
 Before filing approval, system installation and loopback checks may be prepared, but do not point the domain at the instance or open public Web ingress.
 
 ## 2. Upload the candidate
 
-Upload the candidate archive as `/tmp/gatherthread-0.1.0-beta.2.tar.gz`, then run on the ECS host:
+Upload the candidate archive as `/tmp/gatherthread-0.1.0-beta.3.tar.gz`, then run on the ECS host:
 
 ```sh
-sudo install -d -m 0755 /opt/gatherthread/releases/0.1.0-beta.2
-sudo tar -xzf /tmp/gatherthread-0.1.0-beta.2.tar.gz \
-  -C /opt/gatherthread/releases/0.1.0-beta.2 --strip-components=1
-cd /opt/gatherthread/releases/0.1.0-beta.2
+sudo install -d -m 0755 /opt/gatherthread/releases/0.1.0-beta.3
+sudo tar -xzf /tmp/gatherthread-0.1.0-beta.3.tar.gz \
+  -C /opt/gatherthread/releases/0.1.0-beta.3 --strip-components=1
+cd /opt/gatherthread/releases/0.1.0-beta.3
 ```
 
 After a Git tag exists, the exact tag may instead be cloned into the same path. The installer deliberately rejects temporary source paths and mismatched release metadata.

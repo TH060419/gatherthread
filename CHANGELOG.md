@@ -4,7 +4,25 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
-- Support DeepSeek Harness `0.2.1-rc.2` Web and Desktop with the matching `webStartup` layer and pinned Web install/start/repair/version commands. Combine the newer `engines.dsh` guard with an optional peer guard checked by older DSH before bundle patches apply, without auto-installing a runtime. Keep the published `0.1.0-beta.2` artifact unchanged for `0.1.7-rc.2`; the frozen legacy YAML is reference-only, never an automatic fallback. The settings panel reports the active verified profile and supported pairs. This source change does not publish a replacement npm package. See [ADR-0058](docs/adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md).
+## [0.1.0-beta.3] - 2026-10-21
+
+Beta 3 packages the reviewed main-branch changes since Beta 2 for the authorized
+test and production rollout. Both environments use one frozen candidate while
+retaining separate data and configuration; publication and live status are
+recorded by release/deployment receipts, not inferred from this document.
+
+- Align source, npm packages, plugins and current download references at
+  `0.1.0-beta.3`; the Mac Launcher uses numeric version `0.1.3`/build `13`.
+  Preserve all earlier published packages, tags and installers.
+- Correct the product's future Multi-Agent direction: one person's connected
+  Agents form a team and collaborate directly, later extending to authorized
+  automatic communication across different members' Agents. This is planned for
+  a later version, not a claim about the current connection-sharing preview.
+- Include the reviewed project-scoped native Agent-sharing preview from PR105,
+  with explicit recipients, quotas, isolated file access and independent Stop.
+  Platform/authentication probes and safe refusals remain authoritative.
+
+- Support DeepSeek Harness `0.2.1-rc.2` Web and Desktop with the matching `webStartup` layer and pinned Web install/start/repair/version commands. Combine the newer `engines.dsh` guard with an optional peer guard checked by older DSH before bundle patches apply, without auto-installing a runtime. Keep the published `0.1.0-beta.2` artifact unchanged for `0.1.7-rc.2`; the frozen legacy YAML is reference-only, never an automatic fallback. The settings panel reports the active verified profile and supported pairs. Beta 3 publishes the current layer as a new version without replacing the older artifact. See [ADR-0058](docs/adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md).
 
 - Simplify the conversation header to Summaries and Session options. Group summary generation, original/summary display and version history; replace the persistent mentions inbox button with an unread corner jump that clears only after the message is visible. Keep bounded account/project-scoped read IDs across same-tab reloads without storing message content. Update desktop/mobile guides and keyboard paths.
 

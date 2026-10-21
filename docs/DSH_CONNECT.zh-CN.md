@@ -46,7 +46,7 @@ npx @deepseek-ai/dsh@0.2.1-rc.2 web
 
 ### 3. 配对当前服务器
 
-输入所用服务器地址（Beta 2 测试服为 `https://test.gatherthread.cn`，独立部署的正式服为 `https://gatherthread.cn`），选择 **登录并配对**，核对页面显示的短码，再到已经登录同一环境的网页批准相同短码。测试服需先准入、登录独立邮箱账号，再单独授权设备、选择测试工作区；不复用正式服配对或凭据。短码只能使用一次，并会很快过期。
+输入所用服务器地址（独立测试服为 `https://test.gatherthread.cn`，独立部署的正式服为 `https://gatherthread.cn`），选择 **登录并配对**，核对页面显示的短码，再到已经登录同一环境的网页批准相同短码。测试服需先准入、登录独立邮箱账号，再单独授权设备、选择测试工作区；不复用正式服配对或凭据。短码只能使用一次，并会很快过期。
 
 ### 4. 选择 DSH Provider 与 Model
 
@@ -61,7 +61,7 @@ git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
 npm ci
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.2.tgz
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.3.tgz
 npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 

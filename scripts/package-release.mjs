@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.0-beta.2";
+const VERSION = "0.1.0-beta.3";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const trackedChanges = execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], {
   cwd: root,

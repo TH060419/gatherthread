@@ -2,8 +2,9 @@
 
 This optional arm64/x86_64 prototype uses a native AppKit `.app` and bundles
 Node 24, the fixed-version connector, and a copy of the reviewed Codex plugin.
-Launcher 0.1.2 is the installer/app display version; the bundled connector and
-plugin keep their separately verified `0.1.0-beta.2` package version.
+Launcher 0.1.3/build 13 is the installer/app display version; the bundled connector
+and plugin use the matching `0.1.0-beta.3` package version. The earlier Beta 2
+downloads remain available under their original release.
 End users do not need Python or npm. Codex Desktop / CLI must already be
 installed and signed in. The manual terminal connection remains an advanced fallback.
 The packaged Launcher and Node require macOS 13.5 or later; the build explicitly
