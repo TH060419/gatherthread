@@ -1,6 +1,6 @@
 # 接入 DeepSeek Harness
 
-共序 DSH 插件运行在 DeepSeek Harness 的 Web profile 中，并由 DSH 主动连接到选定的共序服务器。网页不会探测 `localhost`，也不会尝试启动本地进程。
+共序 DSH 插件运行在 DeepSeek Harness 的 Web 或 Desktop profile 中，并由 DSH 主动连接到选定的共序服务器。网页不会探测 `localhost`，也不会尝试启动本地进程。
 
 DSH 设置中的项目代码上传、下载与恢复需逐项目单独授权；GT Cloud 文件自动上传默认关闭，新授权的 GitHub 连接默认开启，可随时关闭。详见[项目文件协作](CODE_SYNC.md)。
 
@@ -14,7 +14,7 @@ DSH 设置中的项目代码上传、下载与恢复需逐项目单独授权；G
 dsh plugin --profile desktop add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
 
-`0.1.7-rc.2` 由冻结的 `0.1.0-beta.2` 安装包及其 `cordis.patch.dsh-0.1.yml` 层提供。两层无法合并：`0.2.x` 把 Connection 的信任来源从 `webRuntime` 改名为 `webStartup`，同时注入两者会让必需的 Connection 行永久等待，导致启动失败。构建中声明了 `engines.dsh`，版本不匹配时 DSH 会禁用该行并给出提示，而不是让整个 profile 崩溃。参见 [ADR-0058](adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md)。
+`0.1.7-rc.2` 请继续使用已经发布、不会被替换的 `0.1.0-beta.2` 安装包。源码中的 `cordis.patch.dsh-0.1.yml` 仅保留其冻结层供参考，不是当前构建的另一种安装方式。两层无法合并：`0.2.x` 把 Connection 的信任来源从 `webRuntime` 改为 `webStartup`，同时注入两者会导致启动失败。当前构建同时声明 `engines.dsh` 与可选的 `@deepseek-ai/dsh` peer，范围均为 `>=0.2.1-rc.2 <0.3.0`。新版 DSH 检查 engine；忽略该字段的 `0.1.7-rc.2` 会在组合 bundle 补丁前检查 peer，从而安全拒绝不兼容构建，也不会自动安装另一个 DSH。此次源码更新不替换已经发布的 Beta 2 npm 安装包。参见 [ADR-0058](adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md)。
 
 ## 正常连接只需四步
 
@@ -41,6 +41,8 @@ npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 
 保持 DSH 运行，然后打开 **设置 → GatherThread / 共序**。
+
+检查同一固定 CLI 的版本请使用 `npx @deepseek-ai/dsh@0.2.1-rc.2 --version`。
 
 ### 3. 配对当前服务器
 

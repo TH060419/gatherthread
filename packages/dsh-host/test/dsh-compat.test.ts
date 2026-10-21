@@ -419,7 +419,7 @@ test("compatibility boundary pins the Host surface verified by the PoC", () => {
   });
   assert.deepEqual(DSH_NPM_COMPATIBILITY, {
     package: "@deepseek-ai/dsh",
-    version: "0.1.7-rc.2",
+    version: "0.2.1-rc.2",
     profile: "web",
     persistenceProbe: "list",
   });
@@ -432,7 +432,7 @@ test("compatibility boundary pins the Host surface verified by the PoC", () => {
   assert.deepEqual(DSH_COMPATIBILITY_MATRIX.map((entry) => ({ ...entry })), [
     {
       distribution: "npm",
-      version: "0.1.7-rc.2",
+      version: "0.2.1-rc.2",
       profile: "web",
       persistenceProbe: "list",
     },

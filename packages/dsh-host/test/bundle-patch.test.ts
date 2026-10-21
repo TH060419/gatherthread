@@ -88,12 +88,14 @@ test("the frozen 0.1.x layer keeps Connection's webRuntime dependency", async ()
 });
 
 test("the manifest gates the profile layer to the DSH releases it was verified on", async () => {
-  // DSH reads its own requirement from `engines.dsh` before importing plugin
-  // code and disables a mismatched row with a warning instead of failing the
-  // whole profile. Without the range, an older runtime loads this layer and
-  // dies at startup on the rename above, which is what 0.1.x must avoid.
+  // Current DSH reads engines.dsh; older DSH reads only its optional peer.
+  // Both reject the whole bundle before composing the Connection row patch.
   const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8")) as {
     engines?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   };
   assert.equal(manifest.engines?.dsh, ">=0.2.1-rc.2 <0.3.0");
+  assert.equal(manifest.peerDependencies?.["@deepseek-ai/dsh"], manifest.engines?.dsh);
+  assert.equal(manifest.peerDependenciesMeta?.["@deepseek-ai/dsh"]?.optional, true);
 });

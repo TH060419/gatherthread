@@ -28,6 +28,14 @@ test("DSH Web installation and repair use the default plugin layer's verified ru
     `npx ${dshPackage}@${verifiedDefaultRuntime} plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"`);
 });
 
+test("DSH bundle metadata agrees with the Web's default runtime and profile", async () => {
+  const bundle = JSON.parse(await readFile(new URL("bundle/manifest.json", packageRoot), "utf8"));
+  assert.equal(bundle.deepseekHarness.primary.version, DSH_NPM_VERSION);
+  assert.equal(bundle.deepseekHarness.primary.profile, "web");
+  assert.equal(bundle.defaultEnabled, false);
+  assert.deepEqual(bundle.runtimeDependencies, []);
+});
+
 test("DSH console version check inspects the same pinned runtime as installation", () => {
   assert.equal(DSH_VERSION_COMMAND, `npx ${dshPackage}@${verifiedDefaultRuntime} --version`,
     "An unpinned npx version check can report a different runtime than the install command");

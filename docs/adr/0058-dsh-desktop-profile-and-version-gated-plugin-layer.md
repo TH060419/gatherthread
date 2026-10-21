@@ -41,14 +41,18 @@ single static layer therefore cannot serve both releases.
    both the Web and Desktop profiles, because `0.2.x` composes the same
    `dsh-web-app` rows for both and the profile name only changes desktop-only
    rows. Installation is unchanged: `dsh plugin --profile <desktop|web> add <tgz>`.
-2. The `0.1.7-rc.2` layer is frozen in `cordis.patch.dsh-0.1.yml` and ships in the
-   tarball. The published `0.1.0-beta.2` artifact remains the supported build for
-   that release; a source build selects the layer by installing that file as the
-   profile layer.
-3. `package.json` `engines.dsh` is `>=0.2.1-rc.2 <0.3.0`. DSH evaluates it before
-   importing plugin code and disables a mismatched row with an actionable warning
-   instead of failing the whole profile, so a wrong pairing now degrades to "row
-   disabled" rather than "DSH will not start".
+2. The `0.1.7-rc.2` layer is frozen in `cordis.patch.dsh-0.1.yml` and ships as a
+   source reference. The immutable published `0.1.0-beta.2` artifact remains the
+   supported build for that release. The current manifest always selects
+   `cordis.patch.yml`; it never substitutes the frozen layer automatically or
+   mixes the two. This change does not publish a replacement Beta 2 npm artifact.
+3. `package.json` declares `engines.dsh` and an optional `@deepseek-ai/dsh` peer,
+   both `>=0.2.1-rc.2 <0.3.0`. Newer DSH enforces the engine check. DSH
+   `0.1.7-rc.2` ignores that field but enforces the peer before composing the
+   whole bundle's patches, safely refusing an incompatible bundle before its
+   Connection override applies. The peer is optional so npm does not install a
+   DSH runtime as a plugin dependency. Web install, start, repair and version
+   commands all pin `0.2.1-rc.2`, matching the default layer.
 4. The Host reports the running profile name from `profileContext` and lists every
    verified `{version, profile}` pair in `status/get`, so the settings panel can
    stop claiming one release while running another. The client accepts a reported
@@ -95,8 +99,8 @@ single static layer therefore cannot serve both releases.
 
 ### Risks
 
-- `engines.dsh` is only enforced by DSH releases that implement the preflight.
-  An older runtime ignores it, so the 0.1.x line must keep using the frozen
-  `0.1.0-beta.2` artifact rather than the current build.
-- The scalar `version`/`profile` fields still name the pinned npm Web surface for
-  older clients; `targets` is the authoritative claim.
+- Future DSH releases may change the loader preflight or trust service again;
+  the declared range is not proof of compatibility with every future release.
+- The scalar `version`/`profile` fields name the active verified target, not
+  always the npm Web profile; `targets` lists the build's verified pairs. This
+  is a compatibility claim, not runtime-version introspection.

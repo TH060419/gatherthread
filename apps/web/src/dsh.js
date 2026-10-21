@@ -1,8 +1,8 @@
 export const DSH_HARNESS = "deepseek-harness";
 export const CODEX_HARNESS = "codex";
-export const DSH_NPM_VERSION = "0.1.7-rc.2";
+export const DSH_NPM_VERSION = "0.2.1-rc.2";
 export const DSH_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
-export const DSH_VERSION_COMMAND = "npx @deepseek-ai/dsh --version";
+export const DSH_VERSION_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} --version`;
 export const DSH_PINNED_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
 export const DSH_INSTALL_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"`;
 

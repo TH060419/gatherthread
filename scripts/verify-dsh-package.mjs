@@ -35,6 +35,10 @@ try {
   assert.equal(manifest.version, VERSION);
   assert.deepEqual(manifest.publishConfig, { access: "public", tag: "beta" });
   assert.deepEqual(manifest.dependencies ?? {}, {});
+  assert.equal(manifest.peerDependencies?.["@deepseek-ai/dsh"], manifest.engines.dsh);
+  assert.deepEqual(manifest.peerDependenciesMeta?.["@deepseek-ai/dsh"], { optional: true });
+  await assert.rejects(access(path.join(installDirectory, "node_modules", "@deepseek-ai", "dsh")),
+    "The optional compatibility peer must not install a DSH runtime");
   const plugin = await import(pathToFileURL(path.join(packageRoot, "dist", "bundle", "native-plugin.js")).href);
   assert.equal(plugin.name, "gatherthread-dsh-native");
   assert.equal(typeof plugin.apply, "function");

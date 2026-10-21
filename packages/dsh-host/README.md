@@ -9,9 +9,9 @@ server, Web app, Codex bridge, or Claude adapter.
 The normal path is the published `@deepseek-ai/dsh` CLI, not a DSH source
 checkout. This build's profile layer targets `0.2.1-rc.2`, the release bundled
 with the DeepSeek Harness desktop application, and serves both the `desktop` and
-`web` profiles of that release. The source-only path remains fixed to
-`dsh-v0.1.7-rc.2`, commit `477b4f420553e8a52c2fbccc464d7561b239c443`, and is only
-an advanced diagnostic fallback. All version-sensitive Host calls remain inside
+`web` profiles of that release. The legacy source-only diagnostic remains fixed
+to `dsh-v0.1.7-rc.2`, commit `477b4f420553e8a52c2fbccc464d7561b239c443`; it is
+not an automatic fallback for the current layer. All version-sensitive Host calls remain inside
 `src/dsh-compat.ts`. The package does not install a DSH runtime dependency.
 
 ### Supported releases
@@ -19,14 +19,18 @@ an advanced diagnostic fallback. All version-sensitive Host calls remain inside
 | DSH release | Profile | Profile layer |
 |---|---|---|
 | `0.2.1-rc.2` (desktop app and `npx` Web) | `desktop`, `web` | `cordis.patch.yml` |
-| `0.1.7-rc.2` | `web`, `headless` | `cordis.patch.dsh-0.1.yml`, shipped in the `0.1.0-beta.2` artifact |
+| `0.1.7-rc.2` | `web`, `headless` | Immutable published `0.1.0-beta.2` artifact; `cordis.patch.dsh-0.1.yml` is its frozen source reference |
 
-`package.json` declares `engines.dsh: ">=0.2.1-rc.2 <0.3.0"`. DSH evaluates that
-range before importing plugin code and disables the row with an actionable
-warning on a mismatch, so pairing this build with `0.1.7-rc.2` no longer breaks
-startup — but it also does not connect. Install the `0.1.0-beta.2` artifact on a
-`0.1.7-rc.2` runtime instead: `0.2.1-rc.2` renamed Connection's trust service
-from `webRuntime` to `webStartup`, and one static row cannot inject both.
+`package.json` declares `engines.dsh: ">=0.2.1-rc.2 <0.3.0"` and the same range
+for an optional `@deepseek-ai/dsh` peer. Newer DSH checks `engines.dsh`; older
+`0.1.7-rc.2` ignores that field but checks the peer range before composing any
+bundle patch. An incompatible bundle is therefore refused before it can alter
+Connection. The optional peer does not install a DSH runtime. Use the immutable
+published `0.1.0-beta.2` artifact on `0.1.7-rc.2` instead: `0.2.1-rc.2` renamed
+Connection's trust service from `webRuntime` to `webStartup`, and one static row
+cannot inject both. The frozen YAML is a reference, not an alternative install
+for this build; the current manifest always selects `cordis.patch.yml`. This
+source change does not replace the published Beta 2 npm artifact.
 [ADR-0058](../../docs/adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md)
 records the boundary.
 
@@ -49,7 +53,7 @@ dsh plugin --profile desktop add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 
 On Windows, use a quoted path such as `C:/Users/you/Downloads/your-plugin.tgz`. The registry's `@gatherthread/dsh-host@0.1.0-beta.1` is an older build and does not include the current message-deletion safeguards. If server downloads are unavailable, [build the matching source checkout](../../docs/DSH_CONNECT.md#source-checkout-fallback); do not substitute the old npm build.
 
-Check the active CLI with `npx @deepseek-ai/dsh --version`. The normal start
+Check the pinned CLI with `npx @deepseek-ai/dsh@0.2.1-rc.2 --version`. The normal start
 command already pins `0.2.1-rc.2`. The pinned DSH does not
 expose the root CLI version as a stable Host service, so the package does not
 inspect npx cache paths or claim runtime-version introspection. The install

@@ -41,7 +41,7 @@ assert.equal(dshBundle.clientEntry, "@gatherthread/dsh-host/client");
 assert.deepEqual(dshBundle.deepseekHarness?.primary, {
   distribution: "npm",
   package: "@deepseek-ai/dsh",
-  version: "0.1.7-rc.2",
+  version: "0.2.1-rc.2",
   profile: "web",
   persistenceProbe: "list",
 });
@@ -72,6 +72,10 @@ assert.equal(
   "DSH must gate the 0.2.x profile layer: an older runtime loads it and fails startup on the "
     + "Connection inject rename, while the 0.1.x line ships the frozen cordis.patch.dsh-0.1.yml layer",
 );
+assert.equal(dshPackage.peerDependencies?.["@deepseek-ai/dsh"], dshPackage.engines.dsh,
+  "Older DSH must reject the whole incompatible layer before profile composition");
+assert.deepEqual(dshPackage.peerDependenciesMeta?.["@deepseek-ai/dsh"], { optional: true },
+  "The compatibility peer must not install the harness");
 assert.equal(
   Object.keys(dshPackage.dependencies ?? {}).some((name) => name.startsWith("@deepseek-ai/")),
   false,

@@ -27,7 +27,7 @@ export const DSH_COMPATIBILITY = Object.freeze({
 /** Published CLI package used by the mainstream `npx @deepseek-ai/dsh web` path. */
 export const DSH_NPM_COMPATIBILITY = Object.freeze({
   package: "@deepseek-ai/dsh",
-  version: "0.1.7-rc.2",
+  version: "0.2.1-rc.2",
   profile: "web",
   persistenceProbe: "list",
 });

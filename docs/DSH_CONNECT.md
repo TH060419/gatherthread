@@ -1,6 +1,6 @@
 # Connect DeepSeek Harness
 
-The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and connects outward to the selected GatherThread server. The browser never probes `localhost` or starts a local process.
+The GatherThread DSH plugin runs inside the DeepSeek Harness Web or Desktop profile and connects outward to the selected GatherThread server. The browser never probes `localhost` or starts a local process.
 
 The plugin provides optional **project code** upload/download/recovery in DSH settings, with separate per-project consent. GT Cloud automatic code upload defaults off; a newly authorized GitHub binding defaults on and can be switched off. See [Project code collaboration](CODE_SYNC.md).
 
@@ -14,7 +14,7 @@ The current plugin build installs into DSH `0.2.1-rc.2`, the release bundled wit
 dsh plugin --profile desktop add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
 
-`0.1.7-rc.2` is served by the frozen `0.1.0-beta.2` artifact and its `cordis.patch.dsh-0.1.yml` layer. The two cannot be merged: `0.2.x` renamed Connection's trust service from `webRuntime` to `webStartup`, and injecting both leaves the required Connection row pending, which fails startup. The build declares `engines.dsh`, so a mismatched runtime disables the row with DSH's own warning instead of crashing. See [ADR-0058](adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md).
+For `0.1.7-rc.2`, use the immutable published `0.1.0-beta.2` artifact. Its frozen layer is retained in source as `cordis.patch.dsh-0.1.yml` for reference, not as an alternative installation for the current build. The two layers cannot be merged: `0.2.x` renamed Connection's trust service from `webRuntime` to `webStartup`, and injecting both fails startup. The current build declares both `engines.dsh` and an optional `@deepseek-ai/dsh` peer with range `>=0.2.1-rc.2 <0.3.0`. Newer DSH checks the engine; older `0.1.7-rc.2` checks the peer before composing bundle patches, safely refusing this incompatible build without installing another runtime. This source change does not replace the published Beta 2 npm artifact. See [ADR-0058](adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md).
 
 ## Normal four-step setup
 
@@ -41,6 +41,8 @@ npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 
 Keep DSH running. Open **Settings → GatherThread / 共序**.
+
+To check the same pinned CLI, use `npx @deepseek-ai/dsh@0.2.1-rc.2 --version`.
 
 ### 3. Pair the current server
 
