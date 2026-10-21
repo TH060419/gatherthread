@@ -414,7 +414,7 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Open DSH<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Pair this server<\/h3>/);
   assert.doesNotMatch(html, /Official service is not open yet/i);
   assert.match(html, /The plugin connects outward/i);
-  assert.match(html, /Verified DSH version: 0\.1\.2-rc\.1/);
+  assert.match(html, /Verified DSH version: 0\.2\.1-rc\.2/);
   assert.match(html, /current local, LAN, self-hosted, or Tailscale server/i);
   assert.match(html, /single-use and expires shortly/);
   assert.match(dsh, /DSH_START_COMMAND = `npx @deepseek-ai\/dsh@\$\{DSH_NPM_VERSION\} web`/);
