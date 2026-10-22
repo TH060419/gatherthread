@@ -241,7 +241,8 @@ export class ClaudeCodeCliExecutor implements HarnessExecutor {
           // Do not offer another execution/file operation after an uncertain
           // terminal cleanup. The user must inspect/reconnect locally.
           this.#cleanupUnconfirmed = true;
-          failure = new HarnessExecutionTerminatedError("claude_cleanup_unconfirmed", "Claude terminal cleanup could not be confirmed. Inspect the connected computer and reconnect before starting more work.");
+          const cause = failure instanceof HarnessExecutionTerminatedError ? failure.publicMessage + " " : "";
+          failure = new HarnessExecutionTerminatedError("claude_cleanup_unconfirmed", cause + "Claude terminal cleanup could not be confirmed. Inspect the connected computer and reconnect before starting more work.");
           child.kill("SIGKILL");
         });
       };
@@ -450,6 +451,7 @@ class ClaudeRunCollector {
   #observedModel = "";
   #result = false;
   #initialized = false;
+  #terminalFailure: HarnessExecutionTerminatedError | undefined;
 
   constructor(sessionId: string, workspace: string, model: string, shareTools: boolean, publisher: ReturnType<typeof createLiveOutputPublisher>) {
     this.#sessionId = sessionId; this.#workspace = workspace; this.#requestedModel = model; this.#shareTools = shareTools; this.#publisher = publisher;
@@ -494,15 +496,20 @@ class ClaudeRunCollector {
     }
     if (value.type === "result") {
       if (Array.isArray(value.permission_denials) && value.permission_denials.length > 0) {
-        throw new HarnessExecutionTerminatedError("claude_permission_required", "Claude needs local permission for an operation. Approve the required tool or command in Claude Code on the connected computer, then create a new request; GatherThread does not approve it automatically.");
+        this.#terminalFailure = new HarnessExecutionTerminatedError("claude_permission_required", "Claude needs local permission for an operation. Approve the required tool or command in Claude Code on the connected computer, then create a new request; GatherThread does not approve it automatically.");
+        return;
       }
-      if (value.is_error === true || value.subtype !== "success") throw new HarnessExecutionTerminatedError("claude_answer_failed", "Claude Code did not produce a successful answer. Check its local permissions or account status.");
+      if (value.is_error === true || value.subtype !== "success") {
+        this.#terminalFailure = new HarnessExecutionTerminatedError("claude_answer_failed", "Claude Code did not produce a successful answer. Check its local permissions or account status.");
+        return;
+      }
       if (typeof value.result === "string" && value.result.trim()) this.#final = bounded(redactText(value.result));
       this.#result = true;
     }
   }
 
   result(): HarnessExecutionResult {
+    if (this.#terminalFailure) throw this.#terminalFailure;
     if (!this.#result || !this.#final.trim()) throw new HarnessExecutionTerminatedError("claude_answer_missing", "Claude Code ended without a confirmed public answer.");
     let bytes = 0;
     const retained = this.#events.slice(0, 128).filter(event => { bytes += Buffer.byteLength(JSON.stringify(event)); return bytes <= 1024 * 1024; });
