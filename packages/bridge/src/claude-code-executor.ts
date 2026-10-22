@@ -54,6 +54,7 @@ const object = (value: unknown): value is Record<string, unknown> => value !== n
 const string = (value: unknown): string => typeof value === "string" ? value : "";
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const bounded = (value: string, size = 24 * 1024) => Buffer.byteLength(value) <= size ? value : Buffer.from(value).subarray(0, size).toString("utf8") + "\n[TRUNCATED]";
+class ClaudeProcessExitError extends Error {}
 
 /** A claimed Web request owns a fresh Claude process and native UUID. No native history is resumed.
  * The journal is written before spawn: uncertain execution is never repeated after a restart.
@@ -174,7 +175,8 @@ export class ClaudeCodeCliExecutor implements HarnessExecutor {
       successful = true;
       return result;
     } catch (error) {
-      const failure = error instanceof HarnessExecutionTerminatedError ? error : new HarnessExecutionTerminatedError(
+      const classified = error instanceof ClaudeProcessExitError ? collector.failure() ?? error : error;
+      const failure = classified instanceof HarnessExecutionTerminatedError ? classified : new HarnessExecutionTerminatedError(
         input.signal?.aborted || this.#options.signal?.aborted ? "claude_execution_stopped" : "claude_execution_failed",
         input.signal?.aborted || this.#options.signal?.aborted ? "Claude execution stopped." : "Claude Code could not complete this request. Check the local Claude connection and permissions.");
       journal.status = "failed"; journal.failure = { code: failure.failureCode, message: failure.publicMessage };
@@ -263,7 +265,7 @@ export class ClaudeCodeCliExecutor implements HarnessExecutor {
         if (this.#active === child) this.#active = undefined;
         try { const tail = decoder.end(); if (tail) onChunk(tail); } catch (error) { failure ??= error; }
         if (failure) reject(failure);
-        else if (code !== 0) reject(new Error("Claude Code exited without a successful result"));
+        else if (code !== 0) reject(new ClaudeProcessExitError("Claude Code exited without a successful result"));
         else resolve();
       });
       child.stdin.end(stdin);
@@ -333,21 +335,39 @@ async function stopClaudeProcessTree(child: ChildProcessWithoutNullStreams, env:
   let rows = await claudeProcessSnapshot(env);
   const root = rows.get(child.pid);
   if (!root) throw new Error("Owned Claude process identity is unavailable");
-  owned.set(root.pid, root); discover(rows);
-  const forceAt = Date.now() + 3000, deadline = forceAt + 5000;
-  for (;;) {
-    discover(rows);
-    const alive = [...owned.values()].filter(row => rows.get(row.pid)?.started === row.started && !rows.get(row.pid)!.state.startsWith("Z"));
-    if (!alive.length) return;
-    // Parent/start identity prevents killing an unrelated recycled PID. Track
-    // descendants even when Bash/MCP starts a separate process group/session.
-    for (const row of alive.reverse()) {
-      try { process.kill(row.pid, Date.now() >= forceAt ? "SIGKILL" : "SIGTERM"); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+  owned.set(root.pid, root);
+  const alive = () => [...owned.values()].filter(row => rows.get(row.pid)?.started === row.started && !rows.get(row.pid)!.state.startsWith("Z"));
+  const signal = (row: ClaudeProcessIdentity, value: NodeJS.Signals) => {
+    try { process.kill(row.pid, value); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+  };
+  const deadline = Date.now() + 8000;
+  try {
+    // Freeze parents before resampling their children. Sending SIGTERM first
+    // lets a shutdown handler detach a new child and exit between snapshots.
+    // Once every known live descendant is stopped, a further snapshot proves
+    // it cannot fork or reparent another process during forced cancellation.
+    for (;;) {
+      discover(rows);
+      const running = alive().filter(row => !rows.get(row.pid)!.state.startsWith("T"));
+      if (!running.length) break;
+      for (const row of running) signal(row, "SIGSTOP");
+      if (Date.now() >= deadline) throw new Error("Owned Claude descendants did not freeze");
+      await new Promise(resolve => setTimeout(resolve, 25));
+      rows = await claudeProcessSnapshot(env);
     }
-    if (Date.now() >= deadline) throw new Error("Owned Claude descendants did not stop");
-    await new Promise(resolve => setTimeout(resolve, 50));
-    rows = await claudeProcessSnapshot(env);
+    for (const row of alive().reverse()) signal(row, "SIGKILL");
+    for (;;) {
+      rows = await claudeProcessSnapshot(env);
+      if (!alive().length) return;
+      if (Date.now() >= deadline) throw new Error("Owned Claude descendants did not stop");
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  } catch (error) {
+    // Do not leave any observed process suspended after an uncertain snapshot.
+    // The caller retains its busy barrier and requires local inspection.
+    for (const row of alive().reverse()) { try { signal(row, "SIGKILL"); } catch { /* Cleanup remains unconfirmed. */ } }
+    throw error;
   }
 }
 
@@ -517,6 +537,8 @@ class ClaudeRunCollector {
       observedModel: this.#observedModel };
   }
 
+  failure(): HarnessExecutionTerminatedError | undefined { return this.#terminalFailure; }
+
   async #tool(block: Record<string, unknown>): Promise<void> {
     const id = string(block.id), name = string(block.name);
     if (!id || !name || this.#toolNames.size >= 128) return;
@@ -580,8 +602,10 @@ async function canDiscloseClaudeFileInput(workspace: string, requested: string):
   if (!requested) return false;
   let current = path.resolve(workspace, requested);
   const relative = path.relative(workspace, current).split(path.sep).join("/");
-  if (!isCodeSyncPathAllowed(relative) || relative.split("/").some(part => part.startsWith(".")
-    || /^(?:claude(?:\.local)?|agents)\.md$/iu.test(part))) return false;
+  if (!isCodeSyncPathAllowed(relative) || relative.split("/").some(part => {
+    const portable = part.normalize("NFC").replace(/[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/gu, "");
+    return portable.startsWith(".") || /^(?:claude(?:\.local)?|agents)\.md$/iu.test(portable);
+  })) return false;
   // Also reject aliases into private/outside state. A new Write destination is
   // eligible only when every existing ancestor is unlinked and inside root.
   while (current !== workspace) {

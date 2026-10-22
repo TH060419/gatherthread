@@ -56,7 +56,8 @@ const id='private-tool-'+name;send({type:'assistant',session_id,message:{model:'
 send({type:'user',session_id,message:{content:[{type:'tool_result',tool_use_id:id,content:'PRIVATE_TOOL_RESULT'}]}});}
 if(mode==='private-files')for(const [index,file_path] of ['../PRIVATE_OUTSIDE/CLAUDE.md','.claude/settings.json','CLAUDE.md','AGENTS.md','private-link/settings.txt','private-hardlink.txt'].entries()){
 send({type:'assistant',session_id,message:{model:'claude-sonnet-fixture',content:[{type:'tool_use',id:'private-file-'+index,name:'Write',input:{file_path,content:'PRIVATE_INSTRUCTION_SENTINEL',old_string:'PRIVATE_OLD_SENTINEL',new_string:'PRIVATE_NEW_SENTINEL',description:'PRIVATE_DESCRIPTION'}}]}});}
-send({type:'result',subtype:'success',session_id,is_error:false,result:'Hello, world!',...(mode==='denied'?{permission_denials:[{tool_name:'Bash',tool_input:{command:'PRIVATE_DENIED_COMMAND'}}]}:{})});
+send({type:'result',subtype:mode==='denied-nonzero'?'error_during_execution':'success',session_id,is_error:mode==='denied-nonzero',result:'Hello, world!',...(mode.startsWith('denied')?{permission_denials:[{tool_name:'Bash',tool_input:{command:'PRIVATE_DENIED_COMMAND'}}]}:{})});
+if(mode==='denied-nonzero')process.exitCode=1;
 `);
   const capture = path.join(dir, "capture.jsonl");
   const options = { workspacePath: dir, statePath: path.join(dir, "state.json"), model: "claude-sonnet-fixture",
@@ -134,8 +135,9 @@ test("native file authority cannot publish outside/private instructions or linke
   assert.doesNotMatch(JSON.stringify([result, updates]), /PRIVATE_|CLAUDE\.md|settings\.json|private-link|private-hardlink/);
 });
 
-test("Claude reports native permission denials without approving or exposing denied commands", async () => {
-  const { executor, capture } = await fixture("denied");
+test("Claude reports native permission denials without approving or exposing denied commands", async t => {
+  for (const mode of ["denied", "denied-nonzero"]) await t.test(mode, async () => {
+  const { executor, capture } = await fixture(mode);
   await assert.rejects(executor.execute(input()), error => {
     assert.equal((error as any).failureCode, "claude_permission_required");
     assert.match(String(error), /local permission/);
@@ -144,6 +146,7 @@ test("Claude reports native permission denials without approving or exposing den
   });
   await assert.rejects(executor.execute(input()), /local permission/);
   assert.equal((await readFile(capture, "utf8")).trim().split("\n").length, 1);
+  });
 });
 
 test("changing the explicit permission mode never replays an old execution journal", async () => {
@@ -167,19 +170,22 @@ test("Claude owned session registration brackets actual execution and cleans up 
 
 test("Claude pause stops detached terminal descendants as well as its owned CLI, not unrelated processes", async t => {
   const { dir, options } = await fixture();
-  const script = path.join(dir, "tree.mjs"), capture = path.join(dir, "child.pid");
+  const script = path.join(dir, "tree.mjs"), capture = path.join(dir, "child.pid"), lateCapture = path.join(dir, "late-child.pid");
   await writeFile(script, `import {spawn} from 'node:child_process';import {writeFileSync} from 'node:fs';
+process.on('SIGTERM',()=>{const late=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',detached:true});late.unref();writeFileSync(process.env.CLAUDE_LATE_PID,String(late.pid));process.exit(0);});
 const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',detached:true});child.unref();writeFileSync(process.env.CLAUDE_CHILD_PID,String(child.pid));setInterval(()=>{},1000);`);
-  const executor = new ClaudeCodeCliExecutor({ ...options, commandArgs: [script], env: { ...options.env, CLAUDE_CHILD_PID: capture } });
+  const executor = new ClaudeCodeCliExecutor({ ...options, commandArgs: [script], env: { ...options.env, CLAUDE_CHILD_PID: capture, CLAUDE_LATE_PID: lateCapture } });
   const unrelated = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
   t.after(() => { unrelated.kill("SIGKILL"); });
   const controller = new AbortController(), running = executor.execute({ ...input(), signal: controller.signal });
   const pid = Number(await waitForCapture(capture));
   t.after(() => { try { process.kill(pid, "SIGKILL"); } catch { /* Already stopped by the executor. */ } });
+  t.after(async () => { try { process.kill(Number(await readFile(lateCapture, "utf8")), "SIGKILL"); } catch { /* No shutdown-handler child. */ } });
   controller.abort();
   await assert.rejects(running, /stopped/);
   assert.equal(executor.isActive(), false);
   assert.doesNotThrow(() => process.kill(unrelated.pid!, 0));
+  await assert.rejects(readFile(lateCapture), /ENOENT/);
   // The OS may briefly retain a reparented child while it is being reaped.
   const deadline = Date.now() + 5000;
   for (;;) {
