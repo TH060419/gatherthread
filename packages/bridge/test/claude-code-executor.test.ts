@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { link, mkdir, mkdtemp, readFile, readdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -53,6 +54,8 @@ send({type:'assistant',session_id,message:{id:'native-private-id',model:'claude-
 if(mode==='native-tools')for(const name of ['Bash','PowerShell','WebFetch','WebSearch','Agent','mcp__PRIVATE_SERVER__PRIVATE_TOOL']){
 const id='private-tool-'+name;send({type:'assistant',session_id,message:{model:'claude-sonnet-fixture',content:[{type:'tool_use',id,name,input:{command:'echo PRIVATE_COMMAND',url:'https://PRIVATE_URL',prompt:'PRIVATE_SUBAGENT_PROMPT',content:'PRIVATE_MCP_INPUT',description:'PRIVATE_DESCRIPTION'}}]}});
 send({type:'user',session_id,message:{content:[{type:'tool_result',tool_use_id:id,content:'PRIVATE_TOOL_RESULT'}]}});}
+if(mode==='private-files')for(const [index,file_path] of ['../PRIVATE_OUTSIDE/CLAUDE.md','.claude/settings.json','CLAUDE.md','AGENTS.md','private-link/settings.txt','private-hardlink.txt'].entries()){
+send({type:'assistant',session_id,message:{model:'claude-sonnet-fixture',content:[{type:'tool_use',id:'private-file-'+index,name:'Write',input:{file_path,content:'PRIVATE_INSTRUCTION_SENTINEL',old_string:'PRIVATE_OLD_SENTINEL',new_string:'PRIVATE_NEW_SENTINEL',description:'PRIVATE_DESCRIPTION'}}]}});}
 send({type:'result',subtype:'success',session_id,is_error:false,result:'Hello, world!',...(mode==='denied'?{permission_denials:[{tool_name:'Bash',tool_input:{command:'PRIVATE_DENIED_COMMAND'}}]}:{})});
 `);
   const capture = path.join(dir, "capture.jsonl");
@@ -118,6 +121,19 @@ test("Claude native command, network, subagent and MCP work is visible without p
   assert.doesNotMatch(JSON.stringify([result, updates]), /PRIVATE_|private-tool-/);
 });
 
+test("native file authority cannot publish outside/private instructions or linked file bodies", async () => {
+  const { dir, executor } = await fixture("private-files"), updates: HarnessProgressUpdate[] = [];
+  const external = await realpath(await mkdtemp(path.join(tmpdir(), "gt-claude-private-input-")));
+  await writeFile(path.join(external, "settings.txt"), "PRIVATE_LOCAL_FILE");
+  await symlink(external, path.join(dir, "private-link"), process.platform === "win32" ? "junction" : "dir");
+  await link(path.join(external, "settings.txt"), path.join(dir, "private-hardlink.txt"));
+  const result = await executor.execute({ ...input(), publishProgress: async update => { updates.push(update); } });
+  const calls = result.events.filter(event => event.kind === "tool_call");
+  assert.equal(calls.length, 6);
+  assert.ok(calls.every(event => JSON.stringify(event.arguments) === "{}"));
+  assert.doesNotMatch(JSON.stringify([result, updates]), /PRIVATE_|CLAUDE\.md|settings\.json|private-link|private-hardlink/);
+});
+
 test("Claude reports native permission denials without approving or exposing denied commands", async () => {
   const { executor, capture } = await fixture("denied");
   await assert.rejects(executor.execute(input()), error => {
@@ -149,16 +165,21 @@ test("Claude owned session registration brackets actual execution and cleans up 
   }
 });
 
-test("Claude pause stops terminal descendants as well as its owned CLI", async () => {
+test("Claude pause stops detached terminal descendants as well as its owned CLI, not unrelated processes", async t => {
   const { dir, options } = await fixture();
   const script = path.join(dir, "tree.mjs"), capture = path.join(dir, "child.pid");
   await writeFile(script, `import {spawn} from 'node:child_process';import {writeFileSync} from 'node:fs';
-const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});writeFileSync(process.env.CLAUDE_CHILD_PID,String(child.pid));setInterval(()=>{},1000);`);
+const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',detached:true});child.unref();writeFileSync(process.env.CLAUDE_CHILD_PID,String(child.pid));setInterval(()=>{},1000);`);
   const executor = new ClaudeCodeCliExecutor({ ...options, commandArgs: [script], env: { ...options.env, CLAUDE_CHILD_PID: capture } });
+  const unrelated = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+  t.after(() => { unrelated.kill("SIGKILL"); });
   const controller = new AbortController(), running = executor.execute({ ...input(), signal: controller.signal });
   const pid = Number(await waitForCapture(capture));
+  t.after(() => { try { process.kill(pid, "SIGKILL"); } catch { /* Already stopped by the executor. */ } });
   controller.abort();
   await assert.rejects(running, /stopped/);
+  assert.equal(executor.isActive(), false);
+  assert.doesNotThrow(() => process.kill(unrelated.pid!, 0));
   // The OS may briefly retain a reparented child while it is being reaped.
   const deadline = Date.now() + 5000;
   for (;;) {
@@ -175,6 +196,8 @@ test("Claude prompt honors the derived context and excludes deleted content and 
     deletedAt: "2026-10-21T00:00:00.000Z", reason: "author" }, payload: { content: "ERASED_BODY" } });
   const plain = renderClaudeCanonicalPrompt(request);
   assert.match(plain, /Public context/);
+  assert.match(plain, /respect native Claude Code settings, tools and local permissions/);
+  assert.doesNotMatch(plain, /tools explicitly granted by the local connector|Keep work inside/);
   assert.doesNotMatch(plain, /ERASED_BODY|DO_NOT_SEND/);
   request.historyContext = { view: "summary", through_sequence: 1, content_revision: 0,
     items: [{ kind: "summary", event_id: "summary-1", sequence: 1, actor_user_id: "user-2", content: "Summary only", source_event_ids: ["history-1"] }] };
