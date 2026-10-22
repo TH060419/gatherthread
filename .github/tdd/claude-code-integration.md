@@ -132,7 +132,7 @@ connected device, and the focused 55-test plus full 746-test Web reruns pass.
 
 ## Deliberate limits
 
-Unattended Web execution exposes file/plan tools, not Bash, network tools or
+Initial review baseline (superseded by the owner-requested native-permission update below): unattended Web execution exposed file/plan tools, not Bash, network tools or
 Agent spawning. Native Claude sessions keep their own interactive permissions.
 Only public output is captured; hidden reasoning is excluded. Native upload
 proof reads at most a bounded 1.25 MiB region of the exact authorized transcript;
@@ -144,3 +144,30 @@ unrelated processes editing the same directory. Use separate working copies for
 independent simultaneous writers. Windows/Intel native execution, full clean
 installer publication and real provider execution still need their own evidence.
 Existing published packages/installers and live server state are unchanged.
+
+## Owner-requested own-Agent permission parity (2026-10-22)
+
+The owner explicitly requested that own-Claude Web execution use normal local
+tools and permissions, like the existing own-Codex/DSH routes. The earlier
+file/plan-only policy above is superseded, not a cross-member sharing expansion.
+The default is now `native`: no tool whitelist, restricted/safe-mode, empty MCP
+configuration or permission-mode override. Explicit manual/plan remain valid.
+No new permission prompts are automatically approved and no bypass flag is added.
+Native permission denial has a fixed actionable failure without raw inputs.
+
+Owned Web UUID registration prevents the restored local GatherThread Hooks from
+blocking their own process, injecting duplicate context or creating a Solo echo.
+Unrelated native/file work retains the busy fence. Command/network/subagent/MCP
+activity can publish start/completion states without raw arguments/results.
+Cancellation targets the owned process tree, including terminal descendants.
+
+Native acceptance command:
+`node scripts/verify-claude-native-permissions.mjs /absolute/path/to/claude`.
+Installed Claude Code 2.1.306 actually executed offline npm installation for a
+locally allowed command; the same command under a native deny rule created no
+dependency files. Local Hooks ran and settings stayed byte-identical in both
+cases. The provider was a loopback fixture; real provider/model calls were zero.
+No user configuration, private session or live service was used. Automated tests
+also cover exact Hook ownership, native tool disclosure, explicit mode overrides,
+permission failure, process-tree cancellation and changed-journal refusal.
+Real provider billing and Windows native acceptance remain separate evidence.

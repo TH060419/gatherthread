@@ -14,12 +14,13 @@ test("Claude CLI preserves exact routes, explicit file consent and safe permissi
   const flags = ["--url", "https://test.gatherthread.cn/", "--model", "claude-sonnet-fixture", "--project", "project-1", "--workspace", root];
   const parsed = parseClaudeConnectArgs([...flags, "--plugin-hooks", "--code-sync", "--github-code-sync", "example/project"]);
   assert.equal(parsed.apiUrl, "https://test.gatherthread.cn/v1");
-  assert.equal(parsed.permissionMode, "manual");
+  assert.equal(parsed.permissionMode, "native");
+  for (const mode of ["native", "manual", "plan"]) assert.equal(parseClaudeConnectArgs([...flags, "--permission-mode", mode]).permissionMode, mode);
   assert.equal(parsed.githubCodeSync, "example/project");
   for (const alias of ["default", "best", "fable", "sonnet", "opus", "haiku", "opusplan", "sonnet[1m]", "proxy/claude-sonnet-fixture", "claude-", "claude-sonnet[1m]", `claude-${"x".repeat(114)}`]) {
     assert.throws(() => parseClaudeConnectArgs(["--url", "https://gatherthread.cn", "--model", alias]), /exact Claude model/u);
   }
-  assert.throws(() => parseClaudeConnectArgs([...flags, "--permission-mode", "bypassPermissions"]), /manual or plan/u);
+  assert.throws(() => parseClaudeConnectArgs([...flags, "--permission-mode", "bypassPermissions"]), /native, manual or plan/u);
   assert.throws(() => parseClaudeConnectArgs([...flags, "--code-sync"]), /reviewed/u);
   assert.throws(() => parseClaudeConnectArgs([...flags, "--token", "not-accepted"]), /never command arguments/u);
   for (const url of ["http://example.com", "https://example.com/path", "https://user:password@example.com", "https://example.com?token=x"]) {

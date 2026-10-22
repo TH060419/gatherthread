@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +10,44 @@ import type { CollaborationApi, CommitLocalTurnInput, HarnessExecutionInput, Pro
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const project: ProjectSummary = { id: "project-1", name: "Test", role: "owner", state: "active", sessionCount: 0 };
+
+test("native Hooks in an owned Web execution neither block it nor rediscover/upload another Solo", async () => {
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "gt-claude-owned-hooks-"))), capture = path.join(dir, "run.json");
+  const script = path.join(dir, "claude.mjs");
+  await writeFile(script, `import {writeFileSync} from 'node:fs';const args=process.argv.slice(2);let input='';for await(const chunk of process.stdin)input+=chunk;writeFileSync(process.env.CLAUDE_TEST_CAPTURE,JSON.stringify({session_id:args[args.indexOf('--session-id')+1]}));setInterval(()=>{},1000);`);
+  const harness = new ClaudeCodeProjectHarness({ workspacePath: dir, stateRoot: path.join(dir, "private"), model: "claude-sonnet-fixture",
+    command: process.execPath, commandArgs: [script], env: { ...process.env, CLAUDE_TEST_CAPTURE: capture } });
+  const session: SessionSummary = { id: "session-1", projectId: project.id, mode: "multi", name: "Web", ownerUserId: "user-1", state: "active", latestSequence: 0 };
+  const binding = harness.createSessionBinding({ session, sessionKey: "web", statePath: "" });
+  await binding.activateLocalPublishing?.();
+  const controller = new AbortController();
+  const running = binding.executor.execute({ request: { id: "request-web", sessionId: session.id, sequence: 1, type: "agent_request", actorId: "user-1", timestamp: new Date().toISOString(),
+    payload: { content: "Task", execution_profile: { harness: "claude-code", provider: "anthropic", model: "claude-sonnet-fixture", runtime_id: "runtime-1" } } }, canonicalHistory: [],
+    runtime: { id: "runtime-1", userId: "user-1", deviceId: "device-1", sessionId: session.id, harness: "claude-code", provider: "anthropic", model: "claude-sonnet-fixture", localSessionId: binding.localSessionId, captureFidelity: "harness_transcript" }, signal: controller.signal });
+  void running.catch(() => undefined);
+  try {
+    const deadline = Date.now() + 10000;
+    let metadata: { session_id: string };
+    for (;;) {
+      try { metadata = JSON.parse(await readFile(capture, "utf8")); break; }
+      catch (error) { if (Date.now() > deadline) throw error; await new Promise(resolve => setTimeout(resolve, 20)); }
+    }
+    const control = { api: {} as CollaborationApi, actorUserId: "user-1", actorDeviceId: "device-1", project };
+    for (const name of ["SessionStart", "UserPromptSubmit", "Stop", "StopFailure", "SessionEnd"]) {
+      assert.deepEqual(await harness.handleNativeHook({ ...metadata, cwd: dir, hook_event_name: name, prompt: "DO_NOT_CAPTURE", last_assistant_message: "DO_NOT_UPLOAD" }, control), { handled: true });
+      assert.equal(await harness.isWorkspaceBusy(), true);
+    }
+    const other = await harness.handleNativeHook({ session_id: randomUUID(), cwd: dir, hook_event_name: "UserPromptSubmit", prompt: "Local human turn" }, control);
+    assert.equal(other.block, true);
+    assert.equal((await binding.getLocalSyncStatus?.())?.pendingLocalTurns, 0);
+    controller.abort();
+    await assert.rejects(running, /stopped/);
+    assert.equal(await harness.isWorkspaceBusy(), false);
+    // After process exit, the retired owned UUID no longer bypasses normal
+    // native validation/discovery (this synthetic API intentionally has none).
+    await assert.rejects(harness.handleNativeHook({ ...metadata, cwd: dir, hook_event_name: "UserPromptSubmit", prompt: "Task" }, control), /current project API/);
+  } finally { controller.abort(); await running.catch(() => undefined); await harness.close(); }
+});
 
 async function nativeContextFixture() {
   const dir = await realpath(await mkdtemp(path.join(tmpdir(), "gt-claude-terminal-"))), sessions: SessionSummary[] = [];

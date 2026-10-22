@@ -22,7 +22,7 @@ async function fixture(mode = "normal") {
   await writeFile(script, `import {appendFileSync} from 'node:fs';
 const args=process.argv.slice(2),mode=process.env.CLAUDE_TEST_MODE; const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
 if(args.includes('--version')) {console.log(mode==='old'?'2.1.233 (Claude Code)':'2.1.306 (Claude Code)');process.exit();}
-if(args.includes('--help')) {console.log('--print --output-format --include-partial-messages --session-id --model --tools --allowedTools --permission-mode --permission-prompts --restricted '+(mode==='unsupported'?'':'--safe-mode')+' --strict-mcp-config --mcp-config --setting-sources --settings --effort');process.exit();}
+if(args.includes('--help')) {console.log('--print --output-format '+(mode==='unsupported'?'':'--include-partial-messages')+' --session-id --model --permission-mode --permission-prompts --effort');process.exit();}
 if(args[0]==='auth') {send({loggedIn:mode!=='loggedout',authMethod:'oauth_token',email:'PRIVATE_EMAIL'});process.exit();}
 let prompt='';for await(const chunk of process.stdin)prompt+=chunk;
 appendFileSync(process.env.CLAUDE_TEST_CAPTURE,JSON.stringify({args,prompt,pid:process.pid,token:process.env.GATHERTHREAD_TOKEN})+'\\n');
@@ -50,7 +50,10 @@ send({type:'assistant',session_id,parent_tool_use_id:'subagent-private',message:
 send({type:'stream_event',session_id,event:{type:'content_block_delta',index:1,delta:{type:'thinking_delta',thinking:'HIDDEN_THINKING'}}});
 }
 send({type:'assistant',session_id,message:{id:'native-private-id',model:'claude-sonnet-fixture',content:[{type:'thinking',thinking:'HIDDEN_THINKING'},{type:'text',text:'Hello, world!'}]}});
-send({type:'result',subtype:'success',session_id,is_error:false,result:'Hello, world!'});
+if(mode==='native-tools')for(const name of ['Bash','PowerShell','WebFetch','WebSearch','Agent','mcp__PRIVATE_SERVER__PRIVATE_TOOL']){
+const id='private-tool-'+name;send({type:'assistant',session_id,message:{model:'claude-sonnet-fixture',content:[{type:'tool_use',id,name,input:{command:'echo PRIVATE_COMMAND',url:'https://PRIVATE_URL',prompt:'PRIVATE_SUBAGENT_PROMPT',content:'PRIVATE_MCP_INPUT',description:'PRIVATE_DESCRIPTION'}}]}});
+send({type:'user',session_id,message:{content:[{type:'tool_result',tool_use_id:id,content:'PRIVATE_TOOL_RESULT'}]}});}
+send({type:'result',subtype:'success',session_id,is_error:false,result:'Hello, world!',...(mode==='denied'?{permission_denials:[{tool_name:'Bash',tool_input:{command:'PRIVATE_DENIED_COMMAND'}}]}:{})});
 `);
   const capture = path.join(dir, "capture.jsonl");
   const options = { workspacePath: dir, statePath: path.join(dir, "state.json"), model: "claude-sonnet-fixture",
@@ -85,14 +88,85 @@ test("Claude preflight probes metadata only, then owned runs stream safely and r
   assert.ok(!JSON.stringify(first).includes(privateNativeId));
   assert.ok(!JSON.stringify(updates).includes(privateNativeId));
   assert.equal(record.token, undefined);
-  assert.ok(record.args.includes("--restricted"));
-  assert.ok(record.args.includes("--safe-mode"));
-  assert.ok(record.args.includes("--permission-prompts"));
-  assert.ok(!record.args.includes("--dangerously-skip-permissions"));
-  assert.equal(record.args[record.args.indexOf("--permission-mode") + 1], "manual");
+  for (const flag of ["--restricted", "--safe-mode", "--tools", "--allowedTools", "--disallowedTools", "--strict-mcp-config", "--mcp-config", "--setting-sources", "--settings", "--permission-mode", "--dangerously-skip-permissions"]) assert.ok(!record.args.includes(flag), flag);
+  assert.equal(record.args[record.args.indexOf("--permission-prompts") + 1], "none");
   assert.ok(updates.some(update => update.streamKind === "answer"));
   assert.doesNotMatch(JSON.stringify(updates), /HIDDEN_THINKING|native-private-id|PRIVATE_EMAIL|TEST_SECRET/);
   assert.equal((await readFile(capture, "utf8")).trim().split("\n").length, 1);
+});
+
+test("Claude keeps explicit local permission-mode overrides without overriding tools or settings", async () => {
+  for (const permissionMode of ["native", "manual", "default", "plan"] as const) {
+    const { options, capture } = await fixture();
+    const executor = new ClaudeCodeCliExecutor({ ...options, permissionMode });
+    await executor.execute(input());
+    const { args } = JSON.parse((await readFile(capture, "utf8")).trim());
+    if (permissionMode === "native") assert.ok(!args.includes("--permission-mode"));
+    else assert.equal(args[args.indexOf("--permission-mode") + 1], permissionMode);
+    for (const flag of ["--tools", "--allowedTools", "--restricted", "--safe-mode", "--mcp-config"]) assert.ok(!args.includes(flag));
+  }
+});
+
+test("Claude native command, network, subagent and MCP work is visible without private arguments/results", async () => {
+  const { executor } = await fixture("native-tools"), updates: HarnessProgressUpdate[] = [];
+  const result = await executor.execute({ ...input(), publishProgress: async update => { updates.push(update); } });
+  const calls = result.events.filter(event => event.kind === "tool_call");
+  assert.deepEqual(calls.map(event => event.toolName), ["Bash", "PowerShell", "WebFetch", "WebSearch", "Agent", "Native tool"]);
+  assert.ok(calls.every(event => JSON.stringify(event.arguments) === "{}"));
+  assert.equal(result.events.filter(event => event.kind === "tool_result").length, 6);
+  assert.ok(updates.some(update => update.streamKind === "tool"));
+  assert.doesNotMatch(JSON.stringify([result, updates]), /PRIVATE_|private-tool-/);
+});
+
+test("Claude reports native permission denials without approving or exposing denied commands", async () => {
+  const { executor, capture } = await fixture("denied");
+  await assert.rejects(executor.execute(input()), error => {
+    assert.equal((error as any).failureCode, "claude_permission_required");
+    assert.match(String(error), /local permission/);
+    assert.doesNotMatch(String(error), /PRIVATE_DENIED_COMMAND/);
+    return true;
+  });
+  await assert.rejects(executor.execute(input()), /local permission/);
+  assert.equal((await readFile(capture, "utf8")).trim().split("\n").length, 1);
+});
+
+test("changing the explicit permission mode never replays an old execution journal", async () => {
+  const { executor, options, capture } = await fixture();
+  await executor.execute(input());
+  const changed = new ClaudeCodeCliExecutor({ ...options, permissionMode: "plan" });
+  await assert.rejects(changed.execute(input()), /context.*changed/i);
+  assert.equal((await readFile(capture, "utf8")).trim().split("\n").length, 1);
+});
+
+test("Claude owned session registration brackets actual execution and cleans up success and failure", async () => {
+  for (const mode of ["normal", "failure", "malformed"]) {
+    const { options, capture } = await fixture(mode), notifications: { id: string; active: boolean }[] = [];
+    const executor = new ClaudeCodeCliExecutor({ ...options, onOwnedSession: (id, active) => { notifications.push({ id, active }); } });
+    await executor.execute(input()).catch(() => undefined);
+    const { args } = JSON.parse((await readFile(capture, "utf8")).trim());
+    const id = args[args.indexOf("--session-id") + 1];
+    assert.deepEqual(notifications, [{ id, active: true }, { id, active: false }]);
+  }
+});
+
+test("Claude pause stops terminal descendants as well as its owned CLI", async () => {
+  const { dir, options } = await fixture();
+  const script = path.join(dir, "tree.mjs"), capture = path.join(dir, "child.pid");
+  await writeFile(script, `import {spawn} from 'node:child_process';import {writeFileSync} from 'node:fs';
+const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});writeFileSync(process.env.CLAUDE_CHILD_PID,String(child.pid));setInterval(()=>{},1000);`);
+  const executor = new ClaudeCodeCliExecutor({ ...options, commandArgs: [script], env: { ...options.env, CLAUDE_CHILD_PID: capture } });
+  const controller = new AbortController(), running = executor.execute({ ...input(), signal: controller.signal });
+  const pid = Number(await waitForCapture(capture));
+  controller.abort();
+  await assert.rejects(running, /stopped/);
+  // The OS may briefly retain a reparented child while it is being reaped.
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    try { process.kill(pid, 0); }
+    catch (error) { assert.equal((error as NodeJS.ErrnoException).code, "ESRCH"); break; }
+    assert.ok(Date.now() < deadline, "terminal descendant survived cancellation");
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
 });
 
 test("Claude prompt honors the derived context and excludes deleted content and arbitrary metadata", () => {

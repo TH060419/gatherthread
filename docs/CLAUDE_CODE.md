@@ -27,13 +27,15 @@ After you approve an upload, the connector verifies a bounded region near that c
 
 Each Web request runs in a separate GatherThread-owned Claude execution using current authorized public context and its explicit public quote. The connector does not continue an arbitrary private native conversation or reuse deleted/compacted private history. Answer text, selected tool calls, tool completion states and real plans can stream into the existing work log; raw tool-result bodies stay local. Final completion still requires a successful, stopped native process. Pause cancels that process. Resume is a new request with the recorded target, not restoration of private thinking or an interrupted shell.
 
-Unattended Web execution uses Claude Code's restricted directory mode, explicit file/plan tools and denied permission prompts. It does not enable arbitrary shell, network, other Agents or permission bypass. Use your native Claude Code session for operations needing those interactive permissions. This is deliberately narrower than handing a remote request all of your local Claude settings.
+Calling your own connected Claude uses its normal local tools, settings, permission mode, sandbox, trusted Hooks, skills and configured MCP servers. GatherThread does not impose a file/plan-only tool list or add permission-bypass flags. Terminal commands, dependency installation and other native tools can run when the connected computer's Claude permissions and environment allow them. This is not a container or a separate project-only security sandbox: connect only a trusted workspace under your own account.
+
+The default connector mode is `native`, which leaves Claude's configured permission mode unchanged. Explicit `--permission-mode manual` and `--permission-mode plan` remain available. Like the unattended Codex adapter, this path cannot answer a new permission prompt: an operation requiring additional approval is refused, with an instruction to authorize it in Claude Code locally and start a new request. It never treats website access as permission to bypass a local denial. Calling another member's shared Agent remains a separate, project-file-only boundary; Claude cross-member sharing is not implemented.
 
 GT Cloud and direct GitHub synchronization reuse the existing separately authorized project-file controls. A connected Agent is not file-upload consent. GitHub uploads go directly to your repository; human review/merge remains explicit. Independent Agents editing one directory can still conflict, so use separate working copies for simultaneous work.
 
 The Launcher's local file-sync checkbox starts unchecked and resets for each new connection. Enable it only for a folder you want this device to synchronize; conversation upload remains a separate per-conversation choice.
 
-网页请求使用当前共享上下文独立执行，不会接管任意私人 Claude 会话。可实时查看答案、允许公开的工具过程及真实计划，并暂停执行。需要终端或额外权限的工作，请在原生 Claude Code 中确认后操作。项目文件同步仍需单独授权，不能由远程消息或插件工具偷偷开启。
+网页调用自己的 Claude 使用本机已有工具、配置、权限模式和沙箱，不再额外限制为文件与计划工具；终端、安装依赖等操作在本机 Claude 允许时正常执行。可实时查看答案、工具执行状态及真实计划，并暂停执行；原始命令、MCP 参数和工具结果不会直接公开。需要额外批准的操作会明确提示，请在已连接电脑的 Claude Code 中授权后重新请求，网页不会代替你批准。网页请求仍独立接收当前共享上下文，不接管私人会话；项目文件同步仍需单独授权。
 
 ## Source checkout / 源码本地验证
 
@@ -46,6 +48,8 @@ node packages/claude-connect/dist/claude-connect.js --help
 ```
 
 Use the CLI's hidden one-time authorization prompt or the Launcher. Do not paste passwords/device tokens into a model prompt, command argument, plugin configuration or project file. The [connector README](../packages/claude-connect/README.md) describes the matching package and source-plugin installation choices.
+
+Maintainers can run `node scripts/verify-claude-native-permissions.mjs /absolute/path/to/claude` after building. This opt-in check uses the installed native CLI, an isolated temporary configuration and a loopback fake provider: an allowed offline npm installation must succeed, a denied installation must leave no dependency files, and local Hooks must run without modifying their settings. It does not use a real model account or validate provider billing/network availability.
 
 Codex-only visible-history import and isolated cross-member Agent sharing are not advertised as Claude features. Native GUI appearance, Windows execution, real provider billing and installed-artifact publication need their own evidence. This implementation does not deploy either GatherThread server or publish an npm version.
 

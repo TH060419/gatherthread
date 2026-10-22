@@ -229,6 +229,8 @@ GitHub file-write receipts are small metadata, not source snapshots. A per-user/
 
 Claude adds an optional validated `claude-code` local relay namespace; omitting it retains the legacy Codex endpoint. Its plugin MCP discovers only the selected workspace/harness, not an arbitrary matching global registration. This changes no bearer, ACL, canonical event or claim authority. Claude's native Hook envelope is distinct from Codex's `turn_id`/model contract and must never be interpreted as a Codex Hook. [ADR-0060](adr/0060-claude-code-plugin-and-local-connector.md) owns these integration decisions.
 
+The Claude connector's default `--permission-mode native` leaves local Claude settings and tools intact, replacing the unreleased file/plan-only execution policy. Existing explicit manual/plan options remain valid. Required `--permission-prompts none` support keeps new approvals local; a native `permission_denials` result produces fixed `claude_permission_required` guidance without its input bodies. Own-execution Hook suppression is keyed by the fresh private native UUID, never a title or model; it cannot enable another user's execution or publication. The execution journal fingerprints the chosen permission mode, so an older or changed configuration cannot silently replay an uncertain task. No HTTP, Launcher URI, account, shared-Agent or persisted state schema changes are required.
+
 The published MCP surface is intentionally narrower than the internal collaboration API.
 
 - User-facing tools/resources expose authorized project/session discovery, canonical event reads/writes, and explicit local sync controls.

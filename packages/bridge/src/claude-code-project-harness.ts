@@ -42,7 +42,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 /** Claude's native CLI has no public history-injection API. Shared context enters trusted prompt
- * hooks; remote work uses separate fresh restricted processes. Never rewrite native JSONL files.
+ * hooks; remote work uses separate fresh owned processes. Never rewrite native JSONL files.
  */
 export class ClaudeCodeProjectHarness implements ProjectHarnessAdapter {
   readonly descriptor: ProjectHarnessDescriptor;
@@ -53,6 +53,7 @@ export class ClaudeCodeProjectHarness implements ProjectHarnessAdapter {
   #pendingNativePrompts = 0;
   #workspaceOperation = false;
   #remoteExecutions = 0;
+  readonly #ownedWebSessions = new Set<string>();
   readonly #nativeActivities = new Set<string>();
   #closed = false;
 
@@ -77,7 +78,11 @@ export class ClaudeCodeProjectHarness implements ProjectHarnessAdapter {
     if (existing) { existing.session = input.session; return existing.binding; }
     // The same derived path is used by native discovery and the neutral project loop.
     const statePath = path.join(this.#options.stateRoot, `${hash(input.session.id).slice(0, 24)}-claude-native.json`);
-    const executor = new ClaudeCodeCliExecutor({ ...this.#options, statePath: `${statePath}.execution` });
+    const executor = new ClaudeCodeCliExecutor({ ...this.#options, statePath: `${statePath}.execution`,
+      onOwnedSession: (nativeSessionId, active) => {
+        if (active) this.#ownedWebSessions.add(nativeSessionId);
+        else this.#ownedWebSessions.delete(nativeSessionId);
+      } });
     const current: Binding = { session: input.session, statePath, executor, publishing: false, queue: Promise.resolve(), binding: undefined! };
     const serial = <T>(operation: () => Promise<T>) => {
       const promise = current.queue.then(operation, operation); current.queue = promise.catch(() => undefined); return promise;
@@ -131,6 +136,10 @@ export class ClaudeCodeProjectHarness implements ProjectHarnessAdapter {
    * session/model metadata and candidate paths stay private. No history discovery occurs.
    */
   handleNativeHook(event: unknown, control: ClaudeNativeHookControl): Promise<{ handled: boolean; additionalContext?: string; block?: boolean; reason?: string }> {
+    // The ordinary local Claude settings may load our trusted plugin in a Web
+    // process too. Its exact UUID already has canonical context and claim/output
+    // ownership: never block it, discover another Solo, or capture an echo.
+    if (record(event) && this.#ownedWebSessions.has(text(event.session_id))) return Promise.resolve({ handled: true });
     const prompt = record(event) && event.hook_event_name === "UserPromptSubmit";
     // Acquire before the first promise/ACL/discovery await. A known source-file
     // operation must block the native prompt through the actual Hook protocol.

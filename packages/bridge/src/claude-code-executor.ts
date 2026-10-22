@@ -16,7 +16,9 @@ export interface ClaudeCodeCliExecutorOptions {
   provider?: "anthropic";
   command?: string;
   commandArgs?: readonly string[];
-  permissionMode?: "manual" | "default" | "plan";
+  permissionMode?: "native" | "manual" | "default" | "plan";
+  /** Local bookkeeping only: trusted Hooks must not rediscover our owned Web run. */
+  onOwnedSession?: (nativeSessionId: string, active: boolean) => void;
   reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max";
   timeoutMs?: number;
   maxOutputBytes?: number;
@@ -38,10 +40,12 @@ interface RunJournal {
   failure?: { code: string; message: string };
 }
 
-const READ_TOOLS = ["Read", "Glob", "Grep", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList"];
-const WRITE_TOOLS = [...READ_TOOLS, "Edit", "Write"];
-const REQUIRED_FLAGS = ["--print", "--output-format", "--include-partial-messages", "--session-id", "--model", "--tools",
-  "--allowedTools", "--permission-mode", "--permission-prompts", "--restricted", "--safe-mode", "--strict-mcp-config", "--mcp-config"];
+// This is an output-disclosure list, NOT an execution-tool allowlist. Native
+// permissions/configuration decide which tools the owner's Claude may use.
+const FILE_PLAN_TOOLS = ["Read", "Glob", "Grep", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "Edit", "Write"];
+const PUBLIC_TOOL_NAMES = [...FILE_PLAN_TOOLS, "Bash", "PowerShell", "WebFetch", "WebSearch", "Agent", "Task"];
+const REQUIRED_FLAGS = ["--print", "--output-format", "--include-partial-messages", "--session-id", "--model",
+  "--permission-mode", "--permission-prompts"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const string = (value: unknown): string => typeof value === "string" ? value : "";
@@ -64,7 +68,7 @@ export class ClaudeCodeCliExecutor implements HarnessExecutor {
     validateClaudeModel(options.model);
     if (!options.workspacePath.trim() || !options.statePath.trim()) throw new Error("Claude workspace and state paths are required");
     if (options.provider !== undefined && options.provider !== "anthropic") throw new Error("Claude connector requires the configured anthropic provider");
-    if (options.permissionMode !== undefined && !["manual", "default", "plan"].includes(options.permissionMode)) throw new Error("Unsupported Claude permission mode");
+    if (options.permissionMode !== undefined && !["native", "manual", "default", "plan"].includes(options.permissionMode)) throw new Error("Unsupported Claude permission mode");
     if (options.reasoningEffort !== undefined && !["low", "medium", "high", "xhigh", "max"].includes(options.reasoningEffort)) throw new Error("Unsupported Claude effort");
     if (options.command?.includes("\0") || options.commandArgs?.some(value => value.includes("\0") || /dangerously|bypassPermissions/.test(value))) throw new Error("Unsafe Claude command arguments");
     for (const [name, value] of Object.entries({ timeoutMs: options.timeoutMs, maxOutputBytes: options.maxOutputBytes, maxPromptBytes: options.maxPromptBytes })) {
@@ -86,7 +90,7 @@ export class ClaudeCodeCliExecutor implements HarnessExecutor {
     const version = (await probe(["--version"])).trim();
     const match = /\b(\d+)\.(\d+)\.(\d+)\b/.exec(version);
     if (!match || Number(match[1]) < 2 || (Number(match[1]) === 2 && (Number(match[2]) < 1 || (Number(match[2]) === 1 && Number(match[3]) < 259)))) {
-      throw new Error("Update Claude Code: this connector requires the restricted unattended CLI (2.1.259 or later)");
+      throw new Error("Update Claude Code: this connector requires the unattended streaming CLI (2.1.259 or later)");
     }
     const help = await probe(["--help"]);
     if (REQUIRED_FLAGS.some(flag => !help.includes(flag)) || (this.#options.reasoningEffort && !help.includes("--effort"))) {
@@ -134,7 +138,7 @@ export class ClaudeCodeCliExecutor implements HarnessExecutor {
     const prompt = renderClaudeCanonicalPrompt(input);
     if (Buffer.byteLength(prompt) > (this.#options.maxPromptBytes ?? 512 * 1024)) throw new HarnessExecutionTerminatedError("claude_context_too_large", "The shared context exceeds this Claude connector's input limit; summarize older messages first.");
     const fingerprint = digest(JSON.stringify([input.request.id, input.runtime.sessionId, this.#options.model, this.#options.reasoningEffort,
-      input.historyContext?.content_revision ?? input.request.contentRevision ?? 0, prompt]));
+      this.#options.permissionMode ?? "native", input.historyContext?.content_revision ?? input.request.contentRevision ?? 0, prompt]));
     const journalPath = path.join(`${this.#options.statePath}.runs`, `${digest(input.request.id)}.json`);
     const previous = await readClaudePrivateJson(journalPath);
     if (previous !== undefined) {
@@ -147,15 +151,18 @@ export class ClaudeCodeCliExecutor implements HarnessExecutor {
     const journal: RunJournal = { version: 1, workspacePath, sessionId: input.runtime.sessionId, requestId: input.request.id,
       fingerprint, nativeSessionId: randomUUID(), status: "started" };
     await writeClaudePrivateJson(journalPath, journal);
-    const tools = this.#options.permissionMode === "plan" ? READ_TOOLS : WRITE_TOOLS;
     const args = ["--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--session-id", journal.nativeSessionId,
-      "--model", this.#options.model, "--restricted", "--safe-mode", "--permission-mode", this.#options.permissionMode === "plan" ? "plan" : "manual",
-      "--permission-prompts", "none", "--tools", tools.join(","), "--allowedTools", tools.join(","), "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+      "--model", this.#options.model,
+      ...(this.#options.permissionMode && this.#options.permissionMode !== "native" ? ["--permission-mode", this.#options.permissionMode] : []),
+      // Keep native settings, tools, Hooks, MCP and permission rules intact.
+      // Like Codex's unattended adapter, we cannot approve a new local prompt.
+      "--permission-prompts", "none",
       ...(this.#options.reasoningEffort ? ["--effort", this.#options.reasoningEffort] : [])];
     const publisher = createLiveOutputPublisher({ publish: update => input.publishProgress?.(update) });
     const collector = new ClaudeRunCollector(journal.nativeSessionId, workspacePath, this.#options.model, this.#options.shareToolEvents !== false, publisher);
     let successful = false;
     try {
+      this.#options.onOwnedSession?.(journal.nativeSessionId, true);
       await this.#runStream(args, prompt, workspacePath, input, record => collector.accept(record));
       const result = collector.result();
       journal.status = "completed"; journal.result = result;
@@ -169,7 +176,10 @@ export class ClaudeCodeCliExecutor implements HarnessExecutor {
       journal.status = "failed"; journal.failure = { code: failure.failureCode, message: failure.publicMessage };
       await writeClaudePrivateJson(journalPath, journal);
       throw failure;
-    } finally { await publisher.finish(successful); }
+    } finally {
+      this.#options.onOwnedSession?.(journal.nativeSessionId, false);
+      await publisher.finish(successful);
+    }
   }
 
   async #runMetadata(args: string[], cwd: string): Promise<string> {
@@ -215,14 +225,30 @@ export class ClaudeCodeCliExecutor implements HarnessExecutor {
       if (signal?.aborted) { reject(signal.reason ?? new Error("Claude execution stopped")); return; }
       const child = spawn(this.#options.command ?? "claude", [...this.#options.commandArgs ?? [], ...args], {
         cwd, env: this.#env, shell: false, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+        detached: process.platform !== "win32",
       });
       this.#active = child;
       let failure: unknown, bytes = 0, force: NodeJS.Timeout | undefined;
+      let treeStop: Promise<void> | undefined;
       const decoder = new StringDecoder("utf8");
+      const killOwnedTree = (signal: NodeJS.Signals) => {
+        if (process.platform !== "win32" && child.pid) {
+          try { process.kill(-child.pid, signal); } catch { child.kill(signal); }
+        } else if (process.platform === "win32" && child.pid) {
+          // Kill the exact owned CLI tree, not just the parent of a running
+          // terminal command or MCP server. Never interpolate user arguments.
+          treeStop ??= new Promise<void>(done => {
+            const killer = spawn(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
+              ["/PID", String(child.pid), "/T", "/F"], { env: this.#env, shell: false, windowsHide: true, stdio: "ignore" });
+            killer.once("error", () => { child.kill(signal); done(); });
+            killer.once("close", () => { child.kill(signal); done(); });
+          });
+        } else child.kill(signal);
+      };
       const stop = (error: unknown) => {
         failure ??= error;
-        child.kill("SIGTERM");
-        force ??= setTimeout(() => { child.kill("SIGKILL"); }, 3_000);
+        killOwnedTree("SIGTERM");
+        force ??= setTimeout(() => { killOwnedTree("SIGKILL"); }, 3_000);
         force.unref();
       };
       const abort = () => stop(new HarnessExecutionTerminatedError("claude_execution_stopped", "Claude execution stopped."));
@@ -236,8 +262,9 @@ export class ClaudeCodeCliExecutor implements HarnessExecutor {
       child.stderr.resume(); // Private diagnostics are deliberately not shared or logged.
       child.stdin.on("error", () => stop(new Error("Claude input pipe closed")));
       child.once("error", () => { failure ??= new Error("Claude executable could not be started"); });
-      child.once("close", code => {
+      child.once("close", async code => {
         clearTimeout(timer); if (force) clearTimeout(force); signal?.removeEventListener("abort", abort);
+        if (failure) { killOwnedTree("SIGKILL"); await treeStop; }
         if (this.#active === child) this.#active = undefined;
         try { const tail = decoder.end(); if (tail) onChunk(tail); } catch (error) { failure ??= error; }
         if (failure) reject(failure);
@@ -417,6 +444,9 @@ class ClaudeRunCollector {
       return;
     }
     if (value.type === "result") {
+      if (Array.isArray(value.permission_denials) && value.permission_denials.length > 0) {
+        throw new HarnessExecutionTerminatedError("claude_permission_required", "Claude needs local permission for an operation. Approve the required tool or command in Claude Code on the connected computer, then create a new request; GatherThread does not approve it automatically.");
+      }
       if (value.is_error === true || value.subtype !== "success") throw new HarnessExecutionTerminatedError("claude_answer_failed", "Claude Code did not produce a successful answer. Check its local permissions or account status.");
       if (typeof value.result === "string" && value.result.trim()) this.#final = bounded(redactText(value.result));
       this.#result = true;
@@ -433,8 +463,9 @@ class ClaudeRunCollector {
 
   async #tool(block: Record<string, unknown>): Promise<void> {
     const id = string(block.id), name = string(block.name);
-    if (!id || !WRITE_TOOLS.includes(name) || this.#toolNames.size >= 128) return;
-    this.#toolNames.set(id, name);
+    if (!id || !name || this.#toolNames.size >= 128) return;
+    const publicName = PUBLIC_TOOL_NAMES.includes(name) ? name : "Native tool";
+    this.#toolNames.set(id, publicName);
     const input = object(block.input) ? block.input : {};
     if (name === "TodoWrite" && Array.isArray(input.todos)) {
       const steps: LivePlanStep[] = input.todos.slice(0, 64).flatMap(todo => object(todo) && typeof todo.content === "string"
@@ -448,18 +479,20 @@ class ClaudeRunCollector {
       await this.#publisher.onPlan("tasks", [...this.#plans.values()]);
     }
     const selected: Record<string, unknown> = {};
-    for (const key of ["pattern", "glob", "offset", "limit", "replace_all", "old_string", "new_string", "content", "subject", "description", "status", "todos"]) {
+    // Commands, URLs, subagent prompts and arbitrary MCP arguments may embed
+    // private data. Their actual start/end is public, their raw inputs are not.
+    for (const key of FILE_PLAN_TOOLS.includes(name) ? ["pattern", "glob", "offset", "limit", "replace_all", "old_string", "new_string", "content", "subject", "description", "status", "todos"] : []) {
       if (input[key] !== undefined) selected[key] = input[key];
     }
-    for (const key of ["file_path", "path"]) if (typeof input[key] === "string") {
+    for (const key of FILE_PLAN_TOOLS.includes(name) ? ["file_path", "path"] : []) if (typeof input[key] === "string") {
       const relative = path.relative(this.#workspace, path.resolve(this.#workspace, input[key]));
       selected[key] = relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : "[outside workspace]";
     }
     const redacted = redactValue(selected);
     const encoded = JSON.stringify(redacted);
     const safe = Buffer.byteLength(encoded) > 8 * 1024 ? bounded(encoded, 8 * 1024) : redacted;
-    this.#events.push(this.#event("tool_call", `tool-${this.#events.length}`, { toolName: name, toolCallId: digest(id).slice(0, 24), arguments: safe }));
-    await this.#publisher.onSnapshot(`tool:${id}`, bounded(JSON.stringify(safe)), "tool", name);
+    this.#events.push(this.#event("tool_call", `tool-${this.#events.length}`, { toolName: publicName, toolCallId: digest(id).slice(0, 24), arguments: safe }));
+    await this.#publisher.onSnapshot(`tool:${id}`, bounded(JSON.stringify(safe)), "tool", publicName);
   }
 
   async #toolResult(block: Record<string, unknown>): Promise<void> {

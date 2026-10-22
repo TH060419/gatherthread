@@ -19,7 +19,7 @@ import type { ProjectSummary } from "./types.js";
 
 export interface ClaudeConnectOptions {
   apiUrl: string; workspacePath: string; model: string; projectId?: string; claudeCommand: string;
-  permissionMode: "manual" | "plan"; effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  permissionMode: "native" | "manual" | "plan"; effort?: "low" | "medium" | "high" | "xhigh" | "max";
   createWorkspace: boolean; pluginHooks: boolean; codeSync: boolean; githubCodeSync?: string;
   githubBaseBranch: string; preflightOnly: boolean; shareToolEvents: boolean;
 }
@@ -36,7 +36,7 @@ Options:
   --workspace <path>          Authorized local workspace (default: current directory)
   --create-workspace          Create/reuse the project's GatherThread Projects folder
   --claude-command <path>     Existing Claude Code executable (default: claude)
-  --permission-mode <mode>    manual or plan (default: manual); no permission bypass
+  --permission-mode <mode>    native (default), manual or plan; native keeps local settings
   --effort <effort>           low, medium, high, xhigh or max; applied exactly
   --plugin-hooks             Enable explicitly installed/reviewed native plugin hooks
   --code-sync                Authorize GT Cloud file sync separately (requires hooks)
@@ -74,8 +74,8 @@ export function parseClaudeConnectArgs(argv: readonly string[]): ClaudeConnectOp
   const url = new URL(rawUrl);
   if (url.username || url.password || url.search || url.hash || !["", "/", "/v1", "/v1/"].includes(url.pathname)
     || url.protocol !== "https:" && !(url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))) throw new Error("Use a credential-free HTTPS server origin or loopback HTTP");
-  const permissionMode = values.get("--permission-mode") ?? "manual";
-  if (permissionMode !== "manual" && permissionMode !== "plan") throw new Error("Permission mode must be manual or plan");
+  const permissionMode = values.get("--permission-mode") ?? "native";
+  if (!["native", "manual", "plan"].includes(permissionMode)) throw new Error("Permission mode must be native, manual or plan");
   const effort = values.get("--effort");
   if (effort !== undefined && !["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error("Unsupported Claude effort");
   const projectId = values.get("--project");
@@ -85,7 +85,7 @@ export function parseClaudeConnectArgs(argv: readonly string[]): ClaudeConnectOp
   if (githubCodeSync) GitHubRepositorySchema.parse(githubCodeSync);
   const githubBaseBranch = GitHubBranchSchema.parse(values.get("--github-base-branch") ?? "main");
   return { apiUrl: `${url.origin}/v1`, workspacePath: path.resolve(values.get("--workspace") ?? process.cwd()), model,
-    ...(projectId ? { projectId } : {}), claudeCommand: values.get("--claude-command") ?? "claude", permissionMode,
+    ...(projectId ? { projectId } : {}), claudeCommand: values.get("--claude-command") ?? "claude", permissionMode: permissionMode as ClaudeConnectOptions["permissionMode"],
     ...(effort ? { effort: effort as NonNullable<ClaudeConnectOptions["effort"]> } : {}),
     createWorkspace: flags.has("--create-workspace"), pluginHooks: flags.has("--plugin-hooks"), codeSync,
     ...(githubCodeSync ? { githubCodeSync } : {}), githubBaseBranch, preflightOnly: flags.has("--preflight-only"),
