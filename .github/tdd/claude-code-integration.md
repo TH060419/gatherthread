@@ -171,3 +171,21 @@ No user configuration, private session or live service was used. Automated tests
 also cover exact Hook ownership, native tool disclosure, explicit mode overrides,
 permission failure, process-tree cancellation and changed-journal refusal.
 Real provider billing and Windows native acceptance remain separate evidence.
+
+Final production-source re-review at `d2549211b946256dabf9eeffcf3665fca497bc9c`:
+Standards and Spec independently cleared all remaining findings. Follow-up fixes
+exclude private/outside/linked file arguments, preserve native permission-denial
+guidance even on exit 1, and freeze/resample the owned POSIX process tree before
+forced termination so shutdown handlers cannot detach new work. An uncertain
+cleanup retains the workspace busy barrier. The native plugin's instruction
+file is updated to the same permission policy rather than retaining the earlier
+file-only guidance.
+
+Final local regression: 1,303 unit cases (1,297 pass, six existing platform skips,
+zero failures), 154 script tests, six integration tests, nine E2E tests and all
+Web source/built checks pass. Git-less Claude tarball installation, embedded
+user-only MCP/preflight, reference/license/secret/branding audits and diff checks
+pass. Installed-CLI fake-provider permission acceptance remains separate from
+real model/provider validation. Production-source Linux, macOS, Windows and
+hosted-container CI all passed at `d254921`; instruction/report-only follow-up
+must still retain its own matching package verification and CI record.
