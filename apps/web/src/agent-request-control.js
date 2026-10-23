@@ -171,9 +171,14 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
         }
       } catch (error) {
         if (getContext().scope === current.scope && !pending.confirmed) {
-          delete errorNode.teamProblemIntent;
-          errorNode.textContent = current.action === "stop_team" && current.teamError
+          const message = current.action === "stop_team" && current.teamError
             ? current.teamError(error) : t(error.message ?? "Unable to control this Agent request. Try again.");
+          // Empty means this intent has been fenced. A newer validation or
+          // action owns its own hint, even when this transport finishes later.
+          if (message && !errorNode.textContent && !errorNode.teamProblemIntent) {
+            if (current.action === "stop_team") errorNode.teamProblemIntent = error;
+            errorNode.textContent = message;
+          }
         }
       } finally {
         if (operation === pending) operation = null;

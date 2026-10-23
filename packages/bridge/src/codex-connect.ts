@@ -2,6 +2,7 @@ import { resolveDeviceCredential } from "./device-credential.js";
 import { CodexSharedAgentExecutor, type SharedAgentExecutor } from "./shared-agent-executor.js";
 import { SharedAgentJobController } from "./shared-agent-controller.js";
 import { recoverSharedStoppedReceipts } from "./shared-stop-receipts.js";
+import { recoverProjectNativeReceipts } from "./project-native-recovery.js";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
@@ -182,10 +183,12 @@ export async function runCodexConnectCli(
         if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
         throw error;
       });
-    for (const workspace of existingWorkspaces) await recoverSharedStoppedReceipts({
-      privateControlRoot: path.join(codexProjectStateRoot(parsed.apiUrl, actor.deviceId, parsed.projectId, workspace), "shared-control"),
-      projectId: parsed.projectId, ownerDeviceId: actor.deviceId, api: api.agentSharingApi(),
-    });
+    for (const workspace of existingWorkspaces) {
+      const stateRoot = codexProjectStateRoot(parsed.apiUrl, actor.deviceId, parsed.projectId, workspace);
+      await recoverProjectNativeReceipts(stateRoot, api);
+      await recoverSharedStoppedReceipts({ privateControlRoot: path.join(stateRoot, "shared-control"),
+        projectId: parsed.projectId, ownerDeviceId: actor.deviceId, api: api.agentSharingApi() });
+    }
   }
   const projects = (await api.listProjects()).filter((project) => project.state === "active");
   const selected = await selectProject(projects, parsed.projectId);
@@ -234,6 +237,7 @@ export async function runCodexConnectCli(
   // must use that same canonical root to find the connector from descendants.
   const workspacePath = await validateCodexWorkspace(requestedWorkspacePath);
   const stateRoot = codexProjectStateRoot(parsed.apiUrl, actor.deviceId, selected.id, workspacePath);
+  await recoverProjectNativeReceipts(stateRoot, api);
   const mappingId = path.basename(stateRoot);
   if (parsed.resetCodexSession) await rm(stateRoot, { recursive: true, force: true });
   const codexCommand = await resolveCodexCommand(parsed.codexCommand, env);
@@ -1082,6 +1086,9 @@ export async function runProjectConnector(options: {
   nativeHookRelay?: { start(): Promise<void>; close(): Promise<void> };
   sharedExecutorFactory?: () => SharedAgentExecutor;
 }): Promise<void> {
+  if (typeof options.api.acknowledgeAgentExecutionStopped === "function" && options.harness.descriptor.harness === "codex") {
+    await recoverProjectNativeReceipts(options.stateRoot, options.api);
+  }
   if (typeof options.api.agentSharingApi === "function") await recoverSharedStoppedReceipts({
     privateControlRoot: path.join(options.stateRoot, "shared-control"), projectId: options.project.id,
     ownerDeviceId: options.actorDeviceId, api: options.api.agentSharingApi(),

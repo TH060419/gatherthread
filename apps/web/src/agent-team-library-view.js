@@ -191,7 +191,8 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     return team;
   }
   function updateContext() {
-    const next = context(); hostButton.disabled = !next.userId || !next.projectId || !next.sessionId || !next.writable || !api.saveAgentTeam;
+    const next = context(); hostButton.disabled = !next.userId || !next.projectId || !next.sessionId
+      || !(next.writable || canControl()) || !api.saveAgentTeam;
     const permission = `${next.writable}:${next.controlWritable ?? next.writable}`;
     const permissionChanged = writableState !== permission; writableState = permission;
     hostButton.textContent = t("Agent teams");

@@ -146,6 +146,24 @@ function fixture({ initial = [], modules = [], initialRuns = [], overrides = {} 
 
 async function open(f, index = 0) { await flush(); f.hostButton.click(); await flush(); f.document.body.querySelector(".team-library-list").children[index].children[0].click(); }
 
+test("a closed Team dialog remains reachable for Pause and Stop during replay without enabling new work", async () => {
+  const run = { id: "running-team", status: "running", purpose: "task", calls_used: 1, max_calls: 12 };
+  const f = fixture({ initial: [team()], initialRuns: [run] });
+  await flush();
+  assert.equal(f.document.body.querySelector("dialog").open, false);
+  f.update({ writable: false, controlWritable: true });
+  assert.equal(f.hostButton.disabled, false);
+  f.hostButton.click(); await flush();
+  assert.equal(f.document.body.querySelector("dialog").open, true);
+  const pause = f.button("Pause"), stop = f.button("Stop");
+  assert.equal(pause.disabled, false); assert.equal(stop.disabled, false);
+  pause.click(); await flush();
+  assert.equal(f.calls.filter(call => call[0] === "run-control")[0][3].action, "pause");
+  assert.equal(f.button("Resume").disabled, true, "replay must still block new native work");
+  f.update({ controlWritable: false });
+  assert.equal(f.hostButton.disabled, true); assert.equal(f.button("Stop").disabled, true);
+});
+
 for (const [locale, identityHint, promptHint] of [
   ["en", "Responsibilities and boundaries of this role.", "How to work within this role and format the response."],
   ["zh-CN", "负责什么、职责边界是什么。", "在职责范围内如何工作、怎样输出。"],

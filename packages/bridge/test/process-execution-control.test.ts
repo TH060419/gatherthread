@@ -389,7 +389,8 @@ test("unsupported custom executors refuse Team work before any claim, while ordi
   api.completeAgentRequest = async (_session, _request, input) => ({ ...ordinary, id: "response-1", type: "agent_response", sequence: 2, payload: input.payload });
   api.acknowledgeAgentExecutionStopped = async () => { throw new Error("ordinary requests never create Team exit ACKs"); };
   assert.equal((await bridge.processAgentRequest(ordinary, fixture.executor)).completed.length, 1);
-  assert.equal(claims, 1);
+  assert.ok(claims >= 2, "ordinary author-Pause observation rechecks the same claim before publication");
+  assert.equal((await readFile(fixture.starts, "utf8")).trim().split("\n").length, 1, "observation never starts a second native process");
 });
 
 for (const kind of ["cli", "adapter"] as const) {

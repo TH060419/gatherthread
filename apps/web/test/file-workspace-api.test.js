@@ -43,7 +43,8 @@ test("five file reads encode exact project and query values, retain cookies and 
       assert.equal(request.url, `/v1/projects/project%20%2F%20%E4%B8%AD/files/${query}`);
       assert.equal(request.options.method ?? "GET", "GET");
       assert.equal(request.options.credentials, "include");
-      assert.equal(request.options.signal, controller.signal);
+      assert.ok(request.options.signal instanceof AbortSignal);
+      assert.equal(request.options.signal.aborted, false, "the composed acknowledgment deadline retains a live caller transport");
       assert.equal(request.options.headers.Authorization, undefined);
       assert.equal(request.options.body, undefined);
       assert.equal(new URL(request.url, "https://same-origin.test").searchParams.has("signal"), false);
@@ -62,7 +63,8 @@ test("file mutation parses a strict body before dispatch and preserves the exact
     for (const request of requests) {
       assert.equal(request.url, "/v1/projects/project%20%2F%20one/files/mutations");
       assert.equal(request.options.method, "POST"); assert.equal(request.options.credentials, "include");
-      assert.equal(request.options.signal, controller.signal);
+      assert.ok(request.options.signal instanceof AbortSignal);
+      assert.equal(request.options.signal.aborted, false);
       assert.equal(request.options.headers["Content-Type"], "application/json");
       assert.equal(request.options.headers.Authorization, undefined);
       assert.deepEqual(JSON.parse(request.options.body), mutation);
@@ -126,7 +128,9 @@ test("file transport cancellation reaches fetch and keeps AbortSignal out of que
       controller.abort(reason);
       await assert.rejects(pending, (error) => error === reason);
       const request = requests.at(-1);
-      assert.equal(request.options.signal, controller.signal);
+      assert.ok(request.options.signal instanceof AbortSignal);
+      assert.equal(request.options.signal.aborted, true);
+      assert.equal(request.options.signal.reason, reason, "the caller cancellation reaches the composed deadline signal unchanged");
       assert.equal(new URL(request.url, "https://same-origin.test").searchParams.has("signal"), false);
       assert.equal(request.options.body?.includes("signal") ?? false, false);
     }

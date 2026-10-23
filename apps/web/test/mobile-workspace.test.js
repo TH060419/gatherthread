@@ -66,6 +66,7 @@ test("selecting a Team on mobile shows its saved name without leaking the previo
     tagName: "DIV", classList: { contains: () => false }, style: { setProperty() {} },
     append(...items) { this.children.push(...items); }, before() {}, after() {}, addEventListener() {},
     setAttribute(name, value) { this.attributes[name] = value; }, closest: () => null,
+    getAttribute(name) { return this.attributes[name] ?? null; },
     querySelector() { return create(); }, querySelectorAll: () => [], getClientRects: () => [{}], focus() {},
     showModal() { this.open = true; }, close() { this.open = false; },
   });

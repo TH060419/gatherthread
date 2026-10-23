@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
-import { SharedStoppedReceiptOutbox, ensureProjectWorkspace,
+import { FileCursorStore, SharedStoppedReceiptOutbox, ensureProjectWorkspace,
   type HttpCollaborationClient, type ProjectHarnessAdapter } from "../src/index.js";
 import { runProjectConnector } from "../src/codex-connect.js";
 
@@ -40,7 +40,7 @@ test("project connector replays a deleted source's stopped receipt before projec
   assert.deepEqual(await outbox.list(receipt), []);
 });
 
-async function cliFixture(t: TestContext, createWorkspace: boolean, wrongScope = false, includeRenamedWorkspace = false) {
+async function cliFixture(t: TestContext, createWorkspace: boolean, wrongScope = false, includeRenamedWorkspace = false, native = false) {
   const recoveryHome = await mkdtemp(path.join(tmpdir(), "gt-shared-cli-recovery-")), apiUrl = "https://fixture.invalid/v1";
   t.after(() => rm(recoveryHome, { recursive: true, force: true }));
   const workspace = createWorkspace ? await ensureProjectWorkspace({ apiUrl, projectId: receipt.projectId, projectName: "Old project name", homeDirectory: recoveryHome })
@@ -51,6 +51,10 @@ async function cliFixture(t: TestContext, createWorkspace: boolean, wrongScope =
   const stateRoot = path.join(recoveryHome, ".gatherthread", "codex", mapping);
   const outbox = new SharedStoppedReceiptOutbox(path.join(stateRoot, "shared-control", receipt.sourceRuntimeId));
   const stored = wrongScope ? { ...receipt, ownerDeviceId: "different-device" } : receipt; await outbox.put(stored);
+  const sessionKey = createHash("sha256").update("deleted-session").digest("hex").slice(0, 24);
+  const cursor = new FileCursorStore(path.join(stateRoot, `${sessionKey}-cursor.json`));
+  if (native) await cursor.save({ server: {}, local: {}, stoppedExecutions: [{ sessionId: "deleted-session", runtimeId: "deleted-runtime",
+    requestId: "request-1", claimAttempt: 2 }] });
   const outboxes = [outbox];
   if (includeRenamedWorkspace) {
     const previousWorkspace = await realpath(await ensureProjectWorkspace({ apiUrl, projectId: receipt.projectId,
@@ -69,6 +73,7 @@ os.homedir=()=>process.env.GT_SHARED_RECOVERY_HOME;
 syncBuiltinESMExports();
 globalThis.fetch=async (input,init)=>{const url=String(input);appendFileSync(process.env.CALLS,JSON.stringify({url,body:init?.body?JSON.parse(init.body):undefined})+'\\n');
  if(url.endsWith('/me'))return Response.json({data:{id:'owner-1',username:'Owner',device_id:'device-1'}});
+ if(url.endsWith('/execution/stopped')){if(process.env.LOSE_ACK==='1')throw new TypeError('fixture ACK lost');return Response.json({data:{active:false}});}
  if(url.endsWith('/abort-ack')){if(process.env.LOSE_ACK==='1')throw new TypeError('fixture ACK lost');return Response.json({data:${JSON.stringify(response())}});}
  if(url.endsWith('/projects'))return Response.json({data:{projects:[]}});
  throw new Error('unexpected native/source/job transport');
@@ -77,11 +82,20 @@ const {runCodexConnectCli}=await import(${JSON.stringify(entry)});
 try{await runCodexConnectCli(JSON.parse(process.env.ARGS),process.env);}catch(error){process.stderr.write(error.message);process.exitCode=1;}
 `);
   const argv = ["--url", apiUrl, "--project", receipt.projectId, ...(createWorkspace ? ["--create-workspace"] : ["--workspace", workspace]), "--codex-command", "must-not-start-native"];
-  return { outbox, outboxes, stored, calls, async run(lose = false) {
+  return { outbox, outboxes, stored, calls, cursor, async run(lose = false) {
     await assert.rejects(executeFile(process.execPath, [runner], { env: { ...process.env, GT_SHARED_RECOVERY_HOME: recoveryHome, CALLS: calls,
       GATHERTHREAD_TOKEN: "gta_fixture", LOSE_ACK: lose ? "1" : "0", ARGS: JSON.stringify(argv) } }), /requested project is unavailable|fixture ACK lost|scope mismatch/);
     return (await readFile(calls, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
   } };
+}
+
+for (const createWorkspace of [false, true]) {
+  test(`actual CLI recovers ordinary native exits before deleted-project selection (${createWorkspace ? "known marker" : "explicit workspace"})`, { skip: process.platform === "win32" }, async t => {
+    const f = await cliFixture(t, createWorkspace, false, false, true), calls = await f.run();
+    assert.deepEqual(calls.map(call => new URL(call.url).pathname), ["/v1/me",
+      "/v1/sessions/deleted-session/agent-requests/request-1/execution/stopped", "/v1/agent-share-jobs/job-1/abort-ack", "/v1/projects"]);
+    assert.deepEqual((await f.cursor.load()).stoppedExecutions, []);
+  });
 }
 
 for (const createWorkspace of [false, true]) {

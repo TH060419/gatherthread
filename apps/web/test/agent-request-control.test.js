@@ -120,6 +120,23 @@ test("Team Stop uses its safe error formatter and drops a late failure after nav
   reject(Error("LATE_SYNTHETIC_PRIVATE_ERROR")); await flush(); assert.equal(f.errorNode.textContent, "");
 });
 
+for (const obsolete of [false, true]) {
+  test(`a ${obsolete ? "fenced" : "delayed"} Team Stop failure preserves newer composer validation`, async () => {
+    let reject;
+    const f = fixture();
+    f.setContext({ teamRun: { id: "team-a", status: "running" },
+      stopTeam: () => new Promise((_resolve, no) => { reject = no; }),
+      teamError: () => obsolete ? "" : "Team Stop is unconfirmed." });
+    f.control.handleClick();
+    const newer = { kind: "new-validation" };
+    f.errorNode.teamProblemIntent = newer;
+    f.errorNode.textContent = "Write a message first.";
+    reject(Error("OLD_STOP_FAILURE")); await flush();
+    assert.equal(f.errorNode.textContent, "Write a message first.");
+    assert.equal(f.errorNode.teamProblemIntent, newer);
+  });
+}
+
 test("personal cloud resume waits for its private selection and cannot write after navigation", async () => {
   let resolve, reads = 0; const writes = [];
   const cloud = request("cloud", "me", "opencode"); cloud.payload.profile_id = "api-fixture";

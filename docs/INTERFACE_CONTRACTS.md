@@ -242,8 +242,15 @@ started and settled states for CLI/subprocess work; App Server retains native
 turn-start tracking in its existing projection journal. Only settled native work
 can produce cleanup receipts. For these bridge executors, receipt persistence
 and retry precede a new runtime registration, so
-deletion or rebinding cannot block old cleanup. Lost completion acknowledgments
-replay the settled outcome instead of launching another process. Prepared or
+deletion or rebinding cannot block old cleanup.
+Project startup independently scans only the exact device/project/workspace's
+known cursor and native-execution sidecars before project/session discovery and
+native preflight, including deleted sessions. The scan is limited to 4,096 direct
+entries and 64 MiB; regular-file/link/session-key checks and OS-supported
+ownership/private-mode checks precede cleanup. It never searches native
+conversations or interprets a missing process as exit. Current cursor updates
+survive delayed acknowledgments. Lost completion acknowledgments replay the
+settled outcome instead of launching another process. Prepared or
 started ownership is never reclaimed merely because a PID is absent; unknown
 exit requires operator verification. Evidence is not evicted to admit new work.
 DSH likewise replays confirmed private exit receipts before session reads,
