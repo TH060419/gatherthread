@@ -149,6 +149,27 @@ export function projectCodexLauncherUrl({
   return link;
 }
 
+/** v3 adds local harness routing; the password-protected grant remains unchanged. */
+export function projectClaudeLauncherUrl(input) {
+  return projectAgentLauncherUrl({ ...input, harness: "claude-code" });
+}
+
+export function projectAgentLauncherUrl(input) {
+  if (!["codex", "claude-code"].includes(input.harness)) throw new Error("Unsupported Launcher harness.");
+  if (input.harness === "claude-code" && !isClaudeModelId(input.model)) throw new Error("Enter the exact Claude model ID before opening the Launcher.");
+  if (!input.email || !input.authorizationId) throw new Error("Open a new Launcher connection from the website.");
+  const url = new URL(projectCodexLauncherUrl(input));
+  url.searchParams.set("v", "3");
+  url.searchParams.set("harness", input.harness);
+  const link = url.toString();
+  if (new TextEncoder().encode(link).byteLength > 2048) throw new Error("Launcher connection is too long.");
+  return link;
+}
+
+export function isClaudeModelId(model) {
+  return typeof model === "string" && /^claude-[A-Za-z0-9][A-Za-z0-9._-]{0,112}$/u.test(model);
+}
+
 export function createSelectionGuard() {
   let generation = 0;
   return {

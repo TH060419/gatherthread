@@ -1,0 +1,12 @@
+{
+  "name": "gatherthread",
+  "displayName": "共序 / GatherThread",
+  "icon": "./.claude-plugin/icon.png",
+  "version": "0.1.0-beta.3",
+  "description": "Connect Claude Code to shared GatherThread projects, history and reviewed collaboration tools.",
+  "author": { "name": "Yuhan He and contributors", "url": "https://github.com/TH060419/gatherthread" },
+  "homepage": "https://gatherthread.cn",
+  "repository": "https://github.com/TH060419/gatherthread",
+  "license": "Apache-2.0",
+  "keywords": ["gatherthread", "collaboration", "claude-code", "mcp"]
+}

@@ -10,7 +10,7 @@ On Windows or macOS, choose **Connect Codex → Open Launcher** with [Launcher v
 
 ## Meet the workspace
 
-Pick a project and conversation on the left, discuss and request AI work in the middle, and find members and invitations on the right. Each person can connect Codex or DeepSeek Harness, or choose the cloud trial Agent for a small task without local setup. Cloud usage allowances are shown in the workspace.
+Pick a project and conversation on the left, discuss and request AI work in the middle, and switch between **Files** and **Members** in the right workspace. The small top-right button shows or hides it without closing tabs. Each person can connect Codex or DeepSeek Harness, or choose the cloud trial Agent for a small task without local setup. Cloud usage allowances are shown in the workspace.
 
 ![Full interface with annotations: conversation, members, and Agent controls](assets/product/en/annotated/01-workspace.jpg)
 
@@ -34,19 +34,19 @@ Type `@` and select a member from the list. Simply typing someone's name is not 
 
 ![Full interface with annotations: quote preview and selected mention](assets/product/en/annotated/05-quote-and-mention.jpg)
 
-The recipient can open the mentions inbox and jump to the relevant conversation and message. This is an in-app shortcut, not a cross-device read receipt or a promise of push notifications.
+For unread mentions, the recipient sees a small corner shortcut that jumps to the message. It disappears after the message is read in that browser tab. This is an in-app reminder, not a cross-device read receipt or a promise of push notifications.
 
-![Full interface with annotations: the mentions inbox](assets/product/en/annotated/06-mentions.jpg)
+![Full interface with annotations: locating a mentioned message](assets/product/en/annotated/06-mentions.jpg)
 
 Quoting or mentioning someone does not run their Agent. Chat and Agent requests remain separate actions.
 
 ## 3. Turn a long discussion into a short checklist
 
-Choose your own connected computer Agent (Codex/DSH) or a Cloud Agent, select completed messages, and ask it to summarize them. In this example, the summary keeps the agreed time, place, and button behavior and leaves photos out of the first version. This step is optional and uses the selected Agent's quota.
+Choose your own connected computer Agent (Codex/DSH) or a Cloud Agent, then open **Summaries** beside the conversation title and choose **Select history to summarize**. Select completed messages and confirm. In this example, the summary keeps the agreed time, place, and button behavior and leaves photos out of the first version. This step is optional and uses the selected Agent's quota.
 
 ![Full interface with annotations: the signup-page summary and original view](assets/product/en/annotated/03-summary.jpg)
 
-Undeleted original messages and valid older summary versions stay available. Switch a paragraph back to its sources, switch the whole view, or select an existing summary with other messages for a new summary. Members who can write in that conversation can generate summaries; viewers can read them.
+Undeleted original messages and valid older summary versions stay available. **Summaries** also contains the whole-view toggle and version history. Switch a paragraph back to its sources, or select an existing summary with other messages for a new summary. Members who can write in that conversation can generate summaries; viewers can read them.
 
 Future GatherThread Agent requests default to the summarized history. In **Settings → Summaries**, choose original history when precise wording or complete details matter, and customize the summary instructions. The reading-view toggle does not change this preference or remove history already loaded into a native Agent conversation.
 
@@ -82,7 +82,9 @@ confirmation.hidden = false;
 signupButton.disabled = true;
 ```
 
-Open **Result → Project files** in the example. Choose a file on the left and inspect its code on the right, without installing tools. Compare what the team agreed with what was actually built.
+In the example, open **Files** on the right and choose **GT Cloud → Your branch**. Expand `src` and open `signup.js`: it opens in its own tab. Then open `README.md` and switch between **Code** and **Preview**. Compare the requirements with the actual files, without installing tools.
+
+Close file tabs individually or switch between them to keep working. Hiding the right workspace does not close its tabs; use **+** to reopen Files or Members when needed.
 
 ![Full interface with annotations: the project files and signup-button code](assets/product/en/annotated/16-project-code.jpg)
 
@@ -106,7 +108,7 @@ For a small trial, choose **GT Cloud**, GatherThread's file service with 128 MiB
 
 File access needs separate permission. Automatic file upload waits for Agent activity to stop and files to settle; it neither downloads nor merges automatically. A newly authorized GitHub connection starts with automatic upload on; GT Cloud starts with it off. You can change either preference or upload manually.
 
-Conversation uploads have their own switch. Turning them off does not turn file sharing off, and the reverse is also true. Local transfers and recovery need the authorized computer to be online.
+Conversation uploads have their own switch. Turning them off does not turn file sharing off, and the reverse is also true. Local transfers and recovery need the authorized computer to be online. Viewing or editing online files in the browser does not need a connected computer Agent.
 
 GitHub still enforces its own permissions and rules. Local transfer safety limits also apply; “not counted against GT quota” does not mean any repository size or file type is supported. See [file setup and limits](CODE_SYNC.md). Review repository workflows before automatic uploads, because a push may start GitHub Actions.
 
@@ -120,11 +122,13 @@ Alex makes the page. Maya changes one line in `src/signup.js` to say “You’re
 
 On GitHub, use the repository's own pull-request review and permissions. GatherThread project membership does not grant GitHub access. Leaving a GatherThread project does not revoke GitHub access either.
 
+In **Files**, choose Maya's branch. In the file list, select **Changes** and open `src/signup.js` to see added lines in green and removed lines in red. A teammate's branch is read-only; switch back to **Your branch** to edit and **Save**. **History** opens earlier versions read-only. The [browser file-workspace guide](CODE_SYNC.md#browser-file-workspace--网页文件工作区) covers more file actions, PDF/image previews and save-conflict recovery.
+
 A personal branch separates uploaded versions, **not local folders**. Use separate working copies when people or multiple tools edit files at the same time. GatherThread does not lock all Agents out of a shared directory.
 
 ## 7. Check the result, not just the answer
 
-Open **Result → Try the page** at the top of the free example. Press “Sign me up”: the confirmation appears and the button disables. Switch to **Project files** to inspect the six files, and select Maya’s version to compare the new message. Once you merge it in file collaboration, the shared version also uses the new code.
+Open **Result** at the top of the free example to try the signup page. Press “Sign me up”: the confirmation appears and the button disables. Close the page and return to **Files** on the right to inspect the six files or compare Maya's branch. Once you merge it in file collaboration, the shared version also uses the new code.
 
 ![Full interface with annotations: the working signup-page confirmation](assets/product/en/annotated/14-working-result.jpg)
 
@@ -173,6 +177,6 @@ Before deleting an account, review its impact in account settings and transfer o
 
 Use the guides in Settings whenever you want a refresher. Their example is disposable: practice, reset, or exit without changing real projects or using your model quota. Computer, phone, and tablet guides point to the controls shown on that device.
 
-Today's workflow is people choosing their own Agents and sharing discussion, results, and reviewed file changes. Automatic multi-Agent teams, direct cooperation between different members' Agents, and cloud Agent teams remain future plans.
+**Multi-Agent teams are coming in a later release.** Several Agents connected by one person will form a team, divide work and communicate directly to complete tasks together. With members' explicit permission, Agents belonging to different teammates will also communicate and collaborate automatically.
 
 [Open GatherThread](https://gatherthread.cn/) · [Codex connection](CODEX_CONNECT.md) · [DSH connection](DSH_CONNECT.md) · [Project files](CODE_SYNC.md) · [Cloud trial Agent](HOSTED_AGENT_GUIDE.md) · [Self-hosting](SELF_HOSTING.md) · [All documentation](README.md)

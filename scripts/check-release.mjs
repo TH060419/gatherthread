@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const EXPECTED_VERSION = "0.1.0-beta.2";
+const EXPECTED_VERSION = "0.1.0-beta.3";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const manifestPaths = [
   "package.json",
@@ -13,6 +13,7 @@ const manifestPaths = [
   "packages/adapters/package.json",
   "packages/bridge/package.json",
   "packages/codex-connect/package.json",
+  "packages/claude-connect/package.json",
   "packages/dsh-host/package.json",
   "packages/mcp/package.json",
   "packages/protocol/package.json",
@@ -29,7 +30,7 @@ for (const path of manifestPaths) {
 
 const lock = await json("package-lock.json");
 assert.equal(lock.version, EXPECTED_VERSION, "package-lock.json must declare the candidate version");
-for (const path of ["", "apps/server", "apps/web", "packages/adapters", "packages/bridge", "packages/codex-connect", "packages/dsh-host", "packages/mcp", "packages/protocol"]) {
+for (const path of ["", "apps/server", "apps/web", "packages/adapters", "packages/bridge", "packages/codex-connect", "packages/claude-connect", "packages/dsh-host", "packages/mcp", "packages/protocol"]) {
   assert.equal(lock.packages?.[path]?.version, EXPECTED_VERSION, `package-lock.json package ${path || "root"} is stale`);
 }
 
@@ -41,7 +42,7 @@ assert.equal(dshBundle.clientEntry, "@gatherthread/dsh-host/client");
 assert.deepEqual(dshBundle.deepseekHarness?.primary, {
   distribution: "npm",
   package: "@deepseek-ai/dsh",
-  version: "0.1.7-rc.2",
+  version: "0.2.1-rc.2",
   profile: "web",
   persistenceProbe: "list",
 });
@@ -53,10 +54,29 @@ assert.deepEqual(dshBundle.deepseekHarness?.sourceFallback, {
   verifiedProfiles: ["headless", "web"],
   persistenceProbe: "stat",
 });
+assert.deepEqual(dshBundle.deepseekHarness?.desktop, {
+  distribution: "desktop",
+  package: "@deepseek-ai/dsh",
+  version: "0.2.1-rc.2",
+  profile: "desktop",
+  persistenceProbe: "list",
+  patchFile: "cordis.patch.yml",
+});
+assert.equal(dshBundle.deepseekHarness?.legacyPatchFile, "cordis.patch.dsh-0.1.yml");
 assert.deepEqual(dshBundle.runtimeDependencies, [], "GatherThread installation must not acquire a DSH runtime dependency");
 assert.equal(dshPackage.private, undefined, "DSH plugin package must remain publishable through the official profile installer");
 assert.deepEqual(dshPackage.publishConfig, { access: "public", tag: "beta" });
 assert.equal(dshPackage.engines?.node, ">=24");
+assert.equal(
+  dshPackage.engines?.dsh,
+  ">=0.2.1-rc.2 <0.3.0",
+  "DSH must gate the 0.2.x profile layer: an older runtime loads it and fails startup on the "
+    + "Connection inject rename, while the 0.1.x line ships the frozen cordis.patch.dsh-0.1.yml layer",
+);
+assert.equal(dshPackage.peerDependencies?.["@deepseek-ai/dsh"], dshPackage.engines.dsh,
+  "Older DSH must reject the whole incompatible layer before profile composition");
+assert.deepEqual(dshPackage.peerDependenciesMeta?.["@deepseek-ai/dsh"], { optional: true },
+  "The compatibility peer must not install the harness");
 assert.equal(
   Object.keys(dshPackage.dependencies ?? {}).some((name) => name.startsWith("@deepseek-ai/")),
   false,
@@ -88,14 +108,23 @@ const requiredFiles = [
   "docs/INTERFACE_CONTRACTS.md",
   "docs/ALIYUN_ECS.md",
   "docs/ALIYUN_ECS.zh-CN.md",
-  "docs/releases/0.1.0-beta.2.md",
+  "docs/releases/0.1.0-beta.3.md",
   "docs/CODEX_CONNECT.md",
   "docs/CODEX_CONNECT.zh-CN.md",
   "docs/DSH_CONNECT.md",
   "docs/DSH_CONNECT.zh-CN.md",
+  "docs/CLAUDE_CODE.md",
+  "docs/adr/0060-claude-code-plugin-and-local-connector.md",
   "docs/adr/0018-unified-codex-plugin-and-connector.md",
   ".agents/plugins/marketplace.json",
   "packages/codex-connect/README.md",
+  "packages/claude-connect/README.md",
+  "plugins/gatherthread-claude/.claude-plugin/plugin.json",
+  "plugins/gatherthread-claude/.mcp.json",
+  "plugins/gatherthread-claude/hooks/hooks.json",
+  "plugins/gatherthread-claude/scripts/hook-forwarder.mjs",
+  "plugins/gatherthread-claude/scripts/mcp-launcher.mjs",
+  "plugins/gatherthread-claude/skills/gatherthread/SKILL.md",
   "plugins/gatherthread/.codex-plugin/plugin.json",
   "plugins/gatherthread/.mcp.json",
   "plugins/gatherthread/hooks/hooks.json",
@@ -120,6 +149,7 @@ const requiredFiles = [
   "packages/dsh-host/bundle/enabled.example.cordis.patch.yml",
   "packages/dsh-host/bundle/project.example.cordis.patch.yml",
   "packages/dsh-host/client/client.js",
+  "packages/dsh-host/cordis.patch.dsh-0.1.yml",
   "packages/dsh-host/dist/bundle/native-plugin.js",
   "packages/dsh-host/dist/bundle/plugin.js",
   "packages/dsh-host/integration/loader-control/index.mjs",
@@ -139,6 +169,7 @@ const requiredFiles = [
   "scripts/dry-run-npm-release.mjs",
   "scripts/verify-codex-package.mjs",
   "scripts/verify-dsh-package.mjs",
+  "scripts/verify-claude-package.mjs",
 ];
 await Promise.all(requiredFiles.map((path) => readFile(join(root, path), "utf8")));
 
@@ -148,6 +179,21 @@ assert.equal(connector.private, undefined);
 assert.deepEqual(connector.publishConfig, { access: "public", tag: "beta" });
 assert.deepEqual(connector.bin, { "gatherthread-codex-connect": "dist/codex-connect.js" });
 assert.deepEqual(connector.dependencies ?? {}, {});
+
+const claudeConnector = await json("packages/claude-connect/package.json");
+assert.equal(claudeConnector.name, "@gatherthread/claude-connect");
+assert.equal(claudeConnector.private, undefined);
+assert.deepEqual(claudeConnector.publishConfig, { access: "public", tag: "beta" });
+assert.deepEqual(claudeConnector.bin, { "gatherthread-claude-connect": "dist/claude-connect.js" });
+assert.deepEqual(claudeConnector.dependencies ?? {}, {});
+const claudePlugin = await json("plugins/gatherthread-claude/.claude-plugin/plugin.json");
+assert.equal(claudePlugin.version, EXPECTED_VERSION);
+const claudeMcp = await json("plugins/gatherthread-claude/.mcp.json");
+assert.equal(claudeMcp.gatherthread?.command, "node");
+assert.deepEqual(claudeMcp.gatherthread?.args, ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp-launcher.mjs"]);
+assert.equal(claudeMcp.gatherthread?.env, undefined);
+assert.equal(claudeMcp.gatherthread?.env_vars, undefined);
+assert.equal(await readFile(join(root, "packages/claude-connect/LICENSE"), "utf8"), await readFile(join(root, "LICENSE"), "utf8"));
 
 const plugin = await json("plugins/gatherthread/.codex-plugin/plugin.json");
 assert.equal(plugin.version, EXPECTED_VERSION);
@@ -170,9 +216,9 @@ assert.equal(marketplace.interface?.displayName, "共序 / GatherThread");
 assert.deepEqual(marketplace.plugins?.[0]?.source, { source: "local", path: "./plugins/gatherthread" });
 const marketplaceCommand = `codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v${EXPECTED_VERSION} --sparse .agents/plugins --sparse plugins/gatherthread`;
 const pluginInstallCommand = "codex plugin add gatherthread@gatherthread";
-const historicalRelease = await readFile(join(root, "docs/releases/0.1.0-beta.2.md"), "utf8");
-assert.match(historicalRelease, new RegExp(marketplaceCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-assert.match(historicalRelease, new RegExp(pluginInstallCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+const currentRelease = await readFile(join(root, `docs/releases/${EXPECTED_VERSION}.md`), "utf8");
+assert.match(currentRelease, new RegExp(marketplaceCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+assert.match(currentRelease, new RegExp(pluginInstallCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 for (const path of ["apps/web/index.html", "docs/CODEX_CONNECT.md", "docs/CODEX_CONNECT.zh-CN.md", "packages/codex-connect/README.md"]) {
   const surface = await readFile(join(root, path), "utf8");
   assert.match(surface, /git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE/);
@@ -203,7 +249,9 @@ assert.match(webDomain, /LOCAL_CODEX_CONNECTOR\.tgz/);
 assert.doesNotMatch(webDomain, /@gatherthread\/codex-connect@0\.1\.0-beta\.2/);
 
 const installer = await readFile(join(root, "deploy/aliyun-ecs/install.sh"), "utf8");
-assert.match(installer, /release_version="0\.1\.0-beta\.2"/);
+assert.match(installer, /release_version="0\.1\.0-beta\.3"/);
+assert.match(installer, /grep -Fq[^\n]*\$release_version/,
+  "installer manifest validation must reuse its current release version");
 assert.match(installer, /GATHERTHREAD_SERVER_HOST=127\.0\.0\.1/);
 assert.match(installer, /GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP=false/);
 assert.match(installer, /GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true/);

@@ -1,4 +1,4 @@
-# ADR-0058: Account-private saved Agent Teams and independent modules
+# ADR-0061: Account-private saved Agent Teams and independent modules
 
 - Status: proposed / local implementation preview
 - Date: 2026-10-16

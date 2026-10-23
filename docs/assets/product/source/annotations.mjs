@@ -19,7 +19,7 @@ export const scenes = {
   '13-tablet': [point('#message-input','Keep working on a tablet','在平板上继续讨论'), point('#mobile-agent-button','Open compact Agent controls','展开紧凑的 Agent 设置')],
   '13-tablet-agent': [point('#agent-model-select','Choose a supported model','选择可用模型'), point('#agent-effort-select','Adjust reasoning level','调整思考强度')],
   '14-working-result': [point('#example-preview-tab','Try the supplied code','试用代码提供的页面'), point('#example-project-frame','Check the agreed result','检查是否符合约定')],
-  '16-project-code': [point('#example-file-list','A complete small project','完整的小项目文件'), point('#example-source-code','Read the button’s actual code','查看按钮的实际代码')],
+  '16-project-code': [point('.fw-tabs','Keep files in separate tabs','文件在独立标签中打开'), point('.fw-file-path','Know which file you are reading','确认当前查看的文件'), point('.fw-file-pane .cm-content','Read the button’s actual code','查看按钮的实际代码')],
   '17-work-plan': [point('.agent-plan','Follow the work plan','跟随工作计划'), point('#message-example-build-check','Inspect the behavior checks','查看实际代码的检查结果')],
   '15-history-controls': [point('#import-visible-history-button','Import into a new local task','导入新的本地任务'), point('.codex-auto-upload-control','Control local-to-cloud upload','开关本地自动上传'), point('#upload-local-turns-button','Manually upload completed turns','手动补传已完成回合')],
 };

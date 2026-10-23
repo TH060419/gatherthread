@@ -1,7 +1,7 @@
-import { codeErrorText, codeRuntimeChoices, createCodeSyncController } from "./code-sync.js?v=20261012-content-1";
+import { codeErrorText, codeRuntimeChoices, createCodeSyncController } from "./code-sync.js?v=20261018-tabs-2";
 import { codeNoticeStorage, hasSeenCodeNotice, markCodeNoticeSeen } from "./code-notice.js";
-import { mountGithubCodeSync } from "./github-code-sync-view.js?v=20261012-content-1";
-import { mountGithubMode } from "./github-setup.js?v=20261012-content-1";
+import { mountGithubCodeSync } from "./github-code-sync-view.js?v=20261018-tabs-2";
+import { mountGithubMode } from "./github-setup.js?v=20261018-tabs-2";
 
 const ACTIVE_JOBS = new Set(["queued", "claimed", "importing", "compacting"]);
 const shortCommit = (value) => typeof value === "string" ? value.slice(0, 9) : "—";
@@ -128,7 +128,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, onGit
     const select = el("code-runtime-select");
     const options = [{ value: "", label: t("Choose a local Agent device") }, ...runtimes.map((runtime) => {
       const device = context.devices?.find((item) => item.id === runtime.deviceId)?.name ?? runtime.deviceId;
-      return { value: runtime.id, label: `${runtime.harness === "codex" ? "Codex" : "DeepSeek Harness"} · ${device || t("Unnamed device")}` };
+      return { value: runtime.id, label: `${runtime.harness === "codex" ? "Codex" : runtime.harness === "claude-code" ? "Claude Code" : "DeepSeek Harness"} · ${device || t("Unnamed device")}` };
     })];
     if (state.runtimeId && !runtimes.some((runtime) => runtime.id === state.runtimeId)) {
       options.push({ value: state.runtimeId, label: t("Selected device is offline") });

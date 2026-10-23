@@ -23,7 +23,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { startCollaborationServer } from "../apps/server/dist/src/server.js";
 import { browserSessionFixture, identityFixture } from "../apps/server/dist/test/auth-fixtures.js";
-import { DSH_NPM_COMPATIBILITY } from "../packages/dsh-host/dist/src/index.js";
+import { DSH_COMPATIBILITY_TARGETS, DSH_NPM_COMPATIBILITY } from "../packages/dsh-host/dist/src/index.js";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const PACKAGE_ROOT = path.join(ROOT, "packages/dsh-host");
@@ -704,8 +704,9 @@ async function main() {
     assert.equal(rpcPayload.result?.value?.authorization, "unpaired");
     assert.deepEqual(rpcPayload.result?.value?.compatibility, {
       package: "@deepseek-ai/dsh",
-      version: "0.1.7-rc.2",
+      version: DSH_NPM_COMPATIBILITY.version,
       profile: "web",
+      targets: DSH_COMPATIBILITY_TARGETS,
     });
     process.stderr.write("DSH gate: authenticated RPC verified; starting browser\n");
 
@@ -1288,7 +1289,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify({
       passed: true,
       distribution: `${DSH_NPM_COMPATIBILITY.package}@${DSH_NPM_COMPATIBILITY.version}`,
-      command: "npx @deepseek-ai/dsh@0.1.7-rc.2 web",
+      command: `npx @deepseek-ai/dsh@${DSH_NPM_COMPATIBILITY.version} web`,
       pluginMechanism: "dsh plugin --profile web add <package>",
       profile: "web",
       patchReloadFixture: startupFixture ? "startup" : "default",

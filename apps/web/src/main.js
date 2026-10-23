@@ -1,27 +1,29 @@
-import { renderAvatar, isAgentReply, eventAuthorLabel, eventExecutionOwner } from "./avatars.js?v=20261012-content-1";
-import { mountAvatarSettings } from "./avatar-settings.js?v=20261012-content-1";
-import { mountCloudGithub } from "./cloud-github-view.js?v=20261012-content-1";
-import { mountSharedAgents } from "./shared-agent-view.js?v=20261012-content-1";
+import { renderAvatar, isAgentReply, eventAuthorLabel, eventExecutionOwner } from "./avatars.js?v=20261018-tabs-2";
+import { mountAvatarSettings } from "./avatar-settings.js?v=20261018-tabs-2";
+import { mountCloudGithub } from "./cloud-github-view.js?v=20261018-tabs-2";
+import { mountSharedAgents } from "./shared-agent-view.js?v=20261018-tabs-2";
 import { mountAgentTeams } from "./agent-team-library-view.js?v=20261016-team-v2";
 import { mountTeamRunNotice } from "./agent-team-run-notice.js?v=20261018-team-errors";
 import { teamEventPresentation } from "./agent-team-event.js?v=20261016-team-v2";
 import { mountDeviceAuthorization } from "./device-authorization.js";
-import { createAccountEmailHint, mountCodexLauncher, mountAgentPackageDownloads } from "./codex-launcher.js?v=20261012-content-1";
+import { createAccountEmailHint, mountCodexLauncher, mountAgentPackageDownloads } from "./codex-launcher.js?v=20261018-tabs-2";
 import { mountAccountDevices } from "./account-devices.js";
-import { mountPersonalCloudApi } from "./personal-cloud-api.js?v=20261012-content-1";
-import { mountCloudCodeConsent } from "./cloud-code-consent.js?v=20261012-content-1";
-import { cloudRequestInput, continueCloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js?v=20261012-content-1";
-import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261012-content-1";
+import { mountPersonalCloudApi } from "./personal-cloud-api.js?v=20261018-tabs-2";
+import { mountCloudCodeConsent } from "./cloud-code-consent.js?v=20261018-tabs-2";
+import { cloudRequestInput, continueCloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js?v=20261018-tabs-2";
+import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261018-tabs-2";
+import { mountFileWorkspace } from "./workspace-files.js";
+import { mountSessionToolbar } from "./session-toolbar.js";
 import { mountInterfaceMode } from "./interface-mode.js";
 import { mountMobileSettings } from "./mobile-settings-view.js";
 import { mountMobileCodeView } from "./mobile-code-view.js";
 import { mountRegistration } from "./registration.js";
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261012-content-1";
-import { mountMessageActions, agentWorkStatus } from "./message-actions.js?v=20261012-content-1";
-import { mountMessageDeletion } from "./message-deletion.js?v=20261012-content-1";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261018-tabs-2";
+import { mountMessageActions, agentWorkStatus } from "./message-actions.js?v=20261018-tabs-2";
+import { mountMessageDeletion } from "./message-deletion.js?v=20261018-tabs-2";
 import { positionSessionContextPanel, bindSessionContextPanel } from "./session-context-panel.js";
-import { ExampleCollaborationApi } from "./example-api.js?v=20261012-content-1";
-import { mountOnboarding } from "./onboarding.js?v=20261012-content-1";
+import { ExampleCollaborationApi } from "./example-api.js?v=20261018-tabs-2";
+import { mountOnboarding } from "./onboarding.js?v=20261018-tabs-2";
 import { projectInvitationShareText } from "./invitation-share.js?v=20261012-invite-1";
 import { mountInvitationLink } from "./invitation-link.js?v=20261012-invite-1";
 import {
@@ -58,14 +60,14 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20261012-content-1";
-import { SessionSync } from "./realtime.js?v=20261012-content-1";
-import { mountCodeSync } from "./code-sync-view.js?v=20261012-content-1";
-import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20261012-content-1";
-import { mountHistorySummaries } from "./history-summary-view.js?v=20261012-content-1";
+} from "./domain.js?v=20261018-tabs-2";
+import { SessionSync } from "./realtime.js?v=20261018-tabs-2";
+import { mountCodeSync } from "./code-sync-view.js?v=20261018-tabs-2";
+import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20261018-tabs-2";
+import { mountHistorySummaries } from "./history-summary-view.js?v=20261018-tabs-2";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20261012-content-1";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20261018-tabs-2";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   CODEX_HARNESS,
@@ -82,7 +84,7 @@ import {
   resolveCodexRuntime,
   resolveDshRuntime,
   withoutDshPairingHash,
-} from "./dsh.js?v=20261012-content-1";
+} from "./dsh.js?v=20261018-tabs-2";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import { calendarDayKey, formatFullTimestamp, formatTimelineDay } from "./timeline-dates.js?v=20260927-1";
 import {
@@ -110,6 +112,8 @@ import {
   CONTEXT_BUDGET_MIN_BYTES,
   contextBudgetToTokenCeiling,
   createSettingsStore,
+  projectClaudeProfile,
+  withProjectClaudeProfile,
   SHARED_LANGUAGE_STORAGE_KEY,
   DEFAULT_SETTINGS,
   effectiveContextBudget,
@@ -182,6 +186,7 @@ let dshRuntimePollTimer;
 let dshRuntimePollGeneration = 0;
 let dshRuntimeLoadInFlight = false;
 let selectedSessionGeneration = 0;
+let projectNavigationGeneration = 0;
 let pendingDshPairingCode = dshPairingCodeFromHash(location.hash);
 const expandedWorklogs = new Set();
 const collapsedWorklogs = new Set();
@@ -253,6 +258,8 @@ const deleteCloudForm = element("delete-cloud-form");
 const leaveProjectDialog = element("leave-project-dialog");
 const leaveProjectForm = element("leave-project-form");
 const connectCodexDialog = element("connect-codex-dialog");
+const connectClaudeDialog = element("connect-claude-dialog");
+const connectClaudeButton = element("connect-claude-button");
 
 const connectCodexButton = element("connect-codex-button");
 const connectDshDialog = element("connect-dsh-dialog");
@@ -263,6 +270,7 @@ const memberPanel = element("member-panel");
 const toggleSessionRailButton = element("toggle-session-rail-button");
 const toggleMemberPanelButton = element("mobile-members-button");
 const sessionContextDetails = element("session-context-details");
+const sessionToolbar = mountSessionToolbar({ document });
 const compactWorkspaceQuery = window.matchMedia("(max-width: 1160px)");
 const acceptInvitationForm = element("accept-invitation-form");
 const createInvitationForm = element("create-invitation-form");
@@ -369,6 +377,23 @@ const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
+const fileWorkspaceHost = element("file-workspace-host");
+const filesUi = mountFileWorkspace({ document, window, api, exampleMode, host: fileWorkspaceHost, membersHost: memberPanel,
+  t: text => localizer.t(text), renderMarkdown,
+  confirm: message => window.confirm(message), prompt: (message, value) => window.prompt(message, value),
+  makeKey: () => createIdempotencyKey("files"),
+  editorFactory: options => import("./file-editor.js").then(module => module.createFileEditor({ ...options, t: text => localizer.t(text) })),
+  diffFactory: options => import("./file-editor.js").then(module => module.createFileDiff(options)),
+  pdfFactory: options => import("./file-pdf.js").then(module => module.createPdfPreview(options)),
+  getContext: () => ({ scope: `${authenticationGeneration}:${state.currentUser?.id}:${state.project?.id}`,
+    userId: state.currentUser?.id, projectId: state.project?.id, sessionId: state.session?.id,
+    members: state.projectMembers, canWrite: ["owner", "participant"].includes(state.project?.role),
+    isMobile: document.documentElement.dataset.mobileWorkspace === "true" }),
+  onOpen: () => showFileWorkspace(), onClose: () => closeFileWorkspace(),
+  onExpand: () => { workspace.dataset.workspaceExpanded = String(workspace.dataset.workspaceExpanded !== "true"); },
+  isExpanded: () => workspace.dataset.workspaceExpanded === "true",
+  onConfigure: provider => { mobileWorkspace.closeMembers(); if (provider === "github") codeSyncUi.openGithub(); else element("project-code-button").click(); },
+});
 const avatarSettings = mountAvatarSettings({ document, api, localizer,
   getUser: () => state.currentUser,
   getRevision: () => state.avatarProfileRevision,
@@ -442,6 +467,13 @@ const codexLauncher = mountCodexLauncher({ document, api, localizer, emailHint: 
     userId: state.currentUser.id, baseUrl: location.origin, projectId: state.project.id,
     model: currentProjectProfile().model, contextWindowTokens: contextBudgetToTokenCeiling(state.settings),
     visibleHistorySync: state.settings.sync.visibleHistorySync,
+  } : null });
+const claudeLauncher = mountCodexLauncher({ document, api, localizer, emailHint: accountEmailHint, harness: "claude-code",
+  context: () => state.currentUser && state.project ? {
+    scope: `${authenticationGeneration}:${state.currentUser.id}:${state.project.id}`,
+    userId: state.currentUser.id, baseUrl: location.origin, projectId: state.project.id,
+    model: element("claude-launcher-model").value.trim(), visibleHistorySync: "never",
+    contextWindowTokens: contextBudgetToTokenCeiling(state.settings),
   } : null });
 const registrationUi = mountRegistration({ document, api, localizer,
   identity: () => authenticationIdentity({ required: activeAuthEntry === "register" }),
@@ -533,6 +565,7 @@ const onboarding = mountOnboarding({
   openSettings: openSettingsDialog,
   prepareScenario: exampleMode ? prepareExampleScenario : undefined,
   exampleApi: exampleMode ? api : undefined,
+  fileWorkspace: exampleMode ? filesUi : undefined,
 });
 for (const button of document.querySelectorAll("[data-onboarding-topic]")) {
   button.addEventListener("click", () => {
@@ -562,6 +595,11 @@ const historySummaryUi = mountHistorySummaries({
 });
 function prepareExampleScenario(item) {
   if (!exampleMode || !state.project || !state.session) return;
+  if (item.fileSelection) {
+    // Tutorial-only fixture preparation, never a real repository mutation.
+    const repository = api.codeRepositories.get(state.project.id)?.repository;
+    if (repository) repository.enabled = true;
+  }
   if (item.view === "code-github" && !api.githubConnections.has(state.project.id)) {
     api.githubConnections.set(state.project.id, { repository: "example-club/signup-page",
       base_branch: "main", enabled: true, revision: "example-revision" });
@@ -604,6 +642,7 @@ const messageDeletion = mountMessageDeletion({ document, api, localizer, announc
 const messageActions = mountMessageActions({ document, api, localizer, announce, selectSession,
   deletionAction: messageDeletion.action,
   getContext: () => ({ projectId: state.project?.id, sessionId: state.session?.id,
+    identityScope: `${authenticationGeneration}:${projectNavigationGeneration}:${state.currentUser?.id}:${state.project?.id}`,
     userId: state.currentUser?.id, members: state.session?.members ?? [], events: state.sync.events,
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed }),
   revealEvent: (id, sequence) => {
@@ -618,6 +657,7 @@ const messageActions = mountMessageActions({ document, api, localizer, announce,
       if (entry) progressSectionState.set(entry.key, true);
     }
     historySummaryUi.revealOriginal(id); renderTimeline();
+    return Boolean(element(`message-${id}`));
   },
 });
 let connectDshReturnFocus = null;
@@ -822,6 +862,7 @@ for (const id of ["claim-display-name", "claim-device-name"]) {
 }
 
 element("logout-button").addEventListener("click", async () => {
+  if (!await filesUi.confirmLeave()) return;
   authenticationGeneration += 1;
   projectSelectionGuard.invalidate();
   selectedSessionGeneration += 1;
@@ -1048,6 +1089,7 @@ leaveProjectForm.addEventListener("submit", async (event) => {
     }
     codeSyncUi.close();
     codexLauncher.clear();
+    claudeLauncher.clear();
     sync.disconnect();
     stopMemberRefresh();
     stopSnapshotPolling();
@@ -1077,6 +1119,12 @@ deleteCloudDialog.addEventListener("close", () => {
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
 });
 connectCodexButton.addEventListener("click", openConnectCodexDialog);
+connectClaudeButton.addEventListener("click", openConnectClaudeDialog);
+element("close-connect-claude-button").addEventListener("click", () => connectClaudeDialog.close());
+element("done-connect-claude-button").addEventListener("click", () => connectClaudeDialog.close());
+connectClaudeDialog.addEventListener("close", () => { claudeLauncher.close(); agentPackageDownloads.close("claude"); connectClaudeButton.focus(); });
+element("claude-launcher-model").addEventListener("input", () => claudeLauncher.close());
+element("claude-launcher-model").addEventListener("change", () => { void claudeLauncher.open(); });
 element("close-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 element("done-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 connectCodexDialog.addEventListener("close", () => {
@@ -1268,6 +1316,7 @@ deleteCloudForm.addEventListener("submit", async (event) => {
       await api.deleteProject(target.id);
       if (!isCurrent()) return;
       codexLauncher.clear();
+      claudeLauncher.clear();
       sync.disconnect();
       stopMemberRefresh();
       stopSnapshotPolling();
@@ -1385,6 +1434,8 @@ sessionContextDetails.addEventListener("toggle", updateSessionContextDisclosure)
 bindSessionContextPanel(document);
 const handleWorkspaceBreakpointChange = () => {
   memberPanel.classList.remove("member-panel-open");
+  fileWorkspaceHost.classList.remove("file-workspace-open");
+  void filesUi.updateContext();
   updateSidebarControls();
 };
 if (typeof compactWorkspaceQuery.addEventListener === "function") {
@@ -1396,11 +1447,39 @@ if (typeof compactWorkspaceQuery.addEventListener === "function") {
 element("close-members-button").addEventListener("click", closeMembersPanel);
 
 function closeMembersPanel() {
-  if (mobileWorkspace.closeMembers()) return;
-  memberPanel.classList.remove("member-panel-open");
-  updateSidebarControls();
+  filesUi.close();
   toggleMemberPanelButton.focus();
 }
+
+function showFileWorkspace() {
+  if (mobileWorkspace.isActive()) {
+    if (!element("mobile-members-dialog").open) mobileWorkspace.toggleMembers();
+  } else if (compactWorkspaceQuery.matches) fileWorkspaceHost.classList.add("file-workspace-open");
+  else workspace.dataset.rightPanelCollapsed = "false";
+  updateSidebarControls();
+}
+
+function closeFileWorkspace() {
+  const restoreFocus = fileWorkspaceHost.contains(document.activeElement);
+  mobileWorkspace.closeMembers();
+  fileWorkspaceHost.classList.remove("file-workspace-open");
+  workspace.dataset.rightPanelCollapsed = "true";
+  workspace.dataset.workspaceExpanded = "false";
+  updateSidebarControls();
+  if (restoreFocus && !workspace.hidden) element("open-files-button").focus();
+}
+function isFileWorkspaceOpen() {
+  if (mobileWorkspace.isActive()) return element("mobile-members-dialog").open;
+  return compactWorkspaceQuery.matches ? fileWorkspaceHost.classList.contains("file-workspace-open")
+    : workspace.dataset.rightPanelCollapsed !== "true";
+}
+element("open-files-button").addEventListener("click", () => {
+  if (isFileWorkspaceOpen()) filesUi.close();
+  else void filesUi.show();
+});
+element("mobile-members-dialog").addEventListener("close", () => {
+  if (!element("mobile-members-dialog").open) filesUi.close();
+});
 
 function toggleSessionRail() {
   if (mobileWorkspace.toggleRail()) return;
@@ -1409,23 +1488,18 @@ function toggleSessionRail() {
 }
 
 function toggleMemberPanel() {
-  if (mobileWorkspace.toggleMembers()) return;
-  if (compactWorkspaceQuery.matches) {
-    memberPanel.classList.toggle("member-panel-open");
-  } else {
-    workspace.dataset.rightPanelCollapsed = String(workspace.dataset.rightPanelCollapsed !== "true");
-    memberPanel.classList.remove("member-panel-open");
-  }
-  updateSidebarControls();
+  void filesUi.open("members");
 }
 
 function updateSidebarControls() {
   const sessionRailExpanded = workspace.dataset.leftRailCollapsed !== "true";
   const memberPanelExpanded = compactWorkspaceQuery.matches
-    ? memberPanel.classList.contains("member-panel-open")
+    ? fileWorkspaceHost.classList.contains("file-workspace-open")
     : workspace.dataset.rightPanelCollapsed !== "true";
   updateIconDisclosure(toggleSessionRailButton, sessionRailExpanded, "Collapse session sidebar", "Expand session sidebar");
-  updateIconDisclosure(toggleMemberPanelButton, memberPanelExpanded, "Collapse member sidebar", "Expand member sidebar");
+  updateIconDisclosure(toggleMemberPanelButton, memberPanelExpanded, "Open members", "Open members");
+  toggleMemberPanelButton.setAttribute("aria-controls", "file-workspace-host");
+  updateIconDisclosure(element("open-files-button"), isFileWorkspaceOpen(), "Collapse file sidebar", "Show file sidebar");
   mobileWorkspace.update();
   agentRequestControl.update();
 }
@@ -1475,11 +1549,15 @@ async function restoreBrowserSession() {
 }
 
 function resetWorkspaceToAuth() {
+  sessionToolbar.reset();
+  filesUi.clear();
   personalCloudApi.clear();
   invitationLink.reset();
   mobileWorkspace.close();
   codexDeviceAuthorization.clear();
   codexLauncher.clear();
+  claudeLauncher.clear();
+  if (connectClaudeDialog.open) connectClaudeDialog.close();
   accountEmailHint.clear(state.currentUser?.id);
   onboarding.cancel();
   sessionContextDetails.open = false;
@@ -1632,7 +1710,13 @@ async function enterWorkspace(preferredProjectId) {
 
 async function selectProject(projectId) {
   if (!state.currentUser) return;
+  if (state.project?.id !== projectId && !await filesUi.confirmLeave()) { renderProjectSelect(); return; }
+  projectNavigationGeneration += 1;
+  sessionToolbar.reset();
+  if (state.project?.id !== projectId) filesUi.clear();
   codexLauncher.clear();
+  claudeLauncher.clear();
+  if (connectClaudeDialog.open) connectClaudeDialog.close();
   codexDeviceAuthorization.clear();
   mobileWorkspace.close();
   onboarding.cancel();
@@ -1710,6 +1794,8 @@ async function selectProject(projectId) {
 
 async function selectSession(sessionId) {
   if (!state.currentUser || !state.project) return;
+  if (state.session?.id !== sessionId && !await filesUi.confirmLeave()) return;
+  sessionToolbar.reset();
   mobileWorkspace.close();
   onboarding.cancel();
   selectionRetry = null;
@@ -1817,9 +1903,11 @@ function renderProjectAgentButtons(settings = state.settings) {
   const enabled = state.project ? new Set(projectEnabledHarnesses(settings, state.project.id)) : new Set();
   connectCodexButton.hidden = !mobileWorkspace.canConnectLocally() || !enabled.has("codex");
   connectDshButton.hidden = !mobileWorkspace.canConnectLocally() || !enabled.has(DSH_HARNESS);
+  connectClaudeButton.hidden = !mobileWorkspace.canConnectLocally() || !enabled.has("claude-code");
 }
 
 function renderProjectPermissions() {
+  void filesUi.updateContext();
   codeSyncUi.updateContext();
   cloudGithubUi.updateContext();
   const mayCreate = state.project?.role === "owner" || state.project?.role === "participant";
@@ -1878,11 +1966,11 @@ async function refreshDshRuntimes({ sessionId = state.session?.id, generation = 
     state.executionRuntimes = runtimesResult.value;
     state.devices = devicesResult.status === "fulfilled" ? devicesResult.value : [];
     sharingSourceRuntimes = sharingSourcesResult.status === "fulfilled" ? sharingSourcesResult.value : [];
-    if (state.project && projectAgentHarness(state.settings, state.project.id) === DSH_HARNESS) {
-      const storedProfile = projectDshProfile(state.settings, state.project.id);
-      const resolved = resolveDshRuntime(state.executionRuntimes, state.devices, storedProfile);
+    if (state.project && isAlternativeNative(projectAgentHarness(state.settings, state.project.id))) {
+      const storedProfile = nativeProjectProfile(state.settings, state.project.id);
+      const resolved = currentDshResolution();
       if (resolved.runtime) {
-        const selected = dshExecutionSelection(resolved.runtime, storedProfile);
+        const selected = nativeExecutionSelection(resolved.runtime, storedProfile);
         const normalizedProfile = dshStoredProjectProfile(resolved.runtime, selected);
         const profileChanged = storedProfile === null
           || storedProfile.runtimeId !== normalizedProfile.runtimeId
@@ -1891,7 +1979,7 @@ async function refreshDshRuntimes({ sessionId = state.session?.id, generation = 
           || storedProfile.model !== normalizedProfile.model
           || (storedProfile.effort ?? "") !== (normalizedProfile.effort ?? "");
         if (profileChanged) {
-          state.settings = settingsStore.set(withProjectDshProfile(
+          state.settings = settingsStore.set(withNativeProjectProfile(
             state.settings,
             state.project.id,
             normalizedProfile,
@@ -1920,9 +2008,21 @@ async function refreshDshRuntimes({ sessionId = state.session?.id, generation = 
 }
 
 function currentDshResolution(settings = state.settings) {
-  const profile = state.project ? projectDshProfile(settings, state.project.id) : null;
-  return resolveDshRuntime(state.executionRuntimes, state.devices, profile);
+  const harness = currentProjectHarness(settings) === "claude-code" ? "claude-code" : DSH_HARNESS;
+  const profile = state.project ? nativeProjectProfile(settings, state.project.id, harness) : null;
+  return resolveDshRuntime(state.executionRuntimes, state.devices, profile, harness);
 }
+
+function isAlternativeNative(harness) { return [DSH_HARNESS, "claude-code"].includes(harness); }
+function nativeProjectProfile(settings, projectId, harness = currentProjectHarness(settings)) {
+  return harness === "claude-code" ? projectClaudeProfile(settings, projectId) : projectDshProfile(settings, projectId);
+}
+function withNativeProjectProfile(settings, projectId, profile) {
+  return currentProjectHarness(settings) === "claude-code"
+    ? withProjectClaudeProfile(settings, projectId, profile) : withProjectDshProfile(settings, projectId, profile);
+}
+function nativeExecutionSelection(runtime, profile) { return dshExecutionSelection(runtime, profile, runtime?.harness); }
+function nativeExecutionProfile(runtime, profile) { return dshExecutionProfile(runtime, profile, runtime?.harness); }
 
 function currentCodexResolution() {
   return resolveCodexRuntime(state.executionRuntimes);
@@ -2022,6 +2122,7 @@ function renderSessionHeader() {
   element("delete-session-button").hidden = !mayDelete;
   element("session-subtitle").textContent = `${session.description} · You are ${membership?.role ?? "viewer"}`;
   element("session-access-note").hidden = session.mode !== "solo";
+  sessionToolbar.refresh();
   renderWorkspaceContext();
 }
 
@@ -2534,6 +2635,7 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
       pendingHistoryTarget = null;
     }
   }
+  messageActions.readVisible();
 }
 
 /**
@@ -2562,6 +2664,9 @@ function returnToNewestEvent() {
 }
 
 timelineRegion.addEventListener("scroll", renderTimelineBottomControl, { passive: true });
+timelineRegion.addEventListener("scroll", () => messageActions.readVisible(), { passive: true });
+document.addEventListener("visibilitychange", () => messageActions.readVisible());
+document.addEventListener("close", () => queueMicrotask(() => messageActions.readVisible()), true);
 timelineBottomButton.addEventListener("click", returnToNewestEvent);
 
 function renderProgressDisclosure(progressEvents, live, terminalResponse) {
@@ -2870,14 +2975,16 @@ function visibleHistoryImportFailureMessage(message) {
 }
 
 function onlineCodexLocalRuntimes() {
+  const enabled = currentProjectEnabledHarnesses();
   return state.executionRuntimes.filter((runtime) =>
-    isExecutionRuntime(runtime) && String(runtime.harness).toLowerCase() === "codex",
+    isExecutionRuntime(runtime) && ["codex", "claude-code"].includes(String(runtime.harness).toLowerCase())
+    && enabled.includes(String(runtime.harness).toLowerCase()),
   );
 }
 
 function codexLocalRuntimeLabel(runtime) {
   const deviceName = state.devices.find((device) => device.id === runtime.deviceId)?.name?.trim();
-  const base = deviceName || localizer.t("Codex device");
+  const base = deviceName || (runtime.harness === "claude-code" ? "Claude Code" : localizer.t("Codex device"));
   return runtime.model ? `${base} · ${runtime.model}` : base;
 }
 
@@ -2890,7 +2997,7 @@ function codexLocalSyncRequests(runtimeId) {
 function renderCodexLocalSyncControls() {
   const available = Boolean(state.session)
     && !composer.hidden
-    && currentProjectEnabledHarnesses().includes("codex");
+    && currentProjectEnabledHarnesses().some(harness => ["codex", "claude-code"].includes(harness));
   codexLocalSyncControls.hidden = !available;
   if (!available) return;
 
@@ -2920,7 +3027,7 @@ function renderCodexLocalSyncControls() {
     codexAutoUploadToggle.disabled = true;
     uploadLocalTurnsButton.disabled = true;
     codexLocalSyncStatus.textContent = localizer.t(selectedCodexLocalRuntimeId ? "Selected device is offline"
-      : runtimes.length ? "Choose a local Agent device" : "No online Codex device is available.");
+      : runtimes.length ? "Choose a local Agent device" : "No online Agent device is available.");
     return;
   }
 
@@ -3171,7 +3278,7 @@ function renderComposerPermissions() {
   const common = { session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase };
   const chat = canAppend({ ...common, kind: "human_chat" });
   const harness = currentProjectHarness();
-  const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
+  const resolution = isAlternativeNative(harness) ? currentDshResolution() : currentCodexResolution();
   const cloud = harness === "cloud";
   const shared = harness === "shared";
   const team = harness === "team";
@@ -3216,14 +3323,14 @@ function renderComposerPermissions() {
   element("cloud-agent-include-code").closest("label").hidden = element("cloud-agent-source").value === "github";
   messageInput.disabled = !chat.allowed && !agentAllowed;
   element("composer-permission").textContent = localizer.t(chat.allowed ? contextNotice : chat.reason);
-  const dshSelection = harness === DSH_HARNESS && resolution.runtime
-    ? dshExecutionSelection(
+  const dshSelection = isAlternativeNative(harness) && resolution.runtime
+    ? nativeExecutionSelection(
       resolution.runtime,
-      state.project ? projectDshProfile(state.settings, state.project.id) : null,
+      state.project ? nativeProjectProfile(state.settings, state.project.id) : null,
     )
     : null;
   element("agent-target-label").textContent = agentAllowed
-    ? team ? selectedTeam.draft.name : shared ? sharedChoice.label : cloud ? cloudStatusText(cloudProfile) : harness === DSH_HARNESS
+    ? team ? selectedTeam.draft.name : shared ? sharedChoice.label : cloud ? cloudStatusText(cloudProfile) : isAlternativeNative(harness)
       ? `${resolution.runtime.deviceName} · ${dshSelection.provider} · ${dshSelection.model}${dshSelection.reasoningEffort ? ` · ${dshSelection.reasoningEffort}` : ""}`
       : `${resolution.runtime.harness} · ${resolution.runtime.provider} · ${agentModelSelect.value}`
     : agentReason;
@@ -3251,14 +3358,14 @@ function historySummaryExecutionProfile() {
         ...(profile.api_config_revision === undefined ? {} : { apiConfigRevision: profile.api_config_revision }) } : null;
   }
   const harness = currentProjectHarness();
-  const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
+  const resolution = isAlternativeNative(harness) ? currentDshResolution() : currentCodexResolution();
   const runtime = resolution.runtime;
   const advertised = state.executionRuntimes.find((candidate) => candidate.id === runtime?.id);
   if (!runtime || advertised?.purpose === "snapshot_connector"
     || (advertised?.userId && advertised.userId !== state.currentUser?.id)) return null;
   try {
-    return harness === DSH_HARNESS
-      ? dshExecutionProfile(runtime, dshExecutionSelection(runtime, projectDshProfile(state.settings, state.project.id)))
+    return isAlternativeNative(harness)
+      ? nativeExecutionProfile(runtime, nativeExecutionSelection(runtime, nativeProjectProfile(state.settings, state.project.id)))
       : codexExecutionProfile(runtime, { model: agentModelSelect.value, reasoningEffort: agentEffortSelect.value });
   } catch { return null; }
 }
@@ -3359,12 +3466,12 @@ async function sendMessage(kind) {
     }
     else {
       const harness = currentProjectHarness();
-      const executionProfile = harness === DSH_HARNESS
-        ? dshExecutionProfile(
+      const executionProfile = isAlternativeNative(harness)
+        ? nativeExecutionProfile(
           currentDshResolution().runtime,
-          dshExecutionSelection(
+          nativeExecutionSelection(
             currentDshResolution().runtime,
-            projectDshProfile(state.settings, state.project.id),
+            nativeProjectProfile(state.settings, state.project.id),
           ),
         )
         : codexExecutionProfile(currentCodexResolution().runtime, {
@@ -3650,6 +3757,21 @@ function openConnectCodexDialog() {
   requestAnimationFrame(() => element("close-connect-codex-button").focus());
 }
 
+function openConnectClaudeDialog() {
+  if (!state.project || !mobileWorkspace.canConnectLocally()) return;
+  claudeLauncher.clear();
+  const available = canOpenCodexLauncher({ origin: location.origin,
+    platform: navigator.userAgentData?.platform ?? navigator.platform, maxTouchPoints: navigator.maxTouchPoints });
+  element("claude-launcher-option").hidden = !available;
+  element("claude-launcher-model").value = projectClaudeProfile(state.settings, state.project.id)?.model ?? "";
+  element("claude-launcher-environment").textContent = localizer.t(location.origin === "https://test.gatherthread.cn"
+    ? "Test environment · separate account" : "Production environment");
+  connectClaudeDialog.showModal();
+  void agentPackageDownloads.open("claude");
+  if (available) void claudeLauncher.open();
+  requestAnimationFrame(() => element("claude-launcher-model").focus());
+}
+
 async function copyCodexCommand(platform) {
   const commandNode = element(`connect-codex-${platform}-command`);
   const status = element(`copy-${platform}-command-status`);
@@ -3873,8 +3995,7 @@ function notifyConnectionLost() {
 }
 
 function closeMembersPanelWithoutFocus() {
-  memberPanel.classList.remove("member-panel-open");
-  updateSidebarControls();
+  filesUi.close();
 }
 
 function applyVisualSettings(settings) {
@@ -3907,6 +4028,7 @@ function applyVisualSettings(settings) {
   interfaceMode.refresh();
   mobileSettings.refresh();
   if (localeChanged) { sharedAgentsUi.refreshLanguage(); teamsUi.refreshLanguage(); }
+  if (localeChanged) filesUi.refreshLanguage();
   if (localeChanged) accountDevices.refreshLanguage();
   if (localeChanged) personalCloudApi.refreshLanguage();
   if (localeChanged) cloudCodeConsent.refreshLanguage();
@@ -4028,11 +4150,17 @@ function renderDshRuntimeOptions(select, settings = state.settings) {
   const resolution = currentDshResolution(settings);
   select.replaceChildren();
   if (resolution.choices.length === 0) {
-    select.setAttribute("title", localizer.t("No connected DSH runtime"));
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = localizer.t("No connected Agent runtime");
+    option.disabled = true;
+    option.selected = true;
+    select.append(option);
+    select.setAttribute("title", localizer.t("No connected Agent runtime"));
     select.disabled = true;
     return;
   }
-  select.setAttribute("title", localizer.t(resolution.runtime ? "Choose a DSH runtime" : resolution.reason));
+  select.setAttribute("title", localizer.t(resolution.runtime ? "Choose an Agent runtime" : resolution.reason));
   for (const runtime of resolution.choices) {
     const option = document.createElement("option");
     option.value = runtime.id;
@@ -4062,7 +4190,7 @@ function dshModelOptionValue(provider, model) {
 function renderDshExecutionControls(runtime, storedProfile) {
   const profiles = runtime?.executionProfiles ?? [];
   const dynamic = profiles.length > 0;
-  const selection = runtime ? dshExecutionSelection(runtime, storedProfile) : null;
+  const selection = runtime ? nativeExecutionSelection(runtime, storedProfile) : null;
   const modelLabel = element("agent-dsh-model-label");
   const effortLabel = element("agent-dsh-effort-label");
   const hasReasoning = dynamic && selection.reasoningEfforts.length > 0;
@@ -4109,7 +4237,7 @@ function renderAgentProfileControls() {
   for (const enabledHarness of enabledHarnesses) {
     const option = document.createElement("option");
     option.value = enabledHarness;
-    option.textContent = enabledHarness === "cloud" ? localizer.t(CLOUD_AGENT_ENTRY_ENABLED ? "Cloud Agent" : "Cloud Agent · coming later") : enabledHarness === DSH_HARNESS ? "DeepSeek Harness" : "Codex";
+    option.textContent = enabledHarness === "cloud" ? localizer.t(CLOUD_AGENT_ENTRY_ENABLED ? "Cloud Agent" : "Cloud Agent · coming later") : enabledHarness === DSH_HARNESS ? "DeepSeek Harness" : enabledHarness === "claude-code" ? "Claude Code" : "Codex";
     option.disabled = enabledHarness === "cloud" && !CLOUD_AGENT_ENTRY_ENABLED;
     option.selected = enabledHarness === harness;
     agentHarnessSelect.append(option);
@@ -4136,7 +4264,7 @@ function renderAgentProfileControls() {
   const dshResolution = currentDshResolution();
   renderDshExecutionControls(
     dshResolution.runtime,
-    state.project ? projectDshProfile(state.settings, state.project.id) : null,
+    state.project ? nativeProjectProfile(state.settings, state.project.id) : null,
   );
   const disabled = !state.project;
   agentHarnessSelect.disabled = disabled;
@@ -4147,14 +4275,14 @@ function renderAgentProfileControls() {
   agentEffortSelect.hidden = !hasEffortChoice;
   agentEffortSelect.disabled = disabled || !hasEffortChoice;
   element("codex-agent-profile-fields").hidden = harness !== "codex";
-  element("dsh-agent-profile-fields").hidden = harness !== DSH_HARNESS;
+  element("dsh-agent-profile-fields").hidden = !isAlternativeNative(harness);
   element("cloud-agent-profile-fields").hidden = harness !== "cloud" || !CLOUD_AGENT_ENTRY_ENABLED;
   element("shared-agent-profile-fields").hidden = harness !== "shared";
   element("team-agent-profile-fields").hidden = harness !== "team";
   element("team-agent-recover").textContent = teamsUi.t("Check the previous action");
   renderTeamProfileLabels();
   renderCloudModelOptions(agentCloudModelSelect, state.project ? projectCloudProfile(state.settings, state.project.id) : null);
-  if (harness !== DSH_HARNESS) element("agent-request-profile").dataset.layout = "codex";
+  if (!isAlternativeNative(harness)) element("agent-request-profile").dataset.layout = "codex";
 }
 
 function renderTeamProfileLabels() {
@@ -4203,11 +4331,11 @@ function updateComposerHarness() {
     return;
   }
   state.settings = settingsStore.set(withProjectAgentHarness(state.settings, state.project.id, agentHarnessSelect.value));
-  if (agentHarnessSelect.value === DSH_HARNESS) {
+  if (isAlternativeNative(agentHarnessSelect.value)) {
     const resolution = currentDshResolution();
     if (resolution.runtime) {
-      const selected = dshExecutionSelection(resolution.runtime, projectDshProfile(state.settings, state.project.id));
-      state.settings = settingsStore.set(withProjectDshProfile(
+      const selected = nativeExecutionSelection(resolution.runtime, nativeProjectProfile(state.settings, state.project.id));
+      state.settings = settingsStore.set(withNativeProjectProfile(
         state.settings,
         state.project.id,
         dshStoredProjectProfile(resolution.runtime, selected),
@@ -4220,14 +4348,16 @@ function updateComposerHarness() {
 
 function updateComposerDshRuntime() {
   if (!state.project || !agentDshRuntimeSelect.value) return;
-  const selected = dshRuntimeChoices(state.executionRuntimes, state.devices)
+  const selected = dshRuntimeChoices(state.executionRuntimes, state.devices, currentProjectHarness())
     .find((runtime) => runtime.id === agentDshRuntimeSelect.value && runtime.status === "online");
   if (!selected) {
     renderComposerPermissions();
     return;
   }
-  const executionSelection = dshExecutionSelection(selected, projectDshProfile(state.settings, state.project.id));
-  state.settings = settingsStore.set(withProjectDshProfile(
+  // Choosing a device is explicit consent to its currently advertised Claude
+  // profile. Passive refresh and unrelated settings saves keep the old pin.
+  const executionSelection = nativeExecutionSelection(selected, selected.harness === "claude-code" ? null : nativeProjectProfile(state.settings, state.project.id));
+  state.settings = settingsStore.set(withNativeProjectProfile(
     state.settings,
     state.project.id,
     dshStoredProjectProfile(selected, executionSelection),
@@ -4242,13 +4372,13 @@ function updateComposerDshExecutionProfile(changed) {
   if (!resolution.runtime?.executionProfiles?.length) return;
   const option = agentDshModelSelect.selectedOptions[0];
   if (!option) return;
-  const previous = projectDshProfile(state.settings, state.project.id);
-  const selected = dshExecutionSelection(resolution.runtime, {
+  const previous = nativeProjectProfile(state.settings, state.project.id);
+  const selected = nativeExecutionSelection(resolution.runtime, {
     provider: option.dataset.provider,
     model: option.dataset.model,
     effort: changed === "model" ? previous?.effort : agentDshEffortSelect.value,
   });
-  state.settings = settingsStore.set(withProjectDshProfile(
+  state.settings = settingsStore.set(withNativeProjectProfile(
     state.settings,
     state.project.id,
     dshStoredProjectProfile(resolution.runtime, selected),
@@ -4260,11 +4390,13 @@ function settingsEnabledHarnesses() {
   return [
     ["settings-enabled-codex", "codex"],
     ["settings-enabled-dsh", DSH_HARNESS],
+    ["settings-enabled-claude", "claude-code"],
     ["settings-enabled-cloud", "cloud"],
   ].filter(([id, harness]) => element(id).checked && (harness !== "cloud" || CLOUD_AGENT_ENTRY_ENABLED)).map(([, harness]) => harness);
 }
 
 function settingsAgentSummary(harness) {
+  if (harness === "claude-code") return localizer.t("Claude Code handles requests on your connected computer. Your model and native permissions stay local.");
   if (harness === "cloud" && !CLOUD_AGENT_ENTRY_ENABLED) return localizer.t("Cloud Agent · coming later");
   if (harness === "cloud") return localizer.t("Cloud Agent runs on this server. Choose a model without connecting a local Agent.");
   return harness === DSH_HARNESS
@@ -4273,7 +4405,7 @@ function settingsAgentSummary(harness) {
 }
 
 function syncSettingsAgentControls({ changedCheckbox } = {}) {
-  const controls = [element("settings-enabled-codex"), element("settings-enabled-dsh"), element("settings-enabled-cloud")];
+  const controls = [element("settings-enabled-codex"), element("settings-enabled-dsh"), element("settings-enabled-claude"), element("settings-enabled-cloud")];
   let enabled = settingsEnabledHarnesses();
   if (enabled.length === 0) {
     (changedCheckbox && (changedCheckbox.value !== "cloud" || CLOUD_AGENT_ENTRY_ENABLED)
@@ -4284,15 +4416,24 @@ function syncSettingsAgentControls({ changedCheckbox } = {}) {
     || (control.checked && enabled.includes(control.value) && enabled.length === 1);
   const harnessSelect = element("settings-agent-harness");
   for (const option of harnessSelect.options) {
-    if (["codex", DSH_HARNESS, "cloud"].includes(option.value)) option.disabled = !enabled.includes(option.value) || (option.value === "cloud" && !CLOUD_AGENT_ENTRY_ENABLED);
+    if (["codex", DSH_HARNESS, "claude-code", "cloud"].includes(option.value)) option.disabled = !enabled.includes(option.value) || (option.value === "cloud" && !CLOUD_AGENT_ENTRY_ENABLED);
   }
   if (!enabled.includes(harnessSelect.value)) harnessSelect.value = enabled[0];
-  const dsh = harnessSelect.value === DSH_HARNESS;
+  const dsh = isAlternativeNative(harnessSelect.value);
   element("settings-codex-agent-fields").hidden = harnessSelect.value !== "codex";
   element("settings-dsh-agent-fields").hidden = !dsh;
+  renderNativeSettingsRuntimeOptions(harnessSelect.value);
   element("settings-cloud-agent-fields").hidden = !enabled.includes("cloud") || !CLOUD_AGENT_ENTRY_ENABLED;
   renderCloudStatus();
   element("settings-agent-summary").textContent = settingsAgentSummary(harnessSelect.value);
+}
+
+function renderNativeSettingsRuntimeOptions(harness) {
+  const settings = normalizeSettings(settingsPreview);
+  if (state.project) settings.agents.projectProfiles[state.project.id] = {
+    ...settings.agents.projectProfiles[state.project.id], harness,
+  };
+  renderDshRuntimeOptions(element("settings-dsh-runtime"), settings);
 }
 
 function populateSettingsForm(settings) {
@@ -4324,6 +4465,7 @@ function populateSettingsForm(settings) {
     ? projectEnabledHarnesses(normalized, state.project.id) : normalized.agents.enabledHarnesses);
   element("settings-enabled-codex").checked = enabledHarnesses.has("codex");
   element("settings-enabled-dsh").checked = enabledHarnesses.has(DSH_HARNESS);
+  element("settings-enabled-claude").checked = enabledHarnesses.has("claude-code");
   element("settings-enabled-cloud").checked = enabledHarnesses.has("cloud");
   renderCloudModelOptions(element("settings-cloud-model"), state.project ? projectCloudProfile(normalized, state.project.id) : null);
   element("settings-agent-harness").value = harness;
@@ -4378,16 +4520,31 @@ function readSettingsForm(baseSettings = settingsPreview) {
     next = withProjectCloudProfile(next, state.project.id, element("settings-cloud-model").value);
     next = withProjectEnabledHarnesses(next, state.project.id, settingsEnabledHarnesses());
     next = withProjectAgentHarness(next, state.project.id, element("settings-agent-harness").value);
-    if (element("settings-agent-harness").value === DSH_HARNESS) {
-      const selected = dshRuntimeChoices(state.executionRuntimes, state.devices)
+    if (isAlternativeNative(element("settings-agent-harness").value)) {
+      const selected = dshRuntimeChoices(state.executionRuntimes, state.devices, element("settings-agent-harness").value)
         .find((runtime) => runtime.id === element("settings-dsh-runtime").value && runtime.status === "online");
       if (selected) {
-        const executionSelection = dshExecutionSelection(selected, projectDshProfile(next, state.project.id));
-        next = withProjectDshProfile(next, state.project.id, dshStoredProjectProfile(selected, executionSelection));
+        try {
+          const executionSelection = nativeExecutionSelection(selected, nativeProjectProfile(next, state.project.id));
+          next = withNativeProjectProfile(next, state.project.id, dshStoredProjectProfile(selected, executionSelection));
+        } catch (error) {
+          // A stale picker must not repin a re-registered Claude device just
+          // because the user saved an unrelated preference.
+          if (selected.harness !== "claude-code") throw error;
+        }
       }
     }
   }
   return next;
+}
+
+function selectSettingsNativeRuntime() {
+  if (!state.project || element("settings-agent-harness").value !== "claude-code") return;
+  const selected = dshRuntimeChoices(state.executionRuntimes, state.devices, "claude-code")
+    .find(runtime => runtime.id === element("settings-dsh-runtime").value && runtime.status === "online");
+  if (!selected) return;
+  const next = withProjectAgentHarness(settingsPreview, state.project.id, "claude-code");
+  settingsPreview = withNativeProjectProfile(next, state.project.id, dshStoredProjectProfile(selected, nativeExecutionSelection(selected, null)));
 }
 
 function openSettingsDialog(sectionId) {
@@ -4638,7 +4795,7 @@ function handleNumericPresetSelection(target, { focusCustom = false } = {}) {
 }
 
 function handleSettingsControlInput(event) {
-  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud", "settings-agent-harness"].includes(event.target.id)) return;
+  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-claude", "settings-enabled-cloud", "settings-agent-harness"].includes(event.target.id)) return;
   if (handleNumericPresetSelection(event.target)) return;
   if (event.target.classList?.contains("digits-only-input")) {
     const sanitized = digitsOnly(event.target.value);
@@ -4653,14 +4810,15 @@ function handleSettingsControlInput(event) {
 }
 
 function handleSettingsControlChange(event) {
+  if (event.target.id === "settings-dsh-runtime") selectSettingsNativeRuntime();
   if (event.target.id === "settings-default-model") {
     updateEffortControl(event.target, element("settings-default-effort"), element("settings-default-effort").value, settingsPreview);
   }
-  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud"].includes(event.target.id)) {
+  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-claude", "settings-enabled-cloud"].includes(event.target.id)) {
     syncSettingsAgentControls({ changedCheckbox: event.target });
   }
   if (event.target.id === "settings-agent-harness") {
-    const selectedCheckbox = event.target.value === "cloud" ? element("settings-enabled-cloud") : event.target.value === DSH_HARNESS
+    const selectedCheckbox = event.target.value === "claude-code" ? element("settings-enabled-claude") : event.target.value === "cloud" ? element("settings-enabled-cloud") : event.target.value === DSH_HARNESS
       ? element("settings-enabled-dsh")
       : element("settings-enabled-codex");
     selectedCheckbox.checked = true;
@@ -4838,6 +4996,8 @@ function renderContextDiagnostic(settings) {
   diagnostic.dataset.state = "valid";
   const connectorGuidance = enabledHarnesses.map((harness) => harness === DSH_HARNESS
     ? "DeepSeek Harness: automatic compaction follows its native model and plugin settings, not this browser value. Oversized first imports may still exceed native limits."
+    : harness === "claude-code" ? localizer.t("Claude Code: each Web request uses current shared context in a separate execution. Native conversations keep their own context settings.")
+    : harness === "cloud" ? localizer.t("Cloud Agent uses the server's execution limits.")
     : `Codex: use the native model window first; fallback ${formatBytes(result.configuredBytes)} (about ${new Intl.NumberFormat().format(approximateTokens)} tokens). Reconnect Codex after changing the fallback. Codex Desktop Hooks retain a separate 7 KiB transfer capsule.`).join(" ");
   diagnostic.textContent = `Native context management. ${connectorGuidance}`;
 }
@@ -4854,8 +5014,8 @@ function syncPreset(selectId, inputId, values) {
 
 function syncAllNumericPresets() {
   syncPreset("settings-text-scale-preset", "settings-text-scale", [90, 100, 110, 125]);
-  syncPreset("settings-left-width-preset", "settings-left-width", [220, 260, 340]);
-  syncPreset("settings-right-width-preset", "settings-right-width", [260, 290, 320, 380]);
+  syncPreset("settings-left-width-preset", "settings-left-width", [220, 260, 300]);
+  syncPreset("settings-right-width-preset", "settings-right-width", [320, 380, 640, 900]);
   syncPreset("settings-composer-height-preset", "settings-composer-height", [220, 280, 380]);
   const factor = element("settings-context-unit").value === "MiB" ? 1024 * 1024 : 1024;
   const bytes = Number(element("settings-context-budget").value) * factor;
@@ -4865,7 +5025,7 @@ function syncAllNumericPresets() {
 
 function installLayoutResizer(resizer, side) {
   const minimum = side === "left" ? 210 : 260;
-  const maximum = side === "left" ? 420 : 480;
+  const maximum = side === "left" ? 420 : 900;
   const settingKey = side === "left" ? "leftRailPixels" : "rightPanelPixels";
   const inputId = side === "left" ? "settings-left-width" : "settings-right-width";
   const applyWidth = (pixels) => {

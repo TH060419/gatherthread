@@ -61,4 +61,7 @@ Current account guidance (2026-10-08): `main` uses verified-email registration a
 | [0053](0053-persistent-project-cloud-code-choice.md) | Remember the project's Cloud Agent code choice | accepted implementation decision | 2026-10-13 |
 | [0056](0056-project-scoped-native-agent-sharing.md) | Project-scoped native Agent sharing | proposed / local implementation preview | 2026-10-15 |
 | [0057](0057-explicit-browser-interface-and-mobile-navigation.md) | Explicit browser interface and mobile navigation | proposed / local implementation | 2026-10-18 |
-| [0058](0058-account-private-saved-agent-teams.md) | Account-private saved Agent Teams and independent modules | proposed / local implementation preview | 2026-10-16 |
+| [0058](0058-dsh-desktop-profile-and-version-gated-plugin-layer.md) | Gate the DSH plugin layer by release and serve desktop from the same package | proposed / local implementation | 2026-10-18 |
+| [0059](0059-right-file-workspace.md) | Right file workspace with provider-scoped personal-branch editing | proposed / local implementation | 2026-10-18 |
+| [0060](0060-claude-code-plugin-and-local-connector.md) | Claude Code native plugin, scoped connector and compatible Launcher | implementation preview | 2026-10-22 |
+| [0061](0061-account-private-saved-agent-teams.md) | Account-private saved Agent Teams and independent modules | proposed / local implementation preview | 2026-10-16 |

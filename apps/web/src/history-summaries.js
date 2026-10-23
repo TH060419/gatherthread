@@ -1,4 +1,4 @@
-import { eventContent, isFailedAgentResponse } from "./domain.js?v=20261012-content-1";
+import { eventContent, isFailedAgentResponse } from "./domain.js?v=20261018-tabs-2";
 import {
   activeHistorySummaries, createHistorySummarySourceResolver, historySummaryMarker, historySummaryText,
   historySummaryVersions as validatedHistorySummaryVersions, isHistorySummaryRequest, selectHistorySummarySources,

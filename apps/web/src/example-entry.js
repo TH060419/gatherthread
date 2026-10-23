@@ -26,4 +26,4 @@ document.addEventListener('click', (event) => {
   event.preventDefault();
   if (button.form.reportValidity()) button.form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: button }));
 }, true);
-import('./bootstrap.js?v=20261012-content-1');
+import('./bootstrap.js?v=20261018-tabs-2');

@@ -1,7 +1,7 @@
 {
   "name": "@gatherthread/dsh-host",
-  "version": "0.1.0-beta.2",
-  "description": "Opt-in GatherThread integration for the DeepSeek Harness Web profile",
+  "version": "0.1.0-beta.3",
+  "description": "Opt-in GatherThread integration for the DeepSeek Harness Web and Desktop profiles",
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public",
@@ -13,7 +13,16 @@
     "directory": "packages/dsh-host"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
   },
   "type": "module",
   "main": "dist/bundle/native-plugin.js",
@@ -36,6 +45,9 @@
     },
     "./cordis.patch.yml": {
       "default": "./cordis.patch.yml"
+    },
+    "./cordis.patch.dsh-0.1.yml": {
+      "default": "./cordis.patch.dsh-0.1.yml"
     }
   },
   "dsh": {
@@ -54,6 +66,7 @@
     "LICENSE",
     "client/client.js",
     "cordis.patch.yml",
+    "cordis.patch.dsh-0.1.yml",
     "bundle/manifest.json",
     "dist/bundle/*.js",
     "dist/src/plugin.d.ts",

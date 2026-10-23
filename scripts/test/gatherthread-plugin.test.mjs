@@ -27,7 +27,7 @@ async function json(relativePath) {
 test("GatherThread plugin manifest has valid local components and bilingual brand", async () => {
   const manifest = await json(".codex-plugin/plugin.json");
   assert.equal(manifest.name, "gatherthread");
-  assert.equal(manifest.version, "0.1.0-beta.2");
+  assert.equal(manifest.version, "0.1.0-beta.3");
   assert.equal(manifest.interface.displayName, "共序 / GatherThread");
   assert.equal(manifest.skills, "./skills/");
   assert.equal(manifest.hooks, undefined);
@@ -111,7 +111,7 @@ test("repo marketplace and current install surfaces preserve exact source and lo
   assert.match(rootEnglish, /launcher/i);
   assert.match(rootChinese, /启动器/);
   for (const readme of [rootEnglish, rootChinese]) {
-    assert.match(readme, /0\.1\.0-beta\.2/);
+    assert.match(readme, /0\.1\.0-beta\.3/);
     assert.doesNotMatch(readme, /npm install -g @openai\/codex/);
   }
   for (const guide of [html, english, chinese]) {

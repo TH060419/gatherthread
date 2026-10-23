@@ -132,7 +132,8 @@ async function pageFor(browser, f, identity, locale, width, height, mobile, erro
 }
 
 async function tools(page, mobile) {
-  if (mobile && !await page.locator("#history-summary-select-button").isVisible()) await click(page.locator("#mobile-tools-button"), mobile);
+  if (mobile && !await page.locator("#mobile-tools-dialog[open]").isVisible()) await click(page.locator("#mobile-tools-button"), mobile);
+  if (!await page.locator("#history-summary-menu-panel").isVisible()) await click(page.locator("#history-summary-menu-button"), mobile);
 }
 async function closeTools(page, mobile) {
   if (mobile && await page.locator("#mobile-tools-dialog[open]").isVisible()) await click(page.locator("#mobile-tools-dialog [data-mobile-close]"), mobile);
@@ -187,11 +188,10 @@ try {
       await page.waitForFunction(id => !document.querySelector(`[data-message-delete-id="${id}"]`).disabled, f.own.id);
       await page.unroute(deleteUrl, uncertain);
       assert.equal(running.database.getEvent(f.session.id, f.own.id).deleted, undefined);
-      await tools(page, mobile);
-      await click(page.locator("#mentions-button"), mobile);
-      await page.locator(`#mentions-list [data-mention-event-id="${f.own.id}"]`).waitFor();
-      await click(page.locator("#mentions-close"), mobile);
-      await closeTools(page, mobile);
+      const mentionsBefore = await owner.context.request.get(`${origin}/v1/projects/${f.project.id}/mentions`);
+      assert.equal(mentionsBefore.status(), 200);
+      assert.ok((await mentionsBefore.json()).data.mentions.some(event => event.id === f.own.id),
+        "canonical mention exists before author erasure");
 
       // A held old HTTP page and a delayed real WebSocket-format event simulate
       // network reordering at the actual browser transport boundary.
@@ -292,10 +292,12 @@ try {
         const response = await owner.context.request.get(`${origin}/v1/sessions/${f.session.id}/context?view=${view}`);
         assert.equal(response.status(), 200); assert.doesNotMatch(await response.text(), /REMOVE_SOURCE_|DERIVED_REMOVE|OLD_GENERATED_REMOVE|OLD_PLAN_REMOVE/);
       }
-      await tools(page, mobile); await click(page.locator("#mentions-button"), mobile);
-      await page.locator("#mentions-empty:not([hidden])").waitFor();
-      assert.equal(await page.locator(`#mentions-list [data-mention-event-id="${f.own.id}"]`).count(), 0);
-      await click(page.locator("#mentions-close"), mobile); await closeTools(page, mobile);
+      const mentionsAfter = await owner.context.request.get(`${origin}/v1/projects/${f.project.id}/mentions`);
+      assert.equal(mentionsAfter.status(), 200);
+      assert.equal((await mentionsAfter.json()).data.mentions.some(event => event.id === f.own.id), false);
+      await page.locator("#mentions-button").waitFor({ state: "hidden" });
+      assert.equal(await page.locator(`#mentions-list [data-mention-event-id="${f.own.id}"]`).count(), 0,
+        "erased mention cannot remain in a retained list or transient jump");
       await tools(page, mobile); await click(page.locator("#history-summary-select-button"), mobile); await closeTools(page, mobile);
       assert.equal(await eventNode(page, f.own).locator(".history-source-checkbox").count(), 0);
       await closeTools(page, mobile); await click(page.locator("#history-summary-cancel-button"), mobile);

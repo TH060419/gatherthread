@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "@gatherthread/dsh-host",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "license": "Apache-2.0",
   "defaultEnabled": false,
   "hostEntry": "@gatherthread/dsh-host",
@@ -15,7 +15,7 @@
     "primary": {
       "distribution": "npm",
       "package": "@deepseek-ai/dsh",
-      "version": "0.1.7-rc.2",
+      "version": "0.2.1-rc.2",
       "profile": "web",
       "persistenceProbe": "list"
     },
@@ -26,7 +26,16 @@
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "verifiedProfiles": ["headless", "web"],
       "persistenceProbe": "stat"
-    }
+    },
+    "desktop": {
+      "distribution": "desktop",
+      "package": "@deepseek-ai/dsh",
+      "version": "0.2.1-rc.2",
+      "profile": "desktop",
+      "persistenceProbe": "list",
+      "patchFile": "cordis.patch.yml"
+    },
+    "legacyPatchFile": "cordis.patch.dsh-0.1.yml"
   },
   "runtimeDependencies": []
 }

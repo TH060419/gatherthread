@@ -588,10 +588,20 @@ function parseNativeState(value) {
   ]);
   if (value.schemaVersion !== 2 || value.integration !== "gatherthread") throw new Error("invalid native status identity");
   if (!AUTHORIZATION_STATES.has(value.authorization)) throw new Error("invalid native authorization state");
-  exactObject(value.compatibility, ["package", "version", "profile"]);
+  exactObject(value.compatibility, ["package", "version", "profile", "targets"]);
+  // Older Host builds sent only the scalar pair; the current one also lists every
+  // verified release/profile pair, because the profile layer is gated to the
+  // release that names `webStartup` and serves both the Web and Desktop profiles.
+  const verified = Array.isArray(value.compatibility.targets)
+    ? value.compatibility.targets
+    : [{ version: "0.1.7-rc.2", profile: "web" }];
+  if (!verified.every((target) => target !== null && typeof target === "object"
+    && typeof target.version === "string" && (target.profile === "web" || target.profile === "desktop"))) {
+    throw new Error("invalid native DSH compatibility targets");
+  }
   if (value.compatibility.package !== "@deepseek-ai/dsh"
-    || value.compatibility.version !== "0.1.7-rc.2"
-    || value.compatibility.profile !== "web") throw new Error("incompatible native DSH Host");
+    || !verified.some((target) => target.version === value.compatibility.version
+      && target.profile === value.compatibility.profile)) throw new Error("incompatible native DSH Host");
   const runtime = parseSnapshot(value.runtime);
   const optionalUrl = (url) => {
     if (url === undefined) return undefined;

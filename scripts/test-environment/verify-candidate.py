@@ -13,7 +13,7 @@ import tempfile
 import zlib
 from pathlib import Path
 
-VERSION = "0.1.0-beta.2"
+VERSION = "0.1.0-beta.3"
 NODE = "v24.16.0"
 MAX_ARCHIVE_BYTES = 500 * 1024 * 1024
 MAX_EXPANDED_BYTES = 512 * 1024 * 1024

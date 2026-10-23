@@ -1,8 +1,8 @@
 export const DSH_HARNESS = "deepseek-harness";
 export const CODEX_HARNESS = "codex";
-export const DSH_NPM_VERSION = "0.1.7-rc.2";
+export const DSH_NPM_VERSION = "0.2.1-rc.2";
 export const DSH_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
-export const DSH_VERSION_COMMAND = "npx @deepseek-ai/dsh --version";
+export const DSH_VERSION_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} --version`;
 export const DSH_PINNED_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
 export const DSH_INSTALL_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"`;
 
@@ -49,10 +49,13 @@ export function normalizeDshDevice(value) {
   return { id, name };
 }
 
-export function dshRuntimeChoices(runtimes, devices = []) {
+export function dshRuntimeChoices(runtimes, devices = [], harness = DSH_HARNESS) {
+  if (![DSH_HARNESS, "claude-code"].includes(harness)) throw new Error("Unsupported native Agent harness.");
+  const nativeName = harness === "claude-code" ? "Claude Code" : "DeepSeek Harness";
   const deviceNames = new Map(devices.map(normalizeDshDevice).filter(Boolean).map((device) => [device.id, device.name]));
   return runtimes
-    .map(normalizeDshRuntime)
+    .map(normalizeExecutionRuntime)
+    .filter(runtime => runtime?.harness === harness)
     .filter(Boolean)
     .sort((left, right) => {
       if (left.status !== right.status) return left.status === "online" ? -1 : 1;
@@ -61,13 +64,14 @@ export function dshRuntimeChoices(runtimes, devices = []) {
     })
     .map((runtime) => ({
       ...runtime,
-      deviceName: deviceNames.get(runtime.deviceId) ?? "DeepSeek Harness device",
-      label: `${deviceNames.get(runtime.deviceId) ?? "DeepSeek Harness device"} · ${runtime.provider} · ${runtime.model}${runtime.status === "online" ? "" : " · offline"}`,
+      deviceName: deviceNames.get(runtime.deviceId) ?? `${nativeName} device`,
+      label: `${deviceNames.get(runtime.deviceId) ?? `${nativeName} device`} · ${runtime.provider} · ${runtime.model}${runtime.status === "online" ? "" : " · offline"}`,
     }));
 }
 
-export function resolveDshRuntime(runtimes, devices, profile) {
-  const choices = dshRuntimeChoices(runtimes, devices);
+export function resolveDshRuntime(runtimes, devices, profile, harness = DSH_HARNESS) {
+  const choices = dshRuntimeChoices(runtimes, devices, harness);
+  const nativeName = harness === "claude-code" ? "Claude Code" : "DeepSeek Harness";
   const online = choices.filter((runtime) => runtime.status === "online");
   if (profile) {
     const runtimeId = safeId(profile.runtimeId ?? profile.runtime_id);
@@ -76,15 +80,19 @@ export function resolveDshRuntime(runtimes, devices, profile) {
       : choices.find((runtime) => runtime.deviceId === profile.deviceId
         && runtime.provider === profile.provider
         && runtime.model === profile.model);
+    if (selected && harness === "claude-code") {
+      try { assertClaudeProfileAvailable(selected, profile); }
+      catch { return { runtime: null, choices, reason: "The selected Claude Code runtime is unavailable." }; }
+    }
     if (selected?.status === "online") return { runtime: selected, choices, reason: "" };
-    if (selected) return { runtime: null, choices, reason: "The selected DeepSeek Harness runtime is offline." };
-    return { runtime: null, choices, reason: "The selected DeepSeek Harness runtime is unavailable." };
+    if (selected) return { runtime: null, choices, reason: `The selected ${nativeName} runtime is offline.` };
+    return { runtime: null, choices, reason: `The selected ${nativeName} runtime is unavailable.` };
   }
   if (online.length === 1) return { runtime: online[0], choices, reason: "" };
   if (online.length === 0) {
-    return { runtime: null, choices, reason: "Connect DeepSeek Harness before requesting this Agent." };
+    return { runtime: null, choices, reason: `Connect ${nativeName} before requesting this Agent.` };
   }
-  return { runtime: null, choices, reason: "Choose which online DeepSeek Harness runtime should handle this request." };
+  return { runtime: null, choices, reason: `Choose which online ${nativeName} runtime should handle this request.` };
 }
 
 export function resolveCodexRuntime(runtimes) {
@@ -137,11 +145,13 @@ export function codexExecutionProfile(runtime, { model, reasoningEffort }) {
   };
 }
 
-export function dshExecutionSelection(runtime, requested) {
-  const normalized = normalizeDshRuntime(runtime);
+export function dshExecutionSelection(runtime, requested, harness = DSH_HARNESS) {
+  const normalized = normalizeExecutionRuntime(runtime);
+  if (![DSH_HARNESS, "claude-code"].includes(harness) || normalized?.harness !== harness) throw new Error("A matching native Agent runtime is required.");
   if (!normalized || normalized.status !== "online") {
     throw new Error("A matching online DeepSeek Harness runtime is required.");
   }
+  if (harness === "claude-code") assertClaudeProfileAvailable(normalized, requested);
   const profiles = normalized.executionProfiles ?? [];
   if (profiles.length === 0) {
     return {
@@ -167,15 +177,17 @@ export function dshExecutionSelection(runtime, requested) {
   };
 }
 
-export function dshExecutionProfile(runtime, selection) {
-  const normalized = normalizeDshRuntime(runtime);
+export function dshExecutionProfile(runtime, selection, harness = DSH_HARNESS) {
+  const normalized = normalizeExecutionRuntime(runtime);
+  if (![DSH_HARNESS, "claude-code"].includes(harness) || normalized?.harness !== harness) throw new Error("A matching native Agent runtime is required.");
   if (!normalized || normalized.status !== "online") {
     throw new Error("A matching online DeepSeek Harness runtime is required.");
   }
+  if (harness === "claude-code") assertClaudeProfileAvailable(normalized, selection);
   const profiles = normalized.executionProfiles ?? [];
   if (profiles.length === 0) {
     return {
-      harness: DSH_HARNESS,
+      harness,
       provider: normalized.provider,
       model: normalized.model,
       runtimeId: normalized.id,
@@ -191,12 +203,27 @@ export function dshExecutionProfile(runtime, selection) {
   }
   const reasoningEffort = requestedEffort || selected.defaultReasoningEffort || selected.reasoningEfforts[0];
   return {
-    harness: DSH_HARNESS,
+    harness,
     provider: selected.provider,
     model: selected.model,
     ...(reasoningEffort ? { reasoningEffort } : {}),
     runtimeId: normalized.id,
   };
+}
+
+function assertClaudeProfileAvailable(runtime, requested) {
+  const provider = safeText(requested?.provider, 80);
+  const model = safeText(requested?.model, 160);
+  const effort = safeText(requested?.reasoningEffort ?? requested?.effort, 80);
+  const profiles = runtime.executionProfiles ?? [];
+  const selected = profiles.length ? profiles.find(profile => profile.provider === (provider || runtime.provider)
+    && profile.model === (model || runtime.model)) : runtime;
+  if (!selected || (provider && selected.provider !== provider) || (model && selected.model !== model)) {
+    throw new Error("The selected Claude Code model profile is unavailable. Select a connected profile explicitly.");
+  }
+  if (effort && !(selected.reasoningEfforts ?? []).includes(effort)) {
+    throw new Error("The selected Claude Code reasoning effort is unavailable. Select a connected profile explicitly.");
+  }
 }
 
 function normalizeExecutionProfiles(value) {

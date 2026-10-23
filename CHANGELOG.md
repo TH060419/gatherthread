@@ -4,6 +4,38 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Add a source-preview Claude Code connector, native commands/MCP tools and
+  separately reviewed Hooks, with exact device/model routing, streamed public
+  work, Pause/Resume and per-conversation upload consent. Extend the Windows/Mac
+  Launcher handoff without changing existing Codex links, and reuse the separate
+  project-file synchronization controls. Matching installers/npm artifacts must
+  be published before this source feature is available in existing downloads.
+  See [Claude Code setup](docs/CLAUDE_CODE.md) and [ADR-0060](docs/adr/0060-claude-code-plugin-and-local-connector.md).
+
+## [0.1.0-beta.3] - 2026-10-21
+
+Beta 3 packages the reviewed main-branch changes since Beta 2 for the authorized
+test and production rollout. Both environments use one frozen candidate while
+retaining separate data and configuration; publication and live status are
+recorded by release/deployment receipts, not inferred from this document.
+
+- Align source, npm packages, plugins and current download references at
+  `0.1.0-beta.3`; the Mac Launcher uses numeric version `0.1.3`/build `13`.
+  Preserve all earlier published packages, tags and installers.
+- Correct the product's future Multi-Agent direction: one person's connected
+  Agents form a team and collaborate directly, later extending to authorized
+  automatic communication across different members' Agents. This is planned for
+  a later version, not a claim about the current connection-sharing preview.
+- Include the reviewed project-scoped native Agent-sharing preview from PR105,
+  with explicit recipients, quotas, isolated file access and independent Stop.
+  Platform/authentication probes and safe refusals remain authoritative.
+
+- Support DeepSeek Harness `0.2.1-rc.2` Web and Desktop with the matching `webStartup` layer and pinned Web install/start/repair/version commands. Combine the newer `engines.dsh` guard with an optional peer guard checked by older DSH before bundle patches apply, without auto-installing a runtime. Keep the published `0.1.0-beta.2` artifact unchanged for `0.1.7-rc.2`; the frozen legacy YAML is reference-only, never an automatic fallback. The settings panel reports the active verified profile and supported pairs. Beta 3 publishes the current layer as a new version without replacing the older artifact. See [ADR-0058](docs/adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md).
+
+- Simplify the conversation header to Summaries and Session options. Group summary generation, original/summary display and version history; replace the persistent mentions inbox button with an unread corner jump that clears only after the message is visible. Keep bounded account/project-scoped read IDs across same-tab reloads without storing message content. Update desktop/mobile guides and keyboard paths.
+
+- Add a right-hand file workspace with a project tree, independently closeable function/file tabs, a new-tab picker and open-tab list, code editing, Markdown source/preview, PDF/raster previews, saved changes and branch history. The flush sidebar keeps only new-tab and More controls above the content; its small header toggle hides the panel without closing tabs or drafts. Reorder tabs and safely close groups of tabs. Browse teammate branches read-only; manage and save files on your own GT Cloud or authorized GitHub branch with stale-version protection and recoverable retries. See [ADR-0059](docs/adr/0059-right-file-workspace.md).
+
 - Redesign mobile conversations, members, invitations, settings and project-file connections as focused pages. Add a browser-local Mobile/Desktop choice on login and in General, with confirmation after device detection. Preserve drafts, exact remote/Cloud Agent selection and Pause/Resume; desktop-only file transfers and native setup stay off the phone interface.
 
 ## [0.1.0-beta.2] - 2026-10-15

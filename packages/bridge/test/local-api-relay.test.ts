@@ -51,6 +51,61 @@ class FakeApi implements CollaborationApi {
   }
 }
 
+test("Claude and Codex user relays have distinct deterministic private endpoints", () => {
+  const workspace = process.platform === "win32" ? "C:\\projects\\shared" : "/projects/shared";
+  const codex = resolveWorkspaceConnectorApiPath(workspace, "/home/test", "linux");
+  const claude = resolveWorkspaceConnectorApiPath(workspace, "/home/test", "linux", "claude-code");
+  assert.notEqual(codex, claude);
+  assert.match(codex.split(path.sep).join("/"), /\.gatherthread\/codex\/ipc\/[a-f0-9]{24}\/user-api\.sock$/u);
+  assert.match(claude.split(path.sep).join("/"), /\.gatherthread\/claude-code\/ipc\/[a-f0-9]{24}\/user-api\.sock$/u);
+  assert.match(resolveWorkspaceConnectorApiPath(workspace, "/home/test", "win32", "claude-code"),
+    /^\\\\\.\\pipe\\gatherthread-claude-code-[a-f0-9]{24}-user-api$/u);
+});
+
+test("Claude MCP discovery stays in its harness namespace on a shared workspace", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX socket integration; Windows naming is covered separately");
+  const directory = await mkdtemp(path.join("/tmp", "gtr-host-"));
+  const homeDirectory = path.join(directory, "home"), workspacePath = path.join(directory, "work");
+  await mkdir(workspacePath);
+  const codex = new LocalConnectorApiRelayServer({
+    endpoint: resolveWorkspaceConnectorApiPath(workspacePath, homeDirectory),
+    api: new FakeApi("project-codex", "session-codex"), projectId: "project-codex", homeDirectory,
+  });
+  const claude = new LocalConnectorApiRelayServer({
+    endpoint: resolveWorkspaceConnectorApiPath(workspacePath, homeDirectory, process.platform, "claude-code"),
+    api: new FakeApi("project-claude", "session-claude"), projectId: "project-claude", homeDirectory, harness: "claude-code",
+  });
+  t.after(() => Promise.all([codex.close(), claude.close()]));
+  await codex.start(); await claude.start();
+  const client = new LocalConnectorCollaborationClient({ workspacePath, homeDirectory, harness: "claude-code" });
+  assert.deepEqual((await client.listProjects()).map(({ id }) => id), ["project-claude"]);
+  await assert.rejects(client.readEvents("session-codex", 0), /not.*routed|not.*available|no active connector routes|ambiguous/iu);
+  assert.deepEqual((await new LocalConnectorCollaborationClient({ workspacePath, homeDirectory }).listProjects())
+    .map(({ id }) => id), ["project-codex"]);
+});
+
+test("Claude user requests are pinned to the connector's exact registered execution profile", async (t) => {
+  if (process.platform === "win32") return t.skip("POSIX socket fixture");
+  const directory = await mkdtemp("/tmp/gtr-pin-"), homeDirectory = path.join(directory, "h"), workspacePath = path.join(directory, "w");
+  await mkdir(workspacePath);
+  const api = new FakeApi(), profile = { harness: "claude-code", provider: "anthropic", model: "claude-sonnet-fixture", runtime_id: "runtime-claude" };
+  let connected = false;
+  const relay = new LocalConnectorApiRelayServer({ endpoint: resolveWorkspaceConnectorApiPath(workspacePath, homeDirectory, process.platform, "claude-code"),
+    api, projectId: "p1", homeDirectory, harness: "claude-code", requestProfile: () => { if (!connected) throw new Error("Claude runtime is not connected yet"); return profile; },
+    codeSyncStatus: async () => ({ github: { authorized: true, local_changes: 2 }, gt_cloud: { authorized: false } }) });
+  await relay.start(); t.after(() => relay.close());
+  const client = new LocalConnectorCollaborationClient({ workspacePath, homeDirectory, harness: "claude-code" });
+  await assert.rejects(client.appendEvent("s1", { type: "agent_request", idempotencyKey: "claude-not-ready", payload: { text: "Approved task" } }), /not connected/u);
+  assert.equal(api.appended.length, 0); connected = true;
+  await client.appendEvent("s1", { type: "agent_request", idempotencyKey: "claude-mcp-task", payload: { text: "Approved task" } });
+  assert.deepEqual((api.appended[0]?.payload as any).execution_profile, profile);
+  await assert.rejects(client.appendEvent("s1", { type: "agent_request", idempotencyKey: "wrong-mcp-task",
+    payload: { text: "Approved task", execution_profile: { ...profile, harness: "codex" } } }), /exact.*profile|target/iu);
+  assert.equal(api.appended.length, 1);
+  assert.deepEqual(await client.getCodeSyncStatus("p1"), { github: { authorized: true, local_changes: 2 }, gt_cloud: { authorized: false } });
+  await assert.rejects(client.getCodeSyncStatus("foreign-project"), /routes project|not routed/iu);
+});
+
 test("local user API relay uses a private ephemeral capability and refuses a second connector", async (t) => {
   if (process.platform === "win32") {
     t.skip("Windows named-pipe isolation is covered by deterministic path and capability tests");

@@ -1,4 +1,4 @@
-import { renderAvatar } from "./avatars.js?v=20261012-content-1";
+import { renderAvatar } from "./avatars.js?v=20261018-tabs-2";
 import { SHARED_AGENT_ZH_CN } from "./shared-agent-i18n.js";
 
 export const DEFAULT_SHARE_LIMITS = Object.freeze({ per_member_daily_calls: 20, per_member_daily_seconds: 3600,

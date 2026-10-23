@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 
-const VERSION = "0.1.0-beta.2";
+const VERSION = "0.1.0-beta.3";
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const temporaryBase = process.platform === "darwin" ? "/private/tmp" : tmpdir();
 const temporaryRoot = await mkdtemp(path.join(temporaryBase, "gtdshp-"));
@@ -35,6 +35,10 @@ try {
   assert.equal(manifest.version, VERSION);
   assert.deepEqual(manifest.publishConfig, { access: "public", tag: "beta" });
   assert.deepEqual(manifest.dependencies ?? {}, {});
+  assert.equal(manifest.peerDependencies?.["@deepseek-ai/dsh"], manifest.engines.dsh);
+  assert.deepEqual(manifest.peerDependenciesMeta?.["@deepseek-ai/dsh"], { optional: true });
+  await assert.rejects(access(path.join(installDirectory, "node_modules", "@deepseek-ai", "dsh")),
+    "The optional compatibility peer must not install a DSH runtime");
   const plugin = await import(pathToFileURL(path.join(packageRoot, "dist", "bundle", "native-plugin.js")).href);
   assert.equal(plugin.name, "gatherthread-dsh-native");
   assert.equal(typeof plugin.apply, "function");
@@ -42,6 +46,7 @@ try {
     "README.md",
     "LICENSE",
     "cordis.patch.yml",
+    "cordis.patch.dsh-0.1.yml",
     "bundle/manifest.json",
     "client/client.js",
     "types/native-plugin.d.ts",

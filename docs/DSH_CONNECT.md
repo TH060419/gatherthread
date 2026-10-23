@@ -1,10 +1,20 @@
 # Connect DeepSeek Harness
 
-The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and connects outward to the selected GatherThread server. The browser never probes `localhost` or starts a local process.
+The GatherThread DSH plugin runs inside the DeepSeek Harness Web or Desktop profile and connects outward to the selected GatherThread server. The browser never probes `localhost` or starts a local process.
 
 The plugin provides optional **project code** upload/download/recovery in DSH settings, with separate per-project consent. GT Cloud automatic code upload defaults off; a newly authorized GitHub binding defaults on and can be switched off. See [Project code collaboration](CODE_SYNC.md).
 
 Sign in with email and password before approving pairing. In the plugin, select the official service at `https://gatherthread.cn` or enter your self-hosted server address. **Connect DeepSeek Harness → Download packages for this server** opens its source-pinned index. Install that page's DSH plugin TGZ; if it is unavailable, use the [source-checkout fallback](#source-checkout-fallback).
+
+## Supported DSH releases
+
+The current plugin build installs into DSH `0.2.1-rc.2`, the release bundled with the DeepSeek Harness desktop application, and serves both its `desktop` profile and the `npx` `web` profile. The desktop application manages its own profile, so install there with its bundled CLI:
+
+```bash
+dsh plugin --profile desktop add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+```
+
+For `0.1.7-rc.2`, use the immutable published `0.1.0-beta.2` artifact. Its frozen layer is retained in source as `cordis.patch.dsh-0.1.yml` for reference, not as an alternative installation for the current build. The two layers cannot be merged: `0.2.x` renamed Connection's trust service from `webRuntime` to `webStartup`, and injecting both fails startup. The current build declares both `engines.dsh` and an optional `@deepseek-ai/dsh` peer with range `>=0.2.1-rc.2 <0.3.0`. Newer DSH checks the engine; older `0.1.7-rc.2` checks the peer before composing bundle patches, safely refusing this incompatible build without installing another runtime. This source change does not replace the published Beta 2 npm artifact. See [ADR-0058](adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md).
 
 ## Normal four-step setup
 
@@ -19,7 +29,7 @@ npm install --global pnpm@10
 Download the DSH plugin TGZ from that index and add it to the DSH Web profile. Replace the placeholder below with the downloaded file's full path:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
 
 On Windows, use a quoted full path such as `C:/Users/you/Downloads/your-plugin.tgz`. The registry's `@gatherthread/dsh-host@0.1.0-beta.1` is an older release, not this source-pinned build; it does not provide the current safe message-deletion handling.
@@ -27,14 +37,16 @@ On Windows, use a quoted full path such as `C:/Users/you/Downloads/your-plugin.t
 ### 2. Open DSH
 
 ```bash
-npx @deepseek-ai/dsh@0.1.7-rc.2 web
+npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 
 Keep DSH running. Open **Settings → GatherThread / 共序**.
 
+To check the same pinned CLI, use `npx @deepseek-ai/dsh@0.2.1-rc.2 --version`.
+
 ### 3. Pair the current server
 
-Paste the selected GatherThread server address (`https://test.gatherthread.cn` for Beta 2 testing; `https://gatherthread.cn` for the independently deployed production service), choose **Sign in and pair**, and compare the short code. Approve it in a browser already signed in to that same environment. Test requires its own admitted email account, device authorization and workspace; do not reuse production pairing or credentials. The code is single-use and expires shortly.
+Paste the selected GatherThread server address (`https://test.gatherthread.cn` for the independent test environment; `https://gatherthread.cn` for the independently deployed production service), choose **Sign in and pair**, and compare the short code. Approve it in a browser already signed in to that same environment. Test requires its own admitted email account, device authorization and workspace; do not reuse production pairing or credentials. The code is single-use and expires shortly.
 
 ### 4. Select a DSH provider and model
 
@@ -49,8 +61,8 @@ git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
 npm ci
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.2.tgz
-npx @deepseek-ai/dsh@0.1.7-rc.2 web
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.3.tgz
+npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 
 Do not add `--offline` unless the complete dependency metadata is already cached. DSH delegates profile package installation to `pnpm`; an incomplete offline mirror can fail before GatherThread is installed.
@@ -92,7 +104,7 @@ Observed at the previously pinned DSH `0.1.2-rc.1` and not re-verified at the cu
 
 ### Upstream profile hot-reload failure
 
-A fresh DSH install can resolve newer transitive packages that fail its default `live` configuration reload. That was observed at the previously pinned `0.1.2-rc.1`. At the current pin the isolated native/browser gate passes the complete GatherThread flow with the default `live` reload, so default live reload is verified there; the workaround below remains only for that specific error if it reappears.
+A fresh DSH install can resolve newer transitive packages that fail its default `live` configuration reload. That was observed at the previously pinned `0.1.2-rc.1`. The earlier `0.1.7-rc.2` pin passed the isolated native/browser gate with default live reload. The new `0.2.1-rc.2` layer has compatibility-preflight and contract checks; the complete native Web/browser flow has not yet been re-run at this pin. The workaround below remains only for that specific error if it reappears.
 
 Only if the exact HMR error above occurs: stop DSH, back up `<DSH_HOME>/profiles/web/package.json` (normally `~/.dsh/profiles/web/package.json`), and change the existing `dsh.profile.patchReload` value to `"startup"`. Preserve every other field, dependency and bundle; do not replace the whole manifest. Then start DSH again with the command in step 2. Configuration-layer changes now require restarting DSH; GatherThread history/realtime synchronization is not disabled. Do not clear credentials or install arbitrary upstream versions to bypass this error.
 

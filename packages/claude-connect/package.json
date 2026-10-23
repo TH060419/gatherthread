@@ -1,0 +1,19 @@
+{
+  "name": "@gatherthread/claude-connect",
+  "version": "0.1.0-beta.3",
+  "description": "Standalone Claude Code connector and private plugin tools for GatherThread",
+  "author": "Yuhan He and contributors",
+  "license": "Apache-2.0",
+  "type": "module",
+  "publishConfig": { "access": "public", "tag": "beta" },
+  "exports": { ".": "./dist/index.js" },
+  "bin": { "gatherthread-claude-connect": "dist/claude-connect.js" },
+  "files": ["dist", "README.md", "LICENSE", "NOTICE"],
+  "engines": { "node": ">=24" },
+  "scripts": { "build": "node scripts/build.mjs", "prepack": "npm run build" },
+  "devDependencies": { "esbuild": "^0.28.2" },
+  "keywords": ["gatherthread", "claude-code", "plugin", "collaboration"],
+  "repository": { "type": "git", "url": "git+https://github.com/TH060419/gatherthread.git", "directory": "packages/claude-connect" },
+  "homepage": "https://github.com/TH060419/gatherthread#readme",
+  "bugs": "https://github.com/TH060419/gatherthread/issues"
+}

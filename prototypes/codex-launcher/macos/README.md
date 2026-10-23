@@ -1,9 +1,48 @@
-# GatherThread Codex Launcher for macOS
+# GatherThread Agent Launcher for macOS
+
+## Claude Code adaptation in this source tree
+
+The source now also builds a separate Claude Code connector and Claude plugin
+into the existing app, retaining the same GatherThread icon and URL scheme.
+This is not a claim that an earlier published installer contains Claude support;
+a new installer still needs an explicit build and release. Claude Code must
+already be installed and signed in.
+
+When several Claude installations exist, automatic discovery scans PATH and
+known native/user npm locations in the background and prefers an existing
+version 2.1.259 or newer. It runs only a short `--version` probe, never installs
+or calls a model, and does not replace a manually edited path. If no compatible
+version is found, the old path is retained with an update prompt. The connector
+still checks the complete safe streaming interface before accepting work.
+
+Choose Claude Code in the Web project's connection entry. A strict version-3
+link fills the selected Agent, exact model, email, project and production/test
+environment. The app asks only for the account password locally and uses the
+existing one-use independent-device authorization. The grant remains an
+account/project authorization; it is not a harness-bound credential. Codex
+version-1/version-2 links retain their existing meaning. No URL starts execution
+or installs a plugin without a separate button click.
+
+The native **Allow this device to synchronize project files** checkbox starts
+off and resets with every new connection. Only an explicit check adds the local
+`--code-sync` authorization; it does not itself turn on sharing or upload files.
+Codex-only history-import and context-window controls are hidden for Claude.
+Supply a full `claude-...` model ID, not a `sonnet`, `opus` or `haiku` alias.
+
+The optional **Install bundled plugin** action explicitly installs only the
+selected Agent's reviewed plugin. Claude's local marketplace is separate from
+Codex's and its private Node/MCP/Hook resources cannot overwrite Codex files.
+Review Hooks and restart or reload the Claude Code session after installation.
+Claude Code's own tool permissions remain in effect. Remove the optional plugin
+with `claude plugin uninstall gatherthread@gatherthread-launcher-claude --scope user`
+and `claude plugin marketplace remove gatherthread-launcher-claude` before removing
+the app if desired; existing Claude conversations and project files remain local.
 
 This optional arm64/x86_64 prototype uses a native AppKit `.app` and bundles
 Node 24, the fixed-version connector, and a copy of the reviewed Codex plugin.
-Launcher 0.1.2 is the installer/app display version; the bundled connector and
-plugin keep their separately verified `0.1.0-beta.2` package version.
+Launcher 0.1.3/build 13 is the installer/app display version; the bundled connector
+and plugin use the matching `0.1.0-beta.3` package version. The earlier Beta 2
+downloads remain available under their original release.
 End users do not need Python or npm. Codex Desktop / CLI must already be
 installed and signed in. The manual terminal connection remains an advanced fallback.
 The packaged Launcher and Node require macOS 13.5 or later; the build explicitly

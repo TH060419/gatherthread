@@ -319,7 +319,7 @@ test("Codex desktop connection puts email Launcher first and collapses terminal 
   const primary = html.slice(html.indexOf('id="codex-launcher-option"'), html.indexOf('id="connect-codex-manual"'));
   assert.match(primary, /Install from GitHub \(recommended\)/);
   assert.match(primary, /Website download/);
-  assert.match(primary, /id="download-codex-launcher-github-button"[^>]*href="https:\/\/github\.com\/TH060419\/gatherthread\/releases\/tag\/v0\.1\.0-beta\.2"/);
+  assert.match(primary, /id="download-codex-launcher-github-button"[^>]*href="https:\/\/github\.com\/TH060419\/gatherthread\/releases\/tag\/v0\.1\.0-beta\.3"/);
   assert.match(primary, /id="codex-launcher-email"[^>]*type="email"/);
   assert.match(primary, /id="open-codex-launcher-button"/);
   assert.doesNotMatch(primary, /gtd_|gta_|data-copy-command|device token/i);
@@ -335,7 +335,7 @@ test("project Codex connector presents a concise Beta install-connect-confirm fl
     readFile(stylesPath, "utf8"),
     readFile(i18nPath, "utf8"),
   ]);
-  assert.match(html, /Beta 2/);
+  assert.match(html, /Beta 3/);
   assert.doesNotMatch(html, /Official service is not open yet/i);
   assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Connect this project<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Confirm in Codex<\/h3>/);
   assert.match(html, /Use the Launcher to connect this project to Codex Desktop/i);
@@ -363,7 +363,7 @@ test("project Codex connector presents a concise Beta install-connect-confirm fl
   assert.match(html, /First run codex plugin marketplace remove gatherthread-source, then add the new prepared directory/);
   assert.match(i18n, /先运行 codex plugin marketplace remove gatherthread-source，再添加新准备目录/);
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
-  assert.match(i18n, /Beta 2 测试版/);
+  assert.match(i18n, /Beta 3 测试版/);
   assert.match(i18n, /"Install once": "仅需安装一次"/);
   assert.match(i18n, /如果终端提示.*command not found: codex/);
   assert.match(i18n, /如果显示版本号，再将 PATH 修改保存/);
@@ -410,11 +410,11 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
     "settings-dsh-runtime",
   ]) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(html, /value="deepseek-harness">DeepSeek Harness<\/option>/);
-  assert.match(html, /Beta 2/);
+  assert.match(html, /Beta 3/);
   assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Open DSH<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Pair this server<\/h3>/);
   assert.doesNotMatch(html, /Official service is not open yet/i);
   assert.match(html, /The plugin connects outward/i);
-  assert.match(html, /Verified DSH version: 0\.1\.2-rc\.1/);
+  assert.match(html, /Verified DSH version: 0\.2\.1-rc\.2/);
   assert.match(html, /current local, LAN, self-hosted, or Tailscale server/i);
   assert.match(html, /single-use and expires shortly/);
   assert.match(dsh, /DSH_START_COMMAND = `npx @deepseek-ai\/dsh@\$\{DSH_NPM_VERSION\} web`/);
@@ -701,14 +701,16 @@ test("workspace rails and dense session context use accessible icon disclosures"
     readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8"), readFile(i18nPath, "utf8"),
   ]);
   assert.match(html, /id="toggle-session-rail-button"[^>]*aria-controls="session-rail"[^>]*aria-expanded="true"[^>]*data-tooltip[\s\S]*?<svg/);
-  assert.match(html, /id="mobile-members-button"[^>]*aria-controls="member-panel"[^>]*aria-expanded="true"[^>]*data-tooltip[\s\S]*?<svg/);
+  assert.match(html, /id="mobile-members-button"[^>]*aria-controls="file-workspace-host"[^>]*aria-expanded="true"[^>]*data-tooltip[\s\S]*?<svg/);
   assert.match(html, /class="account-cluster"[\s\S]*?id="logout-button"[\s\S]*?id="mobile-members-button"[\s\S]*?<\/div>/);
   assert.match(html, /id="topbar-session-context"[^>]*hidden[\s\S]*?id="topbar-project-name"[\s\S]*?id="topbar-session-name"/);
   assert.match(html, /id="session-context-details"[\s\S]*?<summary[^>]*aria-label="Show session status details"[^>]*aria-controls="session-context-panel"[^>]*aria-expanded="false"[\s\S]*?id="session-context-panel"[^>]*aria-label="Session status details"/);
   assert.match(html, /class="session-context-panel-heading"[\s\S]*?Session status details[\s\S]*?Codex history[\s\S]*?Local turns to cloud/);
   assert.match(main, /workspace\.dataset\.leftRailCollapsed/);
   assert.match(main, /workspace\.dataset\.rightPanelCollapsed/);
-  assert.match(main, /memberPanel\.classList\.toggle\("member-panel-open"/);
+  assert.match(main, /fileWorkspaceHost\.classList\.add\("file-workspace-open"/);
+  assert.match(html, /id="open-files-button"[^>]*aria-controls="file-workspace-host"/);
+  assert.match(main, /filesUi\.open\("members"\)/);
   assert.match(main, /function renderWorkspaceContext\(\)/);
   assert.match(main, /sessionContextDetails\.open = false;[\s\S]*?updateSessionContextDisclosure\(\)/);
   assert.match(styles, /\.workspace\[data-left-rail-collapsed="true"\][\s\S]*?\.session-rail/);
@@ -719,10 +721,11 @@ test("workspace rails and dense session context use accessible icon disclosures"
   assert.match(i18n, /会话状态详情/);
 });
 
-test("Codex-only history and upload controls follow the saved project Agent selection", async () => {
+test("native upload controls follow enabled Agents while visible history import stays Codex-only", async () => {
   const main = await readFile(mainPath, "utf8");
   assert.match(main, /element\("visible-history-controls"\)\.hidden = !currentProjectEnabledHarnesses\(\)\.includes\("codex"\)/);
-  assert.match(main, /const available = Boolean\(state\.session\)[\s\S]*?currentProjectEnabledHarnesses\(\)\.includes\("codex"\)/);
+  assert.match(main, /function renderCodexLocalSyncControls\(\)[\s\S]*?const available = Boolean\(state\.session\)[\s\S]*?currentProjectEnabledHarnesses\(\)\.some\(harness => \["codex", "claude-code"\]\.includes\(harness\)\)/);
+  assert.match(main, /function onlineCodexLocalRuntimes\(\)[\s\S]*?isExecutionRuntime\(runtime\)[\s\S]*?\["codex", "claude-code"\]\.includes\(String\(runtime\.harness\)\.toLowerCase\(\)\)[\s\S]*?enabled\.includes\(String\(runtime\.harness\)\.toLowerCase\(\)\)/);
   assert.match(main, /state\.settings = settingsStore\.set\(settingsPreview\);[\s\S]*?renderSessionDeliveryControls\(\);[\s\S]*?ensureCodexLocalSyncStatus\(\)/);
 });
 

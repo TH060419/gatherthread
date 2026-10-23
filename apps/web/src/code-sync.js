@@ -1,4 +1,4 @@
-import { createIdempotencyKey, isExecutionRuntime } from "./domain.js?v=20261012-content-1";
+import { createIdempotencyKey, isExecutionRuntime } from "./domain.js?v=20261018-tabs-2";
 
 export const CODE_JOB_KINDS = new Set([
   "code_sync_status", "code_upload", "code_download", "code_recover",
@@ -8,7 +8,7 @@ const ACTIVE_JOBS = new Set(["queued", "claimed", "importing", "compacting"]);
 
 export function codeRuntimeChoices(context) {
   return (context?.runtimes ?? []).filter((runtime) =>
-    isExecutionRuntime(runtime) && ["codex", "deepseek-harness"].includes(runtime.harness)
+    isExecutionRuntime(runtime) && ["codex", "deepseek-harness", "claude-code"].includes(runtime.harness)
     && (!runtime.userId || runtime.userId === context.userId)
     && (!context.enabledHarnesses || context.enabledHarnesses.includes(runtime.harness)));
 }

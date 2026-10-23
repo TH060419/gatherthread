@@ -1,10 +1,20 @@
 # 接入 DeepSeek Harness
 
-共序 DSH 插件运行在 DeepSeek Harness 的 Web profile 中，并由 DSH 主动连接到选定的共序服务器。网页不会探测 `localhost`，也不会尝试启动本地进程。
+共序 DSH 插件运行在 DeepSeek Harness 的 Web 或 Desktop profile 中，并由 DSH 主动连接到选定的共序服务器。网页不会探测 `localhost`，也不会尝试启动本地进程。
 
 DSH 设置中的项目代码上传、下载与恢复需逐项目单独授权；GT Cloud 文件自动上传默认关闭，新授权的 GitHub 连接默认开启，可随时关闭。详见[项目文件协作](CODE_SYNC.md)。
 
 先用邮箱和密码登录，再批准设备配对。插件中可选择 `https://gatherthread.cn` 共序官方服务，也可输入自托管服务器地址。「连接 DeepSeek Harness → 下载此服务器的配套安装包」会打开带源码版本的下载页，使用该页的 DSH 插件 TGZ；下载不可用时，使用下方源码路径。
+
+## 支持的 DSH 版本
+
+当前插件构建适配 DSH `0.2.1-rc.2`（DeepSeek Harness 桌面版内置的版本），同时支持它的 `desktop` profile 与 `npx` 的 `web` profile。桌面版自行管理 profile，请用其自带的 CLI 安装：
+
+```bash
+dsh plugin --profile desktop add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+```
+
+`0.1.7-rc.2` 请继续使用已经发布、不会被替换的 `0.1.0-beta.2` 安装包。源码中的 `cordis.patch.dsh-0.1.yml` 仅保留其冻结层供参考，不是当前构建的另一种安装方式。两层无法合并：`0.2.x` 把 Connection 的信任来源从 `webRuntime` 改为 `webStartup`，同时注入两者会导致启动失败。当前构建同时声明 `engines.dsh` 与可选的 `@deepseek-ai/dsh` peer，范围均为 `>=0.2.1-rc.2 <0.3.0`。新版 DSH 检查 engine；忽略该字段的 `0.1.7-rc.2` 会在组合 bundle 补丁前检查 peer，从而安全拒绝不兼容构建，也不会自动安装另一个 DSH。此次源码更新不替换已经发布的 Beta 2 npm 安装包。参见 [ADR-0058](adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md)。
 
 ## 正常连接只需四步
 
@@ -19,7 +29,7 @@ npm install --global pnpm@10
 下载配套的 DSH 插件 TGZ，把下方占位路径换成下载文件的完整路径，再加入 DSH Web profile：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
 
 Windows 使用带引号的完整路径，例如 `C:/Users/you/Downloads/your-plugin.tgz`。npm 的 `@gatherthread/dsh-host@0.1.0-beta.1` 是旧发行版，不是此源码构建，也不包含本次安全删除消息的处理。
@@ -27,14 +37,16 @@ Windows 使用带引号的完整路径，例如 `C:/Users/you/Downloads/your-plu
 ### 2. 打开 DSH
 
 ```bash
-npx @deepseek-ai/dsh@0.1.7-rc.2 web
+npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 
 保持 DSH 运行，然后打开 **设置 → GatherThread / 共序**。
 
+检查同一固定 CLI 的版本请使用 `npx @deepseek-ai/dsh@0.2.1-rc.2 --version`。
+
 ### 3. 配对当前服务器
 
-输入所用服务器地址（Beta 2 测试服为 `https://test.gatherthread.cn`，独立部署的正式服为 `https://gatherthread.cn`），选择 **登录并配对**，核对页面显示的短码，再到已经登录同一环境的网页批准相同短码。测试服需先准入、登录独立邮箱账号，再单独授权设备、选择测试工作区；不复用正式服配对或凭据。短码只能使用一次，并会很快过期。
+输入所用服务器地址（独立测试服为 `https://test.gatherthread.cn`，独立部署的正式服为 `https://gatherthread.cn`），选择 **登录并配对**，核对页面显示的短码，再到已经登录同一环境的网页批准相同短码。测试服需先准入、登录独立邮箱账号，再单独授权设备、选择测试工作区；不复用正式服配对或凭据。短码只能使用一次，并会很快过期。
 
 ### 4. 选择 DSH Provider 与 Model
 
@@ -49,8 +61,8 @@ git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
 npm ci
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.2.tgz
-npx @deepseek-ai/dsh@0.1.7-rc.2 web
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.3.tgz
+npx @deepseek-ai/dsh@0.2.1-rc.2 web
 ```
 
 除非依赖元数据已完整缓存，否则不要加 `--offline`。DSH 会把 profile 包安装交给 `pnpm`；离线镜像不完整时，共序插件尚未开始安装就会失败。
@@ -92,7 +104,7 @@ Beta 2 还允许会话写入者在共序网页选取已完成的公开消息，�
 
 ### DSH 上游配置热重载失败
 
-新安装的 DSH 可能解析到较新的间接依赖，导致默认 `live` 配置热重载启动失败。该现象在上一版固定的 `0.1.2-rc.1` 上观察到。在当前固定版本上，隔离的原生/浏览器门禁已用**默认 `live` 模式**跑通完整共序流程，因此默认热重载在当前 pin 上已验证；下方处理方式仅在该错误再次出现时使用。
+新安装的 DSH 可能解析到较新的间接依赖，导致默认 `live` 配置热重载启动失败。该现象在上一版固定的 `0.1.2-rc.1` 上观察到。此前 `0.1.7-rc.2` 的隔离原生/浏览器门禁已用默认 `live` 模式跑通；新的 `0.2.1-rc.2` 配置层已完成兼容性预检和契约检查，但尚未重跑完整的原生 Web/浏览器流程。下方处理方式仅在该特定错误再次出现时使用。
 
 仅出现上述 HMR 错误时：先关闭 DSH，备份 `<DSH_HOME>/profiles/web/package.json`（一般为 `~/.dsh/profiles/web/package.json`），把现有 `dsh.profile.patchReload` 改为 `"startup"`，保留其他字段、依赖和 bundles，**不要替换整个文件**。再用第 2 步命令启动。之后修改用户配置层需要重启 DSH；共序会话历史与实时同步不会关闭。不要清空凭据或随意更换上游版本来绕过错误。
 

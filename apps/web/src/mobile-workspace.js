@@ -1,4 +1,4 @@
-import { mountMobilePanels, sessionNavigationLeavesPanel } from "./mobile-panels.js";
+import { mountMobilePanels, sessionNavigationLeavesPanel, toolsActionLeavesPanel } from "./mobile-panels.js";
 
 // Presentation only: move the existing controls, never duplicate request paths.
 export const MOBILE_WORKSPACE_MAX_WIDTH = 1366;
@@ -13,7 +13,7 @@ export function usesMobileWorkspace(navigator, width) {
 }
 
 export function mobileAgentLabel(harness, effort, t = text => text) {
-  const agent = harness === "shared" ? t("Shared Agent") : harness === "cloud" ? t("Cloud") : harness === "deepseek-harness" ? "DSH" : "Codex";
+  const agent = harness === "shared" ? t("Shared Agent") : harness === "cloud" ? t("Cloud") : harness === "claude-code" ? "Claude" : harness === "deepseek-harness" ? "DSH" : "Codex";
   return effort ? `${agent} · ${t(effort)}` : agent;
 }
 
@@ -54,17 +54,20 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   remember(rail, el("mobile-sessions-content"));
   // One settings dialog on every screen, preserving IDs and event handlers.
   el("mobile-agent-content").append(profile, el("send-cloud-agent-help"));
-  remember(el("member-panel"), el("mobile-members-content"));
+  remember(el("file-workspace-host") ?? el("member-panel"), el("mobile-members-content"));
   for (const id of ["project-code-button", "settings-button", "mobile-members-button", "logout-button",
-    "rename-session-button", "delete-session-button", "session-context-details",
-    "history-summary-select-button", "mentions-button", "history-summary-view-button",
-    "history-summary-versions-button", "download-codex-button"]) {
+    "history-summary-menu", "session-options-menu"]) {
     remember(el(id), el("mobile-tools-content"));
   }
   const panels = mountMobilePanels({ document: doc, window: win, t });
 
   function closeAll() {
     el("session-context-details").open = false;
+    for (const id of ["history-summary-menu-button", "session-options-button"]) {
+      const trigger = el(id), panel = el(trigger?.getAttribute("aria-controls"));
+      trigger?.setAttribute("aria-expanded", "false");
+      if (panel) panel.hidden = true;
+    }
     for (const dialog of dialogs) if (dialog.open) closeDialog(dialog);
   }
   function open(dialog, trigger) {
@@ -127,7 +130,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   }, true);
   el("project-select").addEventListener("change", () => closeDialog(dialogs[0]));
   dialogs[2].addEventListener("click", event => {
-    if (event.target.closest("button") && !event.target.closest("#session-context-panel")) closeDialog(dialogs[2]);
+    if (toolsActionLeavesPanel(event.target.closest("button"))) closeDialog(dialogs[2]);
   }, true);
 
   function update() {
@@ -152,7 +155,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     for (const note of doc.querySelectorAll(".mobile-device-note")) note.hidden = !mobileDevice || !active;
     const harnessSelect = el("agent-harness-select"), rawHarness = harnessSelect.value;
     const harness = rawHarness.startsWith("team:") ? "team" : rawHarness.startsWith('["shared",') ? "shared" : rawHarness;
-    const effortSelect = el(harness === "shared" ? "agent-sharing-effort" : harness === "deepseek-harness" ? "agent-dsh-effort-select" : "agent-effort-select");
+    const effortSelect = el(harness === "shared" ? "agent-sharing-effort" : ["deepseek-harness", "claude-code"].includes(harness) ? "agent-dsh-effort-select" : "agent-effort-select");
     const effort = ["cloud", "team"].includes(harness) || effortSelect?.hidden || effortSelect?.closest("[hidden]") ? "" : effortSelect?.value;
     const sharedLabel = ["shared", "team"].includes(harness) ? harnessSelect.selectedOptions[0]?.textContent : null;
     el("mobile-agent-label").textContent = sharedLabel ? `${sharedLabel}${effort ? ` · ${t(effort)}` : ""}` : mobileAgentLabel(harness, effort, t);

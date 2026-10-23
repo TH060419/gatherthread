@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
-const VERSION = "0.1.0-beta.2";
+const VERSION = "0.1.0-beta.3";
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const output = path.join(root, "release-artifacts", "npm");
 const cacheRoot = await mkdtemp(path.join(tmpdir(), "gatherthread-npm-publish-dry-run-"));
@@ -15,6 +15,7 @@ try {
   for (const archive of [
     `gatherthread-codex-connect-${VERSION}.tgz`,
     `gatherthread-dsh-host-${VERSION}.tgz`,
+    `gatherthread-claude-connect-${VERSION}.tgz`,
   ]) {
     await runNpm([
       "--cache", cacheRoot,
@@ -28,7 +29,7 @@ try {
   await rm(cacheRoot, { recursive: true, force: true });
 }
 
-process.stdout.write("Both npm candidates passed publish --dry-run with the beta dist-tag.\n");
+process.stdout.write("All npm candidates passed publish --dry-run with the beta dist-tag.\n");
 
 function runNpm(args, cwd) {
   const npmCli = process.env.npm_execpath?.trim();

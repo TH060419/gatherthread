@@ -24,6 +24,8 @@ export interface ProjectHarnessDescriptor {
   executionProfiles?: readonly RuntimeExecutionProfile[];
   captureFidelity: CaptureFidelity;
   capabilities: readonly string[];
+  /** Advertise only after the adapter rebuilds every execution from deletion-aware context. */
+  contextDeletionVersion?: 1;
   sharingCapability?: SharedExecutionCapability;
 }
 
@@ -112,6 +114,10 @@ export type ProjectHarnessDeactivationReason =
  */
 export interface ProjectHarnessAdapter {
   readonly descriptor: ProjectHarnessDescriptor;
+  /** Includes native prompts in discovery, before they appear in the managed-session map. */
+  isWorkspaceBusy?: () => Promise<boolean>;
+  /** Connector-local exclusion shared with native prompt Hooks, not an OS-wide file lock. */
+  withWorkspaceOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
   preflight(): Promise<ProjectHarnessPreflight>;
   createSessionBinding(input: {
     session: SessionSummary;

@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
-const VERSION = "0.1.0-beta.2";
+const VERSION = "0.1.0-beta.3";
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const output = path.join(root, "release-artifacts", "npm");
 const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
@@ -15,7 +15,7 @@ await mkdir(output, { recursive: true, mode: 0o700 });
 const cacheRoot = await mkdtemp(path.join(tmpdir(), "gatherthread-npm-pack-"));
 
 try {
-  for (const workspace of ["@gatherthread/codex-connect", "@gatherthread/dsh-host"]) {
+  for (const workspace of ["@gatherthread/codex-connect", "@gatherthread/dsh-host", "@gatherthread/claude-connect"]) {
     await runNpm(["--cache", cacheRoot, "pack", "--workspace", workspace, "--pack-destination", output], root);
   }
 } finally {

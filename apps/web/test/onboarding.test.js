@@ -1,8 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { createOnboardingProgress, GUIDE_COPY, GUIDE_LABELS, guideSteps, guideText, onboardingKey } from "../src/onboarding-content.js";
 import { translateUiText } from "../src/i18n.js";
-import { prepareMobileGuidePage } from "../src/onboarding.js";
+import { prepareMobileGuidePage, prepareMemberGuideTab, prepareSessionGuideMenus, setGuideMenuExpanded, visibleGuideTarget } from "../src/onboarding.js";
+
+test("guide visibility tolerates subpixel viewport rounding but rejects actual clipping", () => {
+  let rect = { top: 520.25, bottom: 568.25, left: 12, right: 308, width: 296, height: 48 };
+  const node = { closest: () => null, getClientRects: () => [rect], getBoundingClientRect: () => rect };
+  const doc = { defaultView: { innerWidth: 320, innerHeight: 568,
+    getComputedStyle: () => ({ visibility: "visible", display: "block" }) },
+    querySelectorAll: selector => selector === "dialog[open]" ? [] : [node] };
+  assert.equal(visibleGuideTarget(doc, "#control"), node);
+  for (const boundary of [{ bottom: 569.01 }, { right: 321.01 }, { top: -1.01 }, { left: -1.01 }]) {
+    const before = rect; rect = { ...rect, ...boundary }; assert.equal(visibleGuideTarget(doc, "#control"), undefined); rect = before;
+  }
+  rect = { ...rect, bottom: 569, right: 321, top: -1, left: -1 };
+  assert.equal(visibleGuideTarget(doc, "#control"), node);
+});
 
 test("tour progress is isolated by user, device and site, including delimiter-like IDs", () => {
   const identity = { userId: "u:a", deviceId: "d", origin: "https://example.test" };
@@ -32,10 +47,10 @@ test("storage denial retains completion within the page and never breaks sign-in
 
 test("all account states get the complete isolated example guides", () => {
   for (const context of [{}, { session: { id: "s" } }, { project: null, session: null }, { writable: false }]) {
-    assert.equal(guideSteps("basics", context).length, 14);
+    assert.equal(guideSteps("basics", context).length, 16);
   }
   assert.equal(guideSteps("history").length, 5);
-  assert.equal(guideSteps("files").length, 16);
+  assert.equal(guideSteps("files").length, 21);
   assert.equal(guideSteps("members").length, 7);
   assert.equal(guideSteps("summaries").length, 5);
   assert.equal(guideSteps("account").length, 4);
@@ -56,16 +71,87 @@ test("the beginner workflow reaches summaries, file review and a working coded r
   }
 });
 
+test("desktop and phone guides teach the real file workspace, Markdown tabs and read-only review", () => {
+  for (const layout of ["desktop", "mobile"]) {
+    const basics = guideSteps("basics", { layout });
+    assert.deepEqual(basics.find(item => item.id === "file-code").fileSelection, { branchId: "own", path: "src/signup.js", mode: "code" });
+    assert.deepEqual(basics.find(item => item.id === "file-readme").fileSelection, { branchId: "own", path: "README.md", mode: "preview" });
+    const review = basics.find(item => item.id === "review");
+    assert.equal(review.fileSelection.branchId, "branch-maya"); assert.equal(review.fileSelection.compareWithParent, true);
+    assert.match(review.text[1], /只读.*红色.*绿色/u);
+    const files = guideSteps("files", { layout });
+    assert.deepEqual(files.slice(0, 5).map(item => item.id), ["browse-files", "browse-code", "browse-markdown", "browse-review", "edit-own"]);
+    assert.match(files.find(item => item.id === "edit-own").text[1], /自行.*保存.*不会替你保存/u);
+    assert.ok(files.filter(item => item.fileSelection).every(item => item.view.startsWith("workspace-")));
+  }
+});
+
 test("mobile guide uses visible drawer and Agent controls without mobile installation instructions", () => {
   const basics = guideSteps("basics", { layout: "mobile" });
   assert.equal(basics.find((item) => item.id === "project").target, "#toggle-session-rail-button");
   assert.equal(basics.find((item) => item.id === "model").target, "#mobile-agent-button");
   assert.match(basics.find((item) => item.id === "connect").text[1], /电脑.*同一账号.*在线/u);
   assert.match(basics.find((item) => item.id === "connect").text[1], /公网访问.*其他网络/u);
-  assert.equal(guideSteps("files", { layout: "mobile" }).find((item) => item.id === "files").target, "#mobile-tools-button");
+  assert.equal(guideSteps("files", { layout: "mobile" }).find((item) => item.id === "browse-files").target, ".fw-location");
   const mention = guideSteps("members", { layout: "mobile" }).find((item) => item.id === "mention");
-  assert.equal(mention.view, "mobile-tools");
-  assert.match(mention.text[1], /会话工具.*输入框旁的 \+.*再点 @/u);
+  assert.equal(mention.view, "conversation");
+  assert.equal(mention.target, "#message-input");
+  assert.match(mention.text[1], /未读.*角落.*定位.*读过.*消失/u);
+});
+
+test("guide menus disclose only the required compact toolbar without invoking child actions", () => {
+  const clicks = [], nodes = new Map();
+  for (const id of ["history-summary-menu-button", "session-options-button"]) {
+    const node = { expanded: false,
+      getAttribute: name => name === "aria-expanded" ? String(node.expanded) : null,
+      click: () => { node.expanded = !node.expanded; clicks.push(id); } };
+    nodes.set(id, node);
+  }
+  const doc = { getElementById: id => nodes.get(id) };
+  for (const target of ["#history-summary-select-button", "#history-summary-view-button", "#history-summary-versions-button"]) {
+    prepareSessionGuideMenus(doc, { target, view: "conversation" });
+  }
+  assert.deepEqual(clicks.splice(0), ["history-summary-menu-button"], "successive summary steps keep one disclosure open");
+  prepareSessionGuideMenus(doc, { target: "#history-summary-toolbar", view: "summary-selection" });
+  assert.deepEqual(clicks.splice(0), ["history-summary-menu-button"], "source selection needs no open menu");
+  for (const view of ["details", "mobile-details"]) prepareSessionGuideMenus(doc, { target: "#upload-local-turns-button", view });
+  assert.deepEqual(clicks.splice(0), ["session-options-button"]);
+  prepareSessionGuideMenus(doc, { target: "#message-input", view: "conversation" });
+  assert.deepEqual(clicks.splice(0), ["session-options-button"]);
+  prepareSessionGuideMenus(doc, { target: "#download-codex-button", view: "snapshot" });
+  assert.deepEqual(clicks.splice(0), ["session-options-button"], "read-only download remains reachable inside Session options");
+  prepareSessionGuideMenus(doc, { target: "#settings-button" });
+  assert.deepEqual(clicks.splice(0), ["session-options-button"]);
+  setGuideMenuExpanded(doc, "history-summary-menu-button", true);
+  setGuideMenuExpanded(doc, "history-summary-menu-button", true);
+  setGuideMenuExpanded(doc, "history-summary-menu-button", false);
+  setGuideMenuExpanded(doc, "missing-optional-menu", false);
+  assert.deepEqual(clicks, ["history-summary-menu-button", "history-summary-menu-button"]);
+});
+
+test("mention guides target the composer rather than a transient unread reminder", () => {
+  for (const layout of ["desktop", "mobile"]) {
+    const mention = guideSteps("members", { layout }).find(item => item.id === "mention");
+    assert.equal(mention.target, "#message-input");
+    assert.equal(mention.view, "conversation");
+    assert.match(mention.text[0], /unread.*corner|corner.*unread/iu);
+    assert.doesNotMatch(mention.text.join(" "), /inbox|右上角 @|再点 @/iu);
+  }
+});
+
+test("member guide activates its workspace tab only when hidden", () => {
+  const pane = { hidden: true }; let opened = 0;
+  const doc = { getElementById: id => id === 'fw-pane-members' ? pane : null,
+    querySelector: selector => selector === '#file-workspace-host [data-open-tab="members"]'
+      ? { click: () => { pane.hidden = false; opened += 1; } } : null };
+  prepareMemberGuideTab(doc, "conversation"); assert.equal(opened, 0);
+  prepareMemberGuideTab(doc, "members"); prepareMemberGuideTab(doc, "members");
+  assert.equal(opened, 1);
+});
+
+test("tall mobile file guide sheets are scoped to the active isolated example", async () => {
+  const css = await readFile(new URL("../src/onboarding.css", import.meta.url), "utf8");
+  assert.match(css, /html\[data-example="true"\]\[data-mobile-workspace="true"\] body\.driver-active #project-code-dialog\[data-mobile-code="true"\]\s*\{\s*height: calc\(100dvh - 46px\); max-height: calc\(100dvh - 46px\); margin: 46px auto 0;/u);
 });
 
 test("mobile member guides select their focused invitation, join and project pages", () => {
@@ -109,16 +195,16 @@ test("mobile history follows the remote Agent and discussion workflow, not compu
 
 test("mobile file guides cover connection and status without hidden local file operations", () => {
   const steps = guideSteps("files", { layout: "mobile" });
-  assert.deepEqual(steps.map(item => item.id), ["files", "github", "github-account", "github-repository", "github-status", "gt-cloud", "enable", "continue"]);
+  assert.deepEqual(steps.map(item => item.id), ["browse-files", "browse-code", "browse-markdown", "browse-review", "edit-own", "files", "github", "github-account", "github-repository", "github-status", "gt-cloud", "enable", "continue"]);
   for (const item of steps) {
     assert.doesNotMatch(item.target, /code-runtime|code-(?:upload|download|recover|branch|merge)|github-code/);
     assert.ok(!["code-device", "code-branches", "code-github"].includes(item.view));
     for (const pair of [item.title, item.text]) { assert.ok(pair[0]); assert.match(pair[1], /[\u4e00-\u9fff]/u); }
   }
   const review = guideSteps("basics", { layout: "mobile" }).find(item => item.id === "review");
-  assert.equal(review.target, "#code-repository-status");
-  assert.equal(review.view, "code-overview");
-  assert.equal(guideSteps("files").length, 16, "the complete desktop workflow is unchanged");
+  assert.equal(review.target, ".fw-file-heading");
+  assert.equal(review.view, "workspace-review");
+  assert.equal(guideSteps("files").length, 21, "desktop keeps synchronization and merge controls after file browsing");
 });
 
 test("beginner copy explains shared history and summary limits without technical units", () => {

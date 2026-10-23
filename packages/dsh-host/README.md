@@ -7,27 +7,54 @@ installation, GatherThread does not load in DSH or alter the GatherThread
 server, Web app, Codex bridge, or Claude adapter.
 
 The normal path is the published `@deepseek-ai/dsh` CLI, not a DSH source
-checkout. The verified distribution is `@deepseek-ai/dsh@0.1.7-rc.2` with the
-`web` profile and its public `sessionPersistence` recovery surface. The
-source-only path remains fixed to `dsh-v0.1.7-rc.2`, commit
-`477b4f420553e8a52c2fbccc464d7561b239c443`, and is only an advanced diagnostic
-fallback. All version-sensitive Host calls remain inside `src/dsh-compat.ts`.
-The package does not install a DSH runtime dependency.
+checkout. This build's profile layer targets `0.2.1-rc.2`, the release bundled
+with the DeepSeek Harness desktop application, and serves both the `desktop` and
+`web` profiles of that release. The legacy source-only diagnostic remains fixed
+to `dsh-v0.1.7-rc.2`, commit `477b4f420553e8a52c2fbccc464d7561b239c443`; it is
+not an automatic fallback for the current layer. All version-sensitive Host calls remain inside
+`src/dsh-compat.ts`. The package does not install a DSH runtime dependency.
+
+### Supported releases
+
+| DSH release | Profile | Profile layer |
+|---|---|---|
+| `0.2.1-rc.2` (desktop app and `npx` Web) | `desktop`, `web` | `cordis.patch.yml` |
+| `0.1.7-rc.2` | `web`, `headless` | Immutable published `0.1.0-beta.2` artifact; `cordis.patch.dsh-0.1.yml` is its frozen source reference |
+
+`package.json` declares `engines.dsh: ">=0.2.1-rc.2 <0.3.0"` and the same range
+for an optional `@deepseek-ai/dsh` peer. Newer DSH checks `engines.dsh`; older
+`0.1.7-rc.2` ignores that field but checks the peer range before composing any
+bundle patch. An incompatible bundle is therefore refused before it can alter
+Connection. The optional peer does not install a DSH runtime. Use the immutable
+published `0.1.0-beta.2` artifact on `0.1.7-rc.2` instead: `0.2.1-rc.2` renamed
+Connection's trust service from `webRuntime` to `webStartup`, and one static row
+cannot inject both. The frozen YAML is a reference, not an alternative install
+for this build; the current manifest always selects `cordis.patch.yml`. This
+source change does not replace the published Beta 2 npm artifact.
+[ADR-0058](../../docs/adr/0058-dsh-desktop-profile-and-version-gated-plugin-layer.md)
+records the boundary.
 
 ## Plugin-first connection
 
 Use **Connect DeepSeek Harness → Download packages for this server** in GatherThread to download its source-matched DSH plugin TGZ. Replace the example path below with the downloaded file's full path:
 
 ```text
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
-npx @deepseek-ai/dsh@0.1.7-rc.2 web
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+npx @deepseek-ai/dsh@0.2.1-rc.2 web
 # In DSH: Settings -> GatherThread / 共序 -> Sign in and pair
+```
+
+The desktop application manages its own `desktop` profile, so install into that
+profile from its bundled CLI instead of starting a second Web server:
+
+```text
+dsh plugin --profile desktop add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
 
 On Windows, use a quoted path such as `C:/Users/you/Downloads/your-plugin.tgz`. The registry's `@gatherthread/dsh-host@0.1.0-beta.1` is an older build and does not include the current message-deletion safeguards. If server downloads are unavailable, [build the matching source checkout](../../docs/DSH_CONNECT.md#source-checkout-fallback); do not substitute the old npm build.
 
-Check the active CLI with `npx @deepseek-ai/dsh --version`. The normal start
-command already pins `0.1.7-rc.2`. The pinned DSH does not
+Check the pinned CLI with `npx @deepseek-ai/dsh@0.2.1-rc.2 --version`. The normal start
+command already pins `0.2.1-rc.2`. The pinned DSH does not
 expose the root CLI version as a stable Host service, so the package does not
 inspect npx cache paths or claim runtime-version introspection. The install
 command pins the exact verified CLI, while every required Host/Client service is
@@ -54,7 +81,7 @@ Before removal, use **Disconnect** inside the DSH panel to clear the local
 grant, then run:
 
 ```text
-npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web remove @gatherthread/dsh-host
+npx @deepseek-ai/dsh@0.2.1-rc.2 plugin --profile web remove @gatherthread/dsh-host
 ```
 
 The official command removes only this package dependency and profile layer;
@@ -94,9 +121,10 @@ bounded retries.
 Host and browser lifecycles are intentionally separate. Disabling the Host
 Loader entry immediately unregisters the status and RPC routes. Client bundle HMR uses
 the official client-module SSE/fiber refresh path, which drains the previous
-Slot and timer before registering one replacement. At this pinned DSH version,
-adding or removing a package from the client graph is observed by a newly loaded
-page; it is not treated as Host-entry disposal.
+Slot and timer before registering one replacement. The earlier `0.1.7-rc.2`
+native/browser gate checked that adding or removing a package from the client
+graph is observed by a newly loaded page, not treated as Host-entry disposal.
+That complete flow has not yet been re-run with the new `0.2.1-rc.2` pin.
 
 ## Project binding
 

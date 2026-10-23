@@ -1,7 +1,16 @@
-# Official GatherThread profile layer for the published DSH Web profile.
-# Installing this package is the explicit opt-in; no GatherThread credential is
-# present in this patch. Pairing and model selection happen inside DSH; every
-# active Project accessible to that identity is reconciled independently.
+# Official GatherThread profile layer for the published DSH Web and Desktop
+# profiles. Installing this package is the explicit opt-in; no GatherThread
+# credential is present in this patch. Pairing and model selection happen inside
+# DSH; every active Project accessible to that identity is reconciled
+# independently.
+#
+# This layer targets DSH 0.2.1-rc.2, the release the desktop application ships
+# and the release that renamed the bind-time trust service. `engines.dsh` and
+# the optional DSH peer range in package.json reject incompatible bundles before
+# composing the profile (older DSH reads only peers). The 0.1.7-rc.2 layer is frozen in
+# `cordis.patch.dsh-0.1.yml` for the `0.1.0-beta.2` artifact; the two layers
+# cannot be merged because the `connection` row must inject exactly one of
+# `webStartup` and `webRuntime`.
 
 - insert:
     - id: gatherthread-dsh-native
@@ -13,20 +22,18 @@
       config:
         enabled: true
 
-# DSH 0.1.5-rc.x dropped `webServer` from the Connection plugin's own inject list
-# (`["webServer", "credentials"]` became `["credentials"]`), moving it into a
-# nested scope that covers only DSH's new index-injection feature. Connection
-# still reads `owner.webServer` from its *providing* context -- cordis starts
-# every service lookup at the shadow origin, `(ctx[symbols.shadow] ?? ctx).fiber`
-# -- so `connection.rpc.handle()` raises "cannot get property \"webServer\"
-# without inject" for every caller, and the whole plugin tree fails to load.
-# 0.1.2-rc.1 kept the dependency at the top level, so restoring it here is what
-# makes the Host plugin load on both versions.
+# The Host plugin registers an RPC channel through `connection.rpc.handle()`.
+# Connection evaluates `owner.webServer` from its own providing fiber, so only
+# this row can supply `webServer`: adding it to the Host row instead leaves
+# `register()` raising `cannot get property "webServer" without inject`.
 #
-# A row patch replaces `inject` wholesale rather than merging, so each entry the
-# 0.1.5 row already declares is repeated: `webRuntime` still feeds this row's
-# `trustedHosts: !!js ctx.webRuntime.trustedHosts` expression, and `credentials`
-# is repeated so the row stays self-sufficient no matter how the Loader folds a
-# row's list together with the module's own `inject` export.
+# A row patch replaces `inject` wholesale rather than merging, so every name the
+# targeted version's own row already declares is repeated. DSH 0.2.1-rc.2 moved
+# Connection's trust source from `webRuntime` to `webStartup` (its web-app layer
+# now declares `inject: [webStartup]` with
+# `trustedHosts: !!js ctx.webStartup.trustedHosts`), and `webRuntime` is provided
+# only after the server binds. Injecting `webRuntime` therefore leaves the
+# required Connection row pending forever, which is why this layer names
+# `webStartup` and the 0.1.x layer names `webRuntime`.
 - id: connection
-  inject: [webRuntime, credentials, webServer]
+  inject: [webStartup, credentials, webServer]

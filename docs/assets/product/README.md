@@ -15,6 +15,8 @@ These assets accompany the [English product guide](../../PRODUCT_GUIDE.md) and [
 
 Application source: the `codex/product-docs-coding-demo` change based on `main` commit `2debc4049eb0e9b001b11cf752e65e25ac5a600f`; the final reviewed source is recorded by the accompanying PR. Captures refreshed on 2026-10-15, using the built app's `/app/example.html` with `locale=en` or `locale=zh-CN`, `theme=light`, and `topic=browse`. No production accounts, private conversations, credentials, real model calls or remote repositories were used.
 
+The two `16-project-code.jpg` images were refreshed on 2026-10-21 for the file-workspace onboarding update based on Beta 3 (`ac3828d0ff63617197bcaad34375b9a3fa82e402`). They show the real right-hand workspace and independently opened file tabs, not the former example-only source dialog. The other captures and approved poster compositions retain their separately recorded provenance above.
+
 Capture viewports: desktop 1440×1000, phone 390×844, tablet 820×1180, all at 2× pixel density. Phone/tablet captures use touch contexts and matching mobile user agents, and assert that the actual mobile layout is active and local-connection controls are hidden. Every guide image preserves the complete viewport and original aspect ratio. The numbered frames are documentation annotations, not application controls. This is Chromium capture evidence, not native Safari certification; interaction is checked separately by the browser tests.
 
 The product homepage keeps byte-identical publishing copies in `site/assets/product/{en,zh-CN}/`: `desktop.jpg` maps to the plain `11-focused-workspace.jpg`, `phone.jpg` to the plain `12-phone.jpg`, and `summary.jpg`, `github.jpg`, `review.jpg`, and `work.jpg` to annotated images 03, 09, 08, and 04 respectively. Rounded frames and glass materials are presentation CSS, not edits to the screenshot pixels. Homepage language switching selects the matching language folder.
@@ -28,6 +30,12 @@ ONBOARDING_ORIGIN=http://127.0.0.1:4173 node docs/assets/product/source/capture.
 ```
 
 The script uses local Playwright, or an absolute module path supplied with `PLAYWRIGHT_MODULE`. It captures both languages, remeasures annotations, updates homepage copies and rerenders the approved posters. Review the exported images before committing them.
+
+To refresh only the new Files workspace illustration in both languages, without recapturing unrelated scenes or posters:
+
+```sh
+PRODUCT_CAPTURE_SCENES=16-project-code ONBOARDING_ORIGIN=http://127.0.0.1:4173 node docs/assets/product/source/capture.mjs
+```
 
 ## Editing the annotations
 

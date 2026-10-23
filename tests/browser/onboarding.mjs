@@ -41,6 +41,7 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`${origin}/app/?mock=1`);
   await page.locator('#auth-view').waitFor({ state: 'visible' });
+  if (mobile) await page.locator('#interface-mode-use-mobile').click();
   await page.evaluate(async ({ locale, empty, viewer, deniedStorage }) => {
     if (locale === 'zh-CN') document.querySelector('#auth-language-button').click();
     window.realWrites = [];
@@ -91,7 +92,10 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
   return { page, context, frame };
 }
 async function start(page, topic) {
-  await openSettings(page); await page.locator(`[data-onboarding-topic="${topic}"]`).click();
+  await openSettings(page);
+  const entry = page.locator(`[data-onboarding-topic="${topic}"]`);
+  if (!await entry.isVisible()) await page.locator('.settings-navigation a[href="#settings-general"]').click();
+  await entry.click();
   const frame = await example(page); if (topic !== 'browse') await frame.locator(popup).waitFor(); return frame;
 }
 async function openSettings(page) {
@@ -109,6 +113,17 @@ async function checkSummarySettingsNavigation(page, locale) {
   assert.equal(await page.locator('#settings-sync').evaluate(node => node.nextElementSibling?.id), 'settings-summaries');
   assert.equal(await page.locator('#settings-sync #settings-history-context-mode').count(), 0, 'summary controls are in their own section');
   const originalUrl = page.url();
+  if (await page.locator('#settings-dialog').getAttribute('data-mobile-settings') === 'true') {
+    await link.click();
+    await page.waitForFunction(() => document.activeElement?.id === 'settings-summaries');
+    assert.equal(await page.locator('#settings-history-context-mode').isVisible(), true, 'mobile opens the dedicated Summaries page');
+    assert.equal(page.url(), originalUrl, 'mobile Settings navigation keeps the project/session URL');
+    await page.locator('.mobile-settings-back').click();
+    await page.locator('.settings-navigation a[href="#settings-general"]').click();
+    assert.equal(await page.locator('[data-onboarding-topic="files"]').isVisible(), true, 'mobile General exposes the file guide');
+    await page.locator('#close-settings-button').click();
+    return;
+  }
   await page.waitForFunction(() => document.activeElement?.id === 'close-settings-button');
   let reachedSummaryLink = false;
   for (let index = 0; index < 12; index++) {
@@ -211,6 +226,10 @@ async function assertStep(frame, item, size) {
   assert.equal(state.closeOutline, 'none', 'close has no green outline');
   if (item.target) {
     assert.notEqual(state.target, 'driver-dummy-element', item.id);
+    if (/^#history-summary-(?:select|view|versions)-button$/u.test(item.target)) {
+      assert.equal(await frame.locator('#history-summary-menu-button').getAttribute('aria-expanded'), 'true', 'guide discloses the shared summary menu');
+    }
+    if (item.id === 'mention') assert.equal(state.target, 'message-input', 'the mention guide never relies on an unread-only reminder');
     if (item.id === 'create-conversation') assert.equal(state.target, 'new-session-button');
     if (item.id === 'invite') assert.equal(state.inviteSubmit, true);
     assert.ok(state.overlap < 1, `${item.id} card covers control: ${JSON.stringify(state)}`);
@@ -304,16 +323,15 @@ try {
     window.exampleResultReturnFocus = document.activeElement;
   }, { capture: true, once: true }));
   await fresh.locator('#example-project-open').click();
+  await fresh.locator('#example-project-frame[aria-busy="false"]').waitFor();
   const result = fresh.frameLocator('#example-project-frame');
   await result.locator('#signup').click();
+  await result.locator('#signup:disabled').waitFor();
   assert.equal(await result.locator('#confirmation').innerText(), 'You’re signed up.');
   assert.equal(await result.locator('#signup').isDisabled(), true);
-  await fresh.locator('#example-files-tab').click();
-  assert.equal(await fresh.locator('#example-file-list button').count(), 6);
-  assert.match(await fresh.locator('#example-source-code').innerText(), /addEventListener\('click'/);
   await fresh.locator('#example-project-version').selectOption('branch-maya');
-  await fresh.waitForFunction(() => document.getElementById('example-source-code').textContent.includes('See you Saturday'));
-  await fresh.locator('#example-preview-tab').click();
+  await fresh.locator('#example-project-frame[aria-busy="false"]').waitFor();
+  await result.locator('#signup:not([disabled])').waitFor();
   await result.locator('#signup').click();
   assert.equal(await result.locator('#confirmation').innerText(), 'You’re signed up! See you Saturday.');
   await fresh.locator('#example-project-close').click();
@@ -321,6 +339,12 @@ try {
   // Native close queues its event after removing the open attribute.
   await fresh.waitForFunction(() => document.activeElement === window.exampleResultReturnFocus, null, { timeout: 3000 });
   assert.equal(await fresh.evaluate(() => document.activeElement === window.exampleResultReturnFocus), true, 'closing result restores the actual previous focus in each browser');
+  await fresh.locator('#example-files-open').click();
+  await fresh.locator('.fw-tree [data-path="src"]').click();
+  await fresh.locator('.fw-tree [data-path="src/signup.js"]').click();
+  await fresh.locator('.fw-file-pane .cm-content').waitFor();
+  assert.match(await fresh.locator('.fw-file-pane .cm-content').innerText(), /addEventListener\('click'/);
+  assert.equal(await fresh.locator('#example-file-list, #example-source-code').count(), 0, 'source uses the real file workspace');
   // In-example language preview/cancel/save retains practice and stays local.
   await fresh.locator('#message-input').fill('Keep this practice message');
   await fresh.locator('#send-chat-button').click();
@@ -363,9 +387,11 @@ try {
   await fresh.waitForFunction(() => document.documentElement.lang === 'zh-CN');
   await fresh.locator('.example-toolbar select').selectOption('files');
   fresh = await example(page); await fresh.locator(popup).waitFor();
-  await fresh.locator('.driver-popover-next-btn').click(); await fresh.locator('#project-code-dialog[open]').waitFor();
+  await fresh.locator('.fw-tree').waitFor();
+  await fresh.locator('.driver-popover-next-btn').click();
+  await fresh.locator('.fw-file-pane .cm-content').waitFor();
   await fresh.locator('.example-toolbar button').first().click(); assert.equal(await fresh.locator(popup).count(), 0);
-  assert.equal(await fresh.locator('#project-code-dialog[open]').count(), 0);
+  assert.equal(await fresh.locator('#project-code-dialog[open]').count(), 0, 'browsing files never opens the old sync dialog');
   await fresh.locator('.example-toolbar select').selectOption('basics'); fresh = await example(page);
   await fresh.locator(popup).waitFor(); await fresh.locator('.driver-popover-next-btn').press('Escape');
   await page.locator('.onboarding-example-dialog').waitFor({ state: 'detached' });
@@ -373,6 +399,7 @@ try {
   await page.locator('.onboarding-example-dialog').waitFor({ state: 'detached' });
   // The ordinary disclosure stays unclipped and preserves keyboard order.
   const disclosure = page.locator('#session-context-details > summary');
+  await page.locator('#session-options-button').click();
   await disclosure.click();
   await page.waitForFunction(() => document.querySelector('.session-context-panel').parentElement === document.body);
   await disclosure.press('Tab');
@@ -412,14 +439,32 @@ try {
   }
   assert.equal(reachedLastPanelControl, true, 'Tab must reach the last panel control');
   await page.keyboard.press('Tab');
-  assert.equal(await page.locator('#mentions-button').evaluate((node) => node === document.activeElement), true, 'disabled summary never traps focus');
-  await page.locator('#mentions-button').press('Shift+Tab');
-  assert.equal(await page.locator('#upload-local-turns-button').evaluate((node) => node === document.activeElement), true,
-    JSON.stringify(await page.evaluate(() => ({ active: document.activeElement?.id, driverActive: document.body.classList.contains('driver-active'), open: document.querySelector('#session-context-details').open,
-      controls: [...document.querySelector('.session-context-panel').querySelectorAll('button, input, select, a[href]')].map(node => ({ id: node.id, disabled: node.disabled, hidden: Boolean(node.closest('[hidden]')), rects: node.getClientRects().length })) }))));
-  await page.locator('#upload-local-turns-button').press('Tab');
+  const afterPanel = await page.evaluate(() => {
+    const node = document.activeElement;
+    return { id: node.id, inPanel: document.querySelector('.session-context-panel').contains(node),
+      inOptions: document.querySelector('#session-options-panel').contains(node),
+      usable: node !== document.body && !node.disabled && !node.closest('[hidden]') && node.getClientRects().length > 0 };
+  });
+  assert.equal(afterPanel.usable, true, 'disabled or unread-only controls never receive focus');
+  assert.equal(afterPanel.inPanel, false, 'Tab leaves status details without a focus trap');
+  await page.keyboard.press('Shift+Tab');
+  if (browserName === 'webkit' && !afterPanel.inOptions) {
+    // macOS WebKit may skip ordinary buttons in native reverse traversal when
+    // full keyboard access is off. It must still land on a visible page control.
+    assert.equal(await page.evaluate(() => {
+      const node = document.activeElement;
+      return node !== document.body && !node.closest('[hidden]') && node.getClientRects().length > 0
+        && !document.querySelector('.session-context-panel').contains(node);
+    }), true, 'native reverse traversal never enters hidden options');
+  } else {
+    assert.equal(await page.evaluate(() => document.activeElement.id), afterPanel.inOptions ? 'upload-local-turns-button' : 'session-options-button',
+      'reverse traversal returns to the open details or the compact options trigger after automatic dismissal');
+  }
+  await page.keyboard.press('Tab');
   assert.equal(await page.locator('#history-summary-select-button').isDisabled(), true, 'disabled-control fixture survives polling');
-  assert.equal(await page.locator('#mentions-button').evaluate((node) => node === document.activeElement), true);
+  if (browserName !== 'webkit' || afterPanel.inOptions) {
+    assert.equal(await page.evaluate(() => document.activeElement.id), afterPanel.id, 'forward traversal rejoins the document at the same visible control');
+  }
   let reachedDocumentEnd = false;
   for (let i = 0; i < 200; i++) {
     const focus = await page.evaluate(() => {
@@ -443,6 +488,7 @@ try {
     delete window.__disabledSummaryFixture;
   });
   await page.keyboard.press('Escape');
+  if (await page.locator('#session-options-button').getAttribute('aria-expanded') !== 'true') await page.locator('#session-options-button').click();
   await disclosure.click(); await page.locator('#logout-button').click();
   await page.locator('#auth-view:not([hidden])').waitFor();
   assert.equal(await page.locator('.session-context-panel').isVisible(), false, 'logout hides private disclosure');

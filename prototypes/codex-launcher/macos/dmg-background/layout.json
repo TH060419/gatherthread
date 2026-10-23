@@ -4,7 +4,7 @@
   "scale": 2,
   "logo": "logo/png/lockup-color-transparent-light-1200px.png",
   "logo_sha256": "25d384f65a331c578703232b11e7c907a4ae5de3f50cac3666b2131f09707073",
-  "version": "Launcher 0.1.2",
+  "version": "Launcher 0.1.3",
   "title": "拖入 Applications，开始使用",
   "subtitle": "Drag the app into Applications, then open it there.",
   "arrow": [430, 210, 290, 210],

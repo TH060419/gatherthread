@@ -28,6 +28,14 @@ import {
   withProjectEnabledHarnesses,
 } from "../src/settings.js";
 
+test("narrower sidebar defaults preserve all explicitly saved widths", () => {
+  assert.deepEqual(normalizeSettings({}).layout, { leftRailPixels: 300, rightPanelPixels: 380, composerPixels: 280 });
+  for (const widths of [{ leftRailPixels: 340, rightPanelPixels: 420 }, { leftRailPixels: 312, rightPanelPixels: 356 }, { leftRailPixels: 260, rightPanelPixels: 260 }, { leftRailPixels: 280, rightPanelPixels: 280 }]) {
+    const layout = { ...widths, composerPixels: 330 };
+    assert.deepEqual(normalizeSettings({ version: SETTINGS_VERSION, layout }).layout, layout);
+  }
+});
+
 test("settings normalize invalid or stale browser data without retaining unknown fields", () => {
   const normalized = normalizeSettings({
     version: 0,
@@ -46,7 +54,7 @@ test("settings normalize invalid or stale browser data without retaining unknown
   assert.equal(normalized.appearance.ambientCanvas, "pronounced");
   assert.equal(normalized.appearance.highContrast, true);
   assert.equal(normalized.layout.leftRailPixels, 210);
-  assert.equal(normalized.layout.rightPanelPixels, 480);
+  assert.equal(normalized.layout.rightPanelPixels, 900);
   assert.equal(normalized.layout.composerPixels, 280);
   assert.equal(normalized.sync.contextBudgetBytes, CONTEXT_BUDGET_MAX_BYTES);
   assert.equal(normalized.composer.enterBehavior, "newline");
@@ -404,8 +412,8 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
   assert.equal(migrated.appearance.ambientCanvas, "pronounced");
   assert.equal(migrated.appearance.highContrast, true);
   assert.equal(migrated.appearance.textScalePercent, 90);
-  assert.equal(migrated.layout.leftRailPixels, 340);
-  assert.equal(migrated.layout.rightPanelPixels, 320);
+  assert.equal(migrated.layout.leftRailPixels, 300);
+  assert.equal(migrated.layout.rightPanelPixels, 380);
 
   const customizedLayout = createSettingsStore({
     getItem: () => JSON.stringify({

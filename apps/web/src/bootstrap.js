@@ -55,7 +55,7 @@
     confirmReload();
   }, true);
   try {
-    await import("./main.js?v=20261012-content-1");
+    await import("./main.js?v=20261018-tabs-2");
   } catch {
     root.dataset.bootState = "failed";
     if (recovery()?.report) recovery().report("startup");
