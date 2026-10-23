@@ -287,6 +287,10 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     intent.busy = true; delete intent.observedRunIds; delete intent.observedTeams; epoch++; render(); clearIntentProblem(intent);
     intent.promise = (async () => {
       try {
+        const emergency = intent.kind === "disable" || intent.kind === "run" && ["pause", "stop"].includes(intent.input.action);
+        if (!context().writable && !(emergency && canControl())) {
+          throw Object.assign(new Error("Team changes require current writable history."), { status: 409, code: "conflict" });
+        }
         const result = await intent.call();
         if (!current(gen)) return;
         // A Delete receipt has no state revision. A newer observed definition
@@ -631,9 +635,11 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
   function renderButtons() {
     const team = saved(), pending = pendingFor(editId), stopping = intents.get(`disable:${editId}`), enabling = pendingEnable(editId);
     const saving = pending.some(intent => intent.kind === "save");
-    saveButton.textContent = t(saving ? "Saving…" : dirty ? "Save" : "Saved"); saveButton.disabled = !dirty || saving;
-    addBlank.disabled = !draft || draft.nodes.length >= 16; clearButton.disabled = !draft?.nodes.length;
-    addFavorite.disabled = !favorites.length || draft?.nodes.length >= 16;
+    const writable = context().writable;
+    for (const input of [nameInput, rulesInput, calls, minutes]) input.disabled = !writable;
+    saveButton.textContent = t(saving ? "Saving…" : dirty ? "Save" : "Saved"); saveButton.disabled = !writable || !dirty || saving;
+    addBlank.disabled = !writable || !draft || draft.nodes.length >= 16; clearButton.disabled = !writable || !draft?.nodes.length;
+    addFavorite.disabled = !writable || !favorites.length || draft?.nodes.length >= 16;
     const testing = team?.test_status === "running" || pending.some(intent => intent.kind === "test");
     testButton.textContent = t(testing ? "Test running…" : !dirty && canEnable(team) ? "Successfully connected" : "Test");
     testButton.disabled = !context().writable || saving || testing || !draft?.nodes.length || (!dirty && canEnable(team));
@@ -641,7 +647,7 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     enableButton.textContent = t(stopping?.busy ? "Stopping…" : active ? "Disable" : "Enable");
     enableButton.className = `team-glass ${active ? "team-danger" : "team-enable"}`;
     // A pending enable does not block independent disable, even before its acknowledgement.
-    enableButton.disabled = active ? Boolean(stopping?.busy) : !context().writable || dirty || !canEnable(team) || saving || testing;
+    enableButton.disabled = active ? !canControl() || Boolean(stopping?.busy) : !writable || dirty || !canEnable(team) || saving || testing;
     testState.textContent = t(dirty ? "Changes require a new test." : testing ? "Test running…" : team?.test_status === "failed"
       ? "Test failed. Review the modules and try again." : canEnable(team) ? "Successfully connected" : "Not tested");
     if (!dirty && ["running", "failed"].includes(team?.test_status) && !pending.some(intent => intent.kind === "test")) {
@@ -700,15 +706,15 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
         void control(team, !active).catch(showError);
       }, `team-glass team-toggle ${active ? "team-danger" : "team-enable"}`);
       toggle.dataset.teamControl = `team:${team.id}:toggle`;
-      toggle.disabled = active ? Boolean(stop?.busy) : !context().writable || !canEnable(team); toggle.setAttribute("aria-label", `${t(active ? "Disable" : "Enable")}: ${team.draft.name}`);
+      toggle.disabled = active ? !canControl() || Boolean(stop?.busy) : !context().writable || !canEnable(team); toggle.setAttribute("aria-label", `${t(active ? "Disable" : "Enable")}: ${team.draft.name}`);
       const remove = button("Delete", () => { if (!confirm(t("Delete this saved Team? Accepted tasks keep their original configuration."))) return;
         void mutate(`delete:${team.id}`, "delete", team.id, { idempotency_key: makeKey("team-delete") }, value => api.deleteTeamItem("team", team.id, value), () => {
           teams = teams.filter(item => item.id !== team.id); if (editId === team.id) { editId = null; dirty = false; overview.hidden = false; editor.hidden = true; }
         }).catch(showError);
-      }, "text-button team-delete"); remove.dataset.teamControl = `team:${team.id}:delete`; remove.setAttribute("aria-label", `${t("Delete")}: ${team.draft.name}`);
+      }, "text-button team-delete"); remove.disabled = !context().writable; remove.dataset.teamControl = `team:${team.id}:delete`; remove.setAttribute("aria-label", `${t("Delete")}: ${team.draft.name}`);
       row.append(edit, toggle, remove); list.append(row);
     }
-    add.disabled = teams.length >= 5; add.title = add.disabled ? t("Team limit reached (5). Delete one to add another.") : "";
+    add.disabled = !context().writable || teams.length >= 5; add.title = teams.length >= 5 ? t("Team limit reached (5). Delete one to add another.") : "";
     renderButtons(); renderRuns(); refreshFavoriteControl?.();
     if (focusKey) {
       const replacement = [...dialog.querySelectorAll("[data-team-control]")].find(node => node.dataset.teamControl === focusKey);

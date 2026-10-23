@@ -176,7 +176,7 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
           // Empty means this intent has been fenced. A newer validation or
           // action owns its own hint, even when this transport finishes later.
           if (message && !errorNode.textContent && !errorNode.teamProblemIntent) {
-            if (current.action === "stop_team") errorNode.teamProblemIntent = error;
+            if (current.action === "stop_team") errorNode.teamProblemIntent = { problem: error, text: message };
             errorNode.textContent = message;
           }
         }

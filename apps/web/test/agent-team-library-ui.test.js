@@ -160,6 +160,12 @@ test("a closed Team dialog remains reachable for Pause and Stop during replay wi
   pause.click(); await flush();
   assert.equal(f.calls.filter(call => call[0] === "run-control")[0][3].action, "pause");
   assert.equal(f.button("Resume").disabled, true, "replay must still block new native work");
+  f.document.body.querySelector(".team-row-edit").click();
+  assert.equal(f.el("team-save").disabled, true);
+  assert.equal(f.el("team-add-blank").disabled, true);
+  assert.equal(f.el("team-name").disabled, true);
+  await assert.rejects(f.ui.controlRun(f.runs[0], "resume"), /current writable history/u);
+  assert.equal(f.calls.filter(call => call[0] === "run-control").length, 1, "only Pause reaches the API during replay");
   f.update({ controlWritable: false });
   assert.equal(f.hostButton.disabled, true); assert.equal(f.button("Stop").disabled, true);
 });
