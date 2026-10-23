@@ -96,9 +96,13 @@ test("resume retains Codex/DSH exact original routing, quote and mentions", () =
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const mainSource = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
-const clearStart = mainSource.indexOf("function clearStaleTeamComposerProblem() {");
-const clearEnd = mainSource.indexOf("\n}\n", clearStart) + 2;
-const clearSource = mainSource.slice(clearStart, clearEnd);
+function composerCleanerSource(source) {
+  const normalized = source.replace(/\r\n?/gu, "\n");
+  const start = normalized.indexOf("function clearStaleTeamComposerProblem() {");
+  const end = normalized.indexOf("\n}\n", start);
+  assert.ok(start >= 0 && end > start, "the actual composer invalidation function must be present");
+  return normalized.slice(start, end + 2);
+}
 function fixture(api = {}, options = {}) {
   const own = request();
   let context = { scope: "scope1", contentRevision: 0, userId: "me", sessionId: "s1", writable: true, sending: false, events: [own, progress(own.id)] };
@@ -143,8 +147,8 @@ for (const obsolete of [false, true]) {
   });
 }
 
-for (const newer of [false, true]) {
-  test(`an already displayed Stop failure is cleared by the real composer invalidation without clearing newer text (${newer})`, async () => {
+for (const lineEnding of ["\n", "\r\n"]) for (const newer of [false, true]) {
+  test(`an already displayed Stop failure is cleared by the real composer invalidation without clearing newer text (${newer}, ${JSON.stringify(lineEnding)})`, async () => {
     const problem = Object.assign(Error("safe failure"), { code: "agent_team_model_unavailable" });
     const f = fixture(); let obsolete = false;
     f.setContext({ teamRun: { id: "team-a", status: "running" }, stopTeam: async () => { throw problem; },
@@ -153,7 +157,7 @@ for (const newer of [false, true]) {
     assert.equal(f.errorNode.teamProblemIntent.problem, problem);
     assert.equal(f.errorNode.teamProblemIntent.text, f.errorNode.textContent);
     const context = vm.createContext({ sendError: f.errorNode, teamsUi: { isObsoleteError: value => obsolete && value === problem } });
-    vm.runInContext(clearSource, context);
+    vm.runInContext(composerCleanerSource(mainSource.replace(/\r?\n/gu, lineEnding)), context);
     if (newer) f.errorNode.textContent = "Keep the new input validation";
     obsolete = true; context.clearStaleTeamComposerProblem();
     assert.equal(f.errorNode.textContent, newer ? "Keep the new input validation" : "");
