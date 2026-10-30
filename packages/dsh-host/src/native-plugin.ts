@@ -1,3 +1,5 @@
+import { dshWorkspaceAction, DshWorkspaceError, workspaceErrorCode } from "./workspace.js";
+import { DshWorkspaceFiles } from "./workspace-files.js";
 import {
   ensureProjectWorkspace,
   HttpCollaborationClient,
@@ -75,6 +77,7 @@ export const inject = [
 ] as const;
 
 const RPC_ENDPOINTS = new Set([
+  "workspace/action",
   "status/get",
   "pairing/start",
   "pairing/cancel",
@@ -154,6 +157,8 @@ export interface DshNativeCatalog {
 }
 
 interface NativeOwner {
+  workspaceFiles?(sessionId: string): { files: DshWorkspaceFiles; nativeSessionId: string } | undefined;
+  workspaceRuntime?(sessionId: string): string | undefined;
   stop(): Promise<void>;
   /** Republish a refreshed model catalog; absent for owners that captured one already. */
   updateExecutionProfiles?(profiles: readonly DshRuntimeExecutionProfile[]): Promise<void>;
@@ -263,6 +268,7 @@ export class DshNativeHostController {
   #configureTask: Promise<DshNativePublicState> | undefined;
   #configureAbort: AbortController | undefined;
   #disconnecting = false;
+  #workspaceAbort = new AbortController();
   #recoverableError: DshNativePublicState["recoverableError"];
   #starting = false;
   #started = false;
@@ -548,9 +554,28 @@ export class DshNativeHostController {
     return completion;
   }
 
+  async workspaceAction(payload: unknown, signal: AbortSignal): Promise<unknown> {
+    this.#assertAvailable();
+    const grant = this.#grant;
+    if (!grant) throw new DshWorkspaceError("workspace_unpaired");
+    return dshWorkspaceAction(payload, { grant,
+      signal: AbortSignal.any([signal, this.#abort.signal, this.#workspaceAbort.signal]),
+      ...(this.#options.fetch ? { fetch: this.#options.fetch } : {}),
+      assertCurrent: () => {
+        this.#assertAvailable();
+        if (this.#grant !== grant || this.#disconnecting) throw new DshWorkspaceError("workspace_connection_changed");
+      },
+      runtime: (projectId, sessionId) => this.#owners.get(projectId)?.workspaceRuntime?.(sessionId),
+      profiles: () => this.#executionProfiles,
+      files: (projectId, sessionId) => this.#owners.get(projectId)?.workspaceFiles?.(sessionId),
+    });
+  }
+
   async disconnect(): Promise<DshNativePublicState> {
     this.#assertAvailable();
     this.#disconnecting = true;
+    this.#workspaceAbort.abort();
+    this.#workspaceAbort = new AbortController();
     this.#configureAbort?.abort(new Error("GatherThread DSH configuration canceled by disconnect"));
     try {
       // A delayed configuration/credential write must settle before clearing the
@@ -1100,6 +1125,9 @@ export function registerNativeDshRpc(
     }
     try {
       switch (endpoint) {
+        case "workspace/action":
+          try { return rpcSuccess(await controller.workspaceAction(payload, signal)); }
+          catch (error) { return rpcFailure(workspaceErrorCode(error), "GatherThread workspace action did not finish."); }
         case "status/get":
           exactInput(payload, new Set());
           return rpcSuccess(controller.publicState());
@@ -1215,6 +1243,8 @@ async function createProductionOwner(options: {
     signal: ownerAbort.signal,
   });
   const codeRuntimes = new Map<string, DshManagedConnector>();
+  const fileSessions = new Map<string, () => string>();
+  const workspaceFiles = new DshWorkspaceFiles(config.workspacePath, () => nativeWorkspace.isBusy());
   const manager = new DshProjectManager({
     config,
     api,
@@ -1226,6 +1256,8 @@ async function createProductionOwner(options: {
         rootSignal: ownerAbort.signal,
         status: options.status,
         workspaceTitle: options.binding.projectName,
+        beforeExecution: (requestId, signal) => workspaceFiles.capture(requestId, signal),
+        onNativeSession: getId => fileSessions.set(input.session.id, getId),
       });
       codeRuntimes.set(input.session.id, connector);
       return connector;
@@ -1338,6 +1370,14 @@ async function createProductionOwner(options: {
   codeTimer.unref();
   let stopPromise: Promise<void> | undefined;
   return {
+    workspaceFiles: (sessionId) => {
+      const connector = codeRuntimes.get(sessionId), getId = fileSessions.get(sessionId);
+      return connector && !connector.stopped && getId ? { files: workspaceFiles, nativeSessionId: getId() } : undefined;
+    },
+    workspaceRuntime: (sessionId) => {
+      const connector = codeRuntimes.get(sessionId);
+      return connector && !connector.stopped ? connector.executionRuntimeId : undefined;
+    },
     updateExecutionProfiles: (profiles) => manager.updateExecutionProfiles(profiles),
     localSyncStatuses: () => manager.localSyncStatuses(),
     setLocalAutoUpload: (sessionId, enabled) => manager.setLocalAutoUpload(sessionId, enabled),
@@ -1352,6 +1392,7 @@ async function createProductionOwner(options: {
       stopPromise ??= (async () => {
         options.signal.removeEventListener("abort", abortFromRoot);
         clearInterval(codeTimer);
+        workspaceFiles.clear(); fileSessions.clear();
         ownerAbort.abort(new Error("GatherThread native DSH manager stopped"));
         await localCodeTail;
         await codeSync.stop();
@@ -1371,6 +1412,8 @@ function createNativeManagedConnector(options: {
   readonly rootSignal: AbortSignal;
   readonly status: DshStatusController;
   readonly workspaceTitle: string;
+  readonly beforeExecution?: (requestId: string, signal: AbortSignal) => Promise<void>;
+  readonly onNativeSession?: (getId: () => string) => void;
 }): DshManagedConnector {
   const sessionAbort = new AbortController();
   const abortFromRoot = () => sessionAbort.abort(options.rootSignal.reason);
@@ -1407,6 +1450,7 @@ function createNativeManagedConnector(options: {
       signal: sessionAbort.signal,
     }),
     host,
+    ...(options.beforeExecution ? { beforeExecution: options.beforeExecution } : {}),
     stateStore: new FileConnectorStateStore(options.input.config.statePath),
     actorUserId: options.input.actorUserId,
     executionGate: options.input.executionGate,
@@ -1425,6 +1469,7 @@ function createNativeManagedConnector(options: {
       });
     },
   });
+  options.onNativeSession?.(() => host.sessionId);
   let stopPromise: Promise<void> | undefined;
   return {
     get stopped() { return connector.stopped; },

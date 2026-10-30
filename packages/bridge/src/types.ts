@@ -131,6 +131,7 @@ export interface SessionRuntimeSummary {
 }
 
 export interface SessionMemberSummary {
+  userId?: string;
   displayName: string;
   role: "owner" | "participant" | "viewer";
   runtime: SessionRuntimeSummary | null;

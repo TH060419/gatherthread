@@ -17,7 +17,7 @@ export const AVATAR_CATALOG = Object.freeze([
   { id: "owl", label: "Owl", image: face("#f0edd3", "#8f9c74", '<path d="m18 35-3-20 25 13 25-13-3 20" fill="#8f9c74"/>', '<circle cx="30" cy="43" r="10" fill="#fff5ed"/><circle cx="50" cy="43" r="10" fill="#fff5ed"/><circle cx="30" cy="43" r="3" fill="#253442"/><circle cx="50" cy="43" r="3" fill="#253442"/><path d="m36 52 4 6 4-6z" fill="#e9b969"/>') },
 ]);
 
-const robotImage = svgImage('<rect x="2" y="2" width="76" height="76" rx="24" fill="#fff5d6"/><path d="M40 15v10" stroke="#75531f" stroke-width="5"/><circle cx="40" cy="13" r="5" fill="#75531f"/><rect x="16" y="25" width="48" height="38" rx="12" fill="#75531f"/><circle cx="30" cy="41" r="4" fill="#fff5d6"/><circle cx="50" cy="41" r="4" fill="#fff5d6"/><path d="M30 53h20" stroke="#fff5d6" stroke-width="3"/>');
+export const robotImage = svgImage('<rect x="2" y="2" width="76" height="76" rx="24" fill="#fff5d6"/><path d="M40 15v10" stroke="#75531f" stroke-width="5"/><circle cx="40" cy="13" r="5" fill="#75531f"/><rect x="16" y="25" width="48" height="38" rx="12" fill="#75531f"/><circle cx="30" cy="41" r="4" fill="#fff5d6"/><circle cx="50" cy="41" r="4" fill="#fff5d6"/><path d="M30 53h20" stroke="#fff5d6" stroke-width="3"/>');
 export const avatarImage = (id) => AVATAR_CATALOG.find((entry) => entry.id === id)?.image ?? null;
 export const isAgentReply = (event) => event?.type === "agent_response";
 export function eventExecutionOwner(event) {

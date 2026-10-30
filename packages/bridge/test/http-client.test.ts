@@ -198,6 +198,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   assert.equal((await client.listProjects())[0]?.name, "Demo project");
   assert.equal((await client.listProjectSessions("p1"))[0]?.projectId, "p1");
   assert.deepEqual((await client.listSessionMembers("s1"))[0], {
+    userId: "u1",
     displayName: "Alice",
     role: "owner",
     runtime: { purpose: "execution", harness: "codex", provider: "openai", model: "gpt-5.6-sol", status: "online" },

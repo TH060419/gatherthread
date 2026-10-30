@@ -135,6 +135,7 @@ function fixture(options: { preset?: boolean; workspacePath?: string; projection
     contextBinding: { apiUrl: "https://fixture.invalid/v1", projectId: "fixture-project", sessionId: cloudSessionId },
     ...(options.preset ? { agentPreset: "standard" } : {}),
     moduleImporter: async () => ({ freezeMessage: (message: unknown) => structuredClone(message),
+      createSystemMessage: () => ({ id: "empty-system-head", role: "system", source: { kind: "system-prompt" }, content: [] }),
       createUserMessage: (message: any) => ({ ...message, id: `native-input-${modelInputs.length}`, role: "user" }) }),
     modelSelectionInstaller(scope, selection) {
       routes.push({ scope, selection: structuredClone(selection.current) });

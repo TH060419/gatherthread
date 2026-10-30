@@ -50,6 +50,9 @@ async function loadClient(options: {
       return hookState.get(index) as { current: unknown };
     },
     createElement(type: unknown, props: unknown, ...children: unknown[]) {
+      // Message rendering has its own hook-state tests; this harness exercises workspace navigation.
+      if (typeof type === 'function' && type.name === 'WorkspaceMessageBody') return { type: 'message-body', props, children: [(props as any).item.content] };
+      if (typeof type === 'function' && type.name === 'WorkspaceDialog') return type({ ...props as object, children });
       return { type, props, children };
     },
   };
@@ -60,6 +63,7 @@ async function loadClient(options: {
     setTimeout: options.setTimeout ?? globalThis.setTimeout,
     clearTimeout: options.clearTimeout ?? globalThis.clearTimeout,
     AbortController,
+    crypto: globalThis.crypto,
     Date,
     Number,
     JSON,
@@ -104,13 +108,17 @@ function collectedText(node: unknown): string {
 /** Find the first rendered element whose props satisfy a predicate, depth-first. */
 function findElement(
   node: unknown,
-  predicate: (element: { readonly type: unknown; readonly props: Record<string, any> }) => boolean,
-): { readonly type: unknown; readonly props: Record<string, any> } | undefined {
+  predicate: (element: { readonly type: unknown; readonly props: Record<string, any>; readonly children?: unknown }) => boolean,
+): { readonly type: unknown; readonly props: Record<string, any>; readonly children?: unknown } | undefined {
+  if (Array.isArray(node)) {
+    for (const child of node) { const match = findElement(child, predicate); if (match) return match; }
+    return undefined;
+  }
   if (node === null || typeof node !== "object") return undefined;
   const element = node as { type?: unknown; props?: Record<string, any>; children?: unknown };
   if (element.type !== undefined && element.props !== null && typeof element.props === "object"
-    && predicate({ type: element.type, props: element.props })) {
-    return { type: element.type, props: element.props };
+    && predicate({ type: element.type, props: element.props, children: element.children })) {
+    return { type: element.type, props: element.props, children: element.children };
   }
   for (const child of Array.isArray(element.children) ? element.children : []) {
     const found = findElement(child, predicate);
@@ -123,12 +131,14 @@ test("dsh.client bundle registers the official settings Slot without credential 
   const loaded = await loadClient();
   assert.equal(loaded.handoff.id, "@gatherthread/dsh-host");
   assert.deepEqual(Array.from(loaded.plugin.inject), ["slots", "connection", "sessions"]);
+  const registeredSlots: string[] = [];
   let registration: { options: Record<string, unknown>; component: () => unknown } | undefined;
   loaded.plugin.apply({
     sessions: { async refresh() {} },
     slots: {
       inject(name: string, create: () => unknown) {
-        assert.equal(name, "settings.section");
+        registeredSlots.push(name);
+        assert.ok(["main", "sidebar.panellist", "settings.section"].includes(name));
         create();
       },
       register(options: Record<string, unknown>, component: () => unknown) {
@@ -137,6 +147,12 @@ test("dsh.client bundle registers the official settings Slot without credential 
       },
     },
   });
+  assert.deepEqual(registeredSlots, ["main", "sidebar.panellist", "settings.section"]);
+  const markLiteral = loaded.source.match(/^const WORKSPACE_MARK = (".*");$/m)?.[1];
+  assert.ok(markLiteral);
+  const mark = JSON.parse(markLiteral) as string;
+  const approved = await readFile(path.join(packageRoot, "../../logo/svg/mark-color-transparent-light.svg"));
+  assert.deepEqual(Buffer.from(mark.split(",")[1]!, "base64"), approved);
   assert.equal(registration?.options.id, "gatherthread");
   assert.equal(typeof registration?.component, "function");
   assert.doesNotMatch(loaded.source, /GATHERTHREAD_DSH_TOKEN|GATHERTHREAD_TOKEN|Authorization|localStorage|sessionStorage/);
@@ -931,4 +947,187 @@ test("Client refuses a Host whose running pair is absent from its own target lis
   });
   assert.match(rendered, /状态暂不可用/u, `inconsistent claim must fail closed; rendered: ${rendered}`);
   assert.doesNotMatch(rendered, /已验证兼容/u);
+});
+
+async function workspaceClient(options: { failFirstSend?: boolean; lateRead?: Promise<unknown>; requestState?: 'paused' | 'running' | 'completed'; failFirstCreate?: boolean; limitFirstRead?: boolean } = {}) {
+  const timers: Array<() => void> = [], delays: number[] = [], sent: any[] = []; let reads = 0;
+  const loaded = await loadClient({ setTimeout: ((callback: () => void, delay: number) => { timers.push(callback); delays.push(delay); return timers.length; }) as unknown as typeof setTimeout, clearTimeout: (() => {}) as typeof clearTimeout });
+  let component!: () => unknown;
+  const page = (input: any) => ({ connectionId: 'connection-a', projectId: 'project-a', sessionId: input.sessionId,
+    cursor: 3, contentRevision: 0, reset: false, hasMore: false, canWrite: true, canManage: true,
+    members: [{ name: '参与者 B', role: 'participant', online: true }], target: { runtimeId: 'runtime-a', provider: 'deepseek', model: 'fixture' },
+    messages: [{ id: 'event-1', sequence: 1, type: 'human_chat', actorId: 'user-b', author: '参与者 B', timestamp: '2026-10-29T12:00:00Z', content: input.sessionId === 'session-a' ? '蓝色按钮' : '独立会话信息', status: null, deleted: false, truncated: false },
+      ...(options.requestState ? [{ id: 'request-2', sequence: 2, type: 'agent_request', controllable: true, actorId: 'user-a', author: 'A', timestamp: '2026-10-29T12:00:00Z', content: '原任务', status: null },
+        { id: 'progress-3', sequence: 3, type: options.requestState === 'completed' ? 'agent_response' : 'agent_progress', replyTo: 'request-2', actorId: 'user-a', author: 'A', timestamp: '2026-10-29T12:00:00Z', content: '进度', status: options.requestState === 'paused' ? 'paused' : null }] : [])] });
+  loaded.plugin.apply({ sessions: {}, slots: { inject(_name: string, create: () => void) { create(); },
+    register(input: any, render: () => unknown) { if (input.name === 'main') component = render; } },
+    connection: { rpc: { async call(_channel: string, endpoint: string, input: any) {
+      assert.equal(endpoint, 'workspace/action');
+      if (input.action === 'list') return { ok: true, value: { connectionId: 'connection-a', webUrl: 'https://workspace.example/app/', actor: { id: 'user-a', name: '参与者 A' }, projects: [{ id: 'project-a', name: '项目', role: 'owner' }] } };
+      if (input.action === 'sessions') return { ok: true, value: { connectionId: 'connection-a', projectId: 'project-a', sessions: [{ id: 'session-a', name: '多人', mode: 'multi' }, { id: 'session-b', name: '独立', mode: 'solo' }] } };
+      if (input.action === 'read') {
+        if (options.limitFirstRead && reads++ === 0) return { ok: false, error: { code: 'workspace_rate_limited' } };
+        return options.lateRead && input.sessionId === 'session-a' ? options.lateRead : { ok: true, value: page(input) };
+      }
+      if (input.action === 'send') { sent.push(structuredClone(input)); return options.failFirstSend && sent.length === 1 ? { ok: false, error: { code: 'workspace_unavailable' } } : { ok: true, value: { connectionId: input.connectionId, projectId: input.projectId, sessionId: input.sessionId } }; }
+      if (['pause', 'resume', 'createSession', 'renameSession'].includes(input.action)) {
+        sent.push(structuredClone(input));
+        return options.failFirstCreate && sent.length === 1 ? { ok: false, error: { code: 'workspace_unavailable' } }
+          : { ok: true, value: { connectionId: input.connectionId, projectId: input.projectId, sessionId: input.sessionId || 'session-new',
+            ...(['createSession', 'renameSession'].includes(input.action) ? { session: { id: input.sessionId || 'session-new', name: input.title, mode: input.mode || 'multi' } } : {}) } };
+      }
+      throw new Error('Unexpected action');
+    } } } });
+  let cleanup: (() => void) | undefined;
+  const render = () => loaded.render(component);
+  const settle = async () => { await new Promise<void>(resolve => setImmediate(resolve)); return render(); };
+  const restart = async () => { cleanup?.(); render(); cleanup = loaded.getEffect()?.(); return settle(); };
+  await restart();
+  let tree = render();
+  findElement(tree, e => e.type === 'select')!.props.onChange({ target: { value: 'project-a' } });
+  await settle();
+  await restart(); tree = render();
+  const selectSession = async (id: string) => {
+    findElement(render(), e => e.type === 'button' && e.props['data-session-id'] === id)!.props.onClick();
+    await settle();
+    return restart();
+  };
+  await selectSession('session-a');
+  return { render, settle, selectSession, sent, delays, retry: () => { timers.at(-1)?.(); return settle(); }, cleanup: () => cleanup?.() };
+}
+
+test('workspace renders participant attribution and keeps chat/Agent actions separate', async () => {
+  const fixture = await workspaceClient();
+  try {
+    const tree = fixture.render();
+    assert.match(collectedText(tree), /参与者 B/);
+    assert.match(collectedText(tree), /蓝色按钮/);
+    assert.match(collectedText(tree), /发送聊天/);
+    assert.match(collectedText(tree), /请求本机 DSH/);
+    assert.equal(findElement(tree, e => e.type === 'textarea')!.props.maxLength, 8000);
+  } finally { fixture.cleanup(); }
+});
+
+test('workspace retry reuses the immutable send identity and disables concurrent sends', async () => {
+  const fixture = await workspaceClient({ failFirstSend: true });
+  try {
+    findElement(fixture.render(), e => e.type === 'textarea')!.props.onChange({ target: { value: '根据共享信息总结' } });
+    const tree = fixture.render();
+    const button = findElement(tree, e => e.type === 'button' && e.props.className === 'gtw-primary')!;
+    button.props.onClick(); button.props.onClick();
+    await fixture.settle();
+    assert.equal(fixture.sent.length, 1);
+    const retryTree = fixture.render();
+    const retry = findElement(retryTree, e => e.type === 'button' && String(e.props.onClick).includes('attempt.kind'))!;
+    assert.ok(retry); retry.props.onClick();
+    await fixture.settle();
+    assert.equal(fixture.sent.length, 2);
+    assert.deepEqual(fixture.sent[0], fixture.sent[1]);
+    assert.equal(findElement(fixture.render(), e => e.type === 'textarea')!.props.value, '');
+  } finally { fixture.cleanup(); }
+});
+
+test('workspace ignores a late response from a conversation that was left', async () => {
+  let resolve!: (value: unknown) => void;
+  const lateRead = new Promise<unknown>(done => { resolve = done; });
+  const fixture = await workspaceClient({ lateRead });
+  try {
+    await fixture.selectSession('session-b');
+    resolve({ ok: true, value: { connectionId: 'connection-a', projectId: 'project-a', sessionId: 'session-a', messages: [{ id: 'stale', content: 'DO_NOT_SHOW_OLD_SESSION' }] } });
+    const tree = await fixture.settle();
+    assert.match(collectedText(tree), /独立会话信息/);
+    assert.doesNotMatch(collectedText(tree), /DO_NOT_SHOW_OLD_SESSION/);
+  } finally { fixture.cleanup(); }
+});
+
+test('workspace replies use a canonical reference and selected model, without copying quote text into the prompt', async () => {
+  const f = await workspaceClient();
+  try {
+    findElement(f.render(), e => e.type === 'button' && collectedText(e) === '引用')!.props.onClick();
+    findElement(f.render(), e => e.type === 'textarea')!.props.onChange({ target: { value: '请总结' } });
+    findElement(f.render(), e => e.type === 'button' && e.props.className === 'gtw-primary')!.props.onClick();
+    await f.settle();
+    assert.equal(f.sent[0].replyTo, 'event-1'); assert.equal(f.sent[0].content, '请总结');
+    assert.deepEqual(f.sent[0].selection, { provider: 'deepseek', model: 'fixture' });
+  } finally { f.cleanup(); }
+});
+for (const state of ['paused', 'running', 'completed'] as const) {
+  test(`workspace controls reflect canonical ${state} state and preserve the draft`, async () => {
+    const f = await workspaceClient({ requestState: state });
+    try {
+      findElement(f.render(), e => e.type === 'textarea')!.props.onChange({ target: { value: '尚未发送的聊天草稿' } });
+      const button = findElement(f.render(), e => e.type === 'button' && e.props.className === 'gtw-primary')!;
+      assert.equal(collectedText(button), state === 'paused' ? '继续 Agent' : state === 'running' ? '暂停 Agent' : '请求本机 DSH');
+      if (state !== 'completed') {
+        button.props.onClick(); button.props.onClick(); await f.settle();
+        assert.equal(f.sent.length, 1); assert.equal(f.sent[0].action, state === 'paused' ? 'resume' : 'pause');
+        assert.equal(f.sent[0].requestId, 'request-2');
+        assert.equal(findElement(f.render(), e => e.type === 'textarea')!.props.value, '尚未发送的聊天草稿');
+      }
+    } finally { f.cleanup(); }
+  });
+}
+test('workspace session save retry keeps an immutable operation identity', async () => {
+  const f = await workspaceClient({ failFirstCreate: true });
+  try {
+    findElement(f.render(), e => e.type === 'button' && e.props['aria-label'] === '＋ 新建会话')!.props.onClick();
+    findElement(f.render(), e => e.type === 'input' && e.props.type !== 'search')!.props.onChange({ target: { value: '新讨论' } });
+    const save = findElement(f.render(), e => e.type === 'button' && collectedText(e) === '保存')!;
+    save.props.onClick(); save.props.onClick(); await f.settle();
+    assert.equal(f.sent.length, 1);
+    assert.equal(findElement(f.render(), e => e.type === 'input' && e.props.type !== 'search')!.props.disabled, true);
+    findElement(f.render(), e => e.type === 'button' && collectedText(e) === '重试保存')!.props.onClick();
+    await f.settle(); assert.deepEqual(f.sent[0], f.sent[1]);
+  } finally { f.cleanup(); }
+});
+test('workspace rate limiting backs off, then recovers without clearing the draft', async () => {
+  const f = await workspaceClient({ limitFirstRead: true });
+  try {
+    assert.match(collectedText(f.render()), /请求过于频繁/);
+    assert.equal(f.delays.at(-1), 30000);
+    const recovered = await f.retry();
+    assert.doesNotMatch(collectedText(recovered), /请求过于频繁/);
+    assert.match(collectedText(recovered), /蓝色按钮/);
+    assert.equal(f.delays.at(-1), 5000);
+  } finally { f.cleanup(); }
+});
+test('workspace session search does not change the active conversation or its draft', async () => {
+  const f = await workspaceClient();
+  try {
+    findElement(f.render(), e => e.type === 'textarea')!.props.onChange({ target: { value: '保留在多人会话的草稿' } });
+    findElement(f.render(), e => e.type === 'input' && e.props.type === 'search')!.props.onChange({ target: { value: '独立' } });
+    assert.equal(findElement(f.render(), e => e.props['data-session-id'] === 'session-a'), undefined);
+    assert.ok(findElement(f.render(), e => e.props['data-session-id'] === 'session-b'));
+    findElement(f.render(), e => e.type === 'button' && collectedText(e) === '发送聊天')!.props.onClick();
+    await f.settle();
+    assert.equal(f.sent[0].sessionId, 'session-a');
+    assert.equal(f.sent[0].content, '保留在多人会话的草稿');
+  } finally { f.cleanup(); }
+});
+test('workspace compact model dialog preserves selection and Web management stays on the paired server', async () => {
+  const f = await workspaceClient();
+  try {
+    findElement(f.render(), e => e.type === 'button' && e.props.className === 'gtw-profile-trigger')!.props.onClick();
+    const chooser = findElement(f.render(), e => e.type === 'dialog' && e.props['aria-label'] === 'Agent、模型与推理强度')!;
+    assert.ok(findElement(chooser, e => e.type === 'select' && String(e.props.value).includes('fixture')));
+    findElement(chooser, e => e.type === 'button' && collectedText(e) === '完成')!.props.onClick();
+    assert.equal(findElement(f.render(), e => e.type === 'dialog'), undefined);
+    findElement(f.render(), e => e.type === 'button' && e.props.className === 'gtw-manage-trigger')!.props.onClick();
+    const menu = findElement(f.render(), e => e.type === 'dialog')!;
+    const link = findElement(menu, e => e.type === 'a' && collectedText(e).includes('共享我的 Agent'))!;
+    assert.equal(link.props.href, 'https://workspace.example/app/#project=project-a&session=session-a');
+    assert.equal(link.props.rel, 'noopener noreferrer');
+    assert.match(collectedText(menu), /前往网页版/);
+    assert.equal(link.props.target, '_blank');
+    link.props.onClick();
+    assert.match(collectedText(f.render()), /管理我的 Agent → 共享我的 Agent/);
+    const address = findElement(f.render(), e => e.props['aria-label'] === '项目网页地址')!;
+    assert.equal(address.props.value, link.props.href);
+    assert.equal(address.props.readOnly, true);
+    const team = findElement(f.render(), e => e.type === 'a' && collectedText(e).includes('Agent 团队'))!;
+    team.props.onClick();
+    assert.match(collectedText(f.render()), /管理我的 Agent → Agent 团队/);
+    await findElement(f.render(), e => e.type === 'button' && collectedText(e) === '复制地址')!.props.onClick();
+    assert.match(collectedText(f.render()), /无法自动复制/);
+  } finally { f.cleanup(); }
 });

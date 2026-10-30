@@ -68,3 +68,4 @@ Current account guidance (2026-10-08): `main` uses verified-email registration a
 | [0062](0062-per-member-session-visibility.md) | Manage Solo and Multi visibility per project member | proposed / local implementation | 2026-10-20 |
 | [0063](0063-solo-session-visibility.md) | Choose a Solo conversation's read audience at creation | superseded by ADR-0062 | 2026-10-20 |
 | [0064](0064-portable-configuration-and-empty-solo.md) | Portable configuration and conditional empty Solo cleanup | accepted / local implementation | 2026-10-30 |
+| [0065](0065-dsh-native-collaboration-workspace.md) | Native DSH workspace over canonical collaboration history | proposed / local prototype | 2026-10-29 |

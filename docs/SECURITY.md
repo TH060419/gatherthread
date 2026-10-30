@@ -472,3 +472,30 @@ session-plan preview rows have no public execution route and are not silently
 promoted into enabled saved Teams. Existing backup/provider retention boundaries
 remain as defined above. See
 [ADR-0061](adr/0061-account-private-saved-agent-teams.md).
+
+
+The native DSH workspace prototype keeps the pairing grant in the Host credential
+service. Its strict action allowlist accepts no URL, caller-selected filesystem root, arbitrary event
+payload or foreign execution profile. Each call revalidates its account/device
+scope and project/session access; stale UI replies are discarded. Canonical
+visible text crosses to the Client through bounded previews/explicit expansion,
+rendered with DSH's public untrusted Markdown renderer (or plain text fallback).
+Raw HTML never executes. HTTP(S) images follow DSH's lazy-loading/no-referrer
+policy and may contact their authored origin; the plugin supplies no credential
+or local-media resolver. Image preview/drag uses the host-provided DSH services.
+Local Markdown file links are explicit read-only previews through the existing
+project-file allowlist, not arbitrary native paths or attachment uploads. Avatar
+images are build-time copies of the reviewed Web catalog; users cannot supply
+an avatar URL. Preview bounds do not substitute for authoritative execution context. See the
+[workspace contract](INTERFACE_CONTRACTS.md#dsh-workspace-rpc-prototype).
+
+The explicit native file action additionally permits bounded local project text
+for the paired user's writable sessions. It rejects absolute/traversal/private
+paths, symlinks, hardlinks and generated directories, validates root/ancestor and
+file identities, and refuses recognized secrets, binary or oversized content.
+Local previews/baselines never enter canonical history automatically. Comparison
+metadata is incomplete when any relevant scan is omitted; absence then cannot
+prove deletion. Cloud reads/writes use the grant's origin and server ACLs, never
+browser-supplied endpoints or credentials. Local editing is not exposed. Native
+DSH's own file viewer retains its upstream permissions; this plugin does not
+proxy arbitrary native paths or promise cross-process filesystem write locking.

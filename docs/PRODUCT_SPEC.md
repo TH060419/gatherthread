@@ -498,3 +498,45 @@ their own Team-run allowance and do not debit a later task's configured call/tim
 budget; they still consume normal provider and shared-Agent allowances and can
 incur their ordinary usage. See the execution boundary in
 [Security](SECURITY.md#agent-team-preview-boundary).
+
+
+## DSH collaboration workspace prototype
+
+The native DSH sidebar workspace supports selecting an accessible project/session,
+reading participant-attributed shared messages, sending human chat separately from
+requesting the local DSH, and previewing effective shared context. Chat display
+uses native DSH Markdown, highlighted code, tables/math, HTTP(S) images and image
+previews when the host exposes its image service. File references open a bounded
+read-only local-project copy, clearly distinguished from the sender's original
+attachment. Catalog avatars identify members; Agent replies add the existing
+Agent badge to their server-verified execution owner's avatar. Long messages can
+be expanded and switched to source text. There is no new binary upload endpoint.
+Users can
+create Multi/private Solo sessions, rename sessions they manage, copy/reply to
+messages, choose an advertised native model/reasoning effort, and pause/resume
+their ordinary local requests. Its layout follows Web: a project/session rail
+on the left, conversation and composer in the center, members/context on the
+right, and model/reasoning plus Agent management beside the composer actions.
+The narrower DSH main panel opens members in a dialog; both rails can be hidden.
+DSH supplies the visual theme. Connection management reuses the native settings
+component; unmigrated sharing/Team/project administration is explicitly labelled
+as opening Web at the current server/project/session, without transferring credentials.
+Execution progress remains expandable. It uses the
+same canonical history, Solo/Multi access and exact-runtime execution rules as
+Web. Latest-runtime target and first-phase scope are recorded in
+[ADR-0065](adr/0065-dsh-native-collaboration-workspace.md). Prototype controls do
+not imply that all Web administration, sharing or Team features have moved to DSH.
+
+The file entry separates local files, local changes, GT cloud and GitHub. Local
+previews are read-only and never automatically become shared context. A user may
+insert a relative path, or explicitly put a short text excerpt into the unsent
+chat draft; sending remains a separate action. Native DSH navigation opens the
+exact bound conversation's file panel for rich previews. Local editing uses the
+user's editor. Multi/Solo separate conversation visibility, not project files.
+Cloud text edits save only to a writable branch, with the loaded base commit and
+stable retry identity. Conflicts retain edits; switching/closing warns about
+unsaved text. In-memory drafts survive panel navigation, but not page reload or
+Host restart. Git synchronization has a direct project-scoped entry and retains
+its existing local consent, busy/conflict checks and separate download step.
+Image/document attachments, file creation/move/delete and cloud review/merge
+remain in the existing native/Web tools; these controls do not imply parity.

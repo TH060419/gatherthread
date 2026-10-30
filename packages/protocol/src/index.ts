@@ -817,3 +817,5 @@ export interface ApiErrorBody {
 export * from "./hosted-github.js";
 export * from "./registration.js";
 export * from "./cloud-api.js";
+
+export * from "./dsh-workspace.js";

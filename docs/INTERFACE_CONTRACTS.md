@@ -368,6 +368,69 @@ The published MCP surface is intentionally narrower than the internal collaborat
 - Persistent connector and DSH state must carry a version. A state change needs atomic migration or a safe, actionable refusal; never guess at an old structure.
 - Upstream version support is explicit. An unsupported Codex App Server or DSH Host API must fail safely and preserve local/cloud data.
 
+### DSH workspace RPC (prototype)
+
+`/gatherthread` adds `workspace/action`. Its strict request and response contracts
+are `DshWorkspaceInputSchema` / `DshWorkspaceResponseSchemas` in
+`packages/protocol/src/dsh-workspace.ts`; this native envelope uses camelCase,
+while the unchanged `/v1` HTTP layer keeps snake_case.
+
+- `list` returns the paired actor, active projects, an opaque connection identity
+  and the paired server's public `/app/` URL (no token or query). Web-only management
+  links use that server plus explicit project/session IDs, never a fixed production URL.
+  `sessions` returns visible active sessions in the selected project.
+- `read` takes `afterSequence` and optional `contentRevision`; it reads 20 canonical
+  events per page and advances across filtered events. A changed content revision
+  resets replay. The panel retains at most 500 recent visible messages and clears
+  inaccessible content on revoked access or a changed account. Visible content
+  previews remain capped at 4,000 characters. The optional session avatar endpoint
+  supplies only reviewed catalog IDs; a 404 falls back to initials, while authorization
+  failures still clear inaccessible content. Shared reply attribution uses server-owned
+  `sharedExecution`, never a payload claim.
+- `message` expands one exact canonical event ID/sequence at the current content
+  revision, rechecking the same actor/project/session scope. It returns at most
+  32,000 characters and an explicit truncation flag, never tools or erased payloads.
+  A revision mismatch requires replay before retry. Expansion stays local UI state,
+  cleared on navigation, deletion revision or loss of access.
+- `context` reads the effective server context, never a raw-history fallback. The
+  preview returns at most 30 items / 2,000 characters each, with explicit
+  truncation. It is invalidated when canonical history advances. These display
+  limits do not replace the connector's execution context policy.
+- `send` explicitly chooses `chat` or `agent`, caps text at 8,000 characters and
+  requires a stable idempotency key. Agent requests must identify the current
+  selected session's local DSH runtime. An optional provider/model/reasoning
+  selection must exactly match the Host's advertised native execution catalog;
+  it does not change the saved default. Quotes use canonical `replyTo` IDs and
+  the composer includes `contentRevision`. Foreign runtimes, arbitrary models,
+  browser-supplied URLs and raw payload overrides are refused.
+- `createSession` uses a stable key and explicitly creates private Solo or
+  project-visible Multi; `renameSession` requires the server's session-management
+  role. Both reuse the existing canonical session APIs.
+- `discardEmptySolo` uses Beta 6's conditional `/discard-empty` endpoint. The
+  Host requires an owned Solo in the current project; the server atomically
+  verifies emptiness. Only this Client's newly created, unused Solo candidates
+  are checked on explicit navigation. Drafts and unknown send outcomes retain
+  them. Unsupported or failed cleanup never falls back to a normal DELETE.
+- `pause` resolves an exact canonical request by ID/sequence and requires its
+  author, current local runtime and content revision. The existing server pause
+  API controls the claim. `resume` re-reads at most 1,000 following events, requires
+  a paused nonterminal ordinary request, and appends the original content and
+  exact execution selection under a stable retry key. Shared, Team, summary and
+  cloud requests are excluded. Like Web, resumption is a new request using current
+  shared context, not restoration of interrupted internal reasoning.
+- Every action rechecks the current device, project/session access and grant
+  lifetime. Writes require owner/participant roles and, for Solo, ownership. The
+  server rechecks authorization again when accepting the mutation.
+- Responses are allowlisted, schema-checked and capped at 256 KiB. User text is
+  rendered as text, not HTML. Requests have an 18-second Host deadline; the Client
+  applies a 22-second receipt deadline. Timeout does not prove non-delivery.
+- Leaving a scope aborts reads and ignores late responses. Pending sends keep
+  their original body/identity for explicit retry. Panel state is memory-only;
+  reload does not claim durable recovery. `workspace_*` errors use fixed UI copy
+  and never forward private exception text, credential values or native paths.
+
+See [ADR-0065](adr/0065-dsh-native-collaboration-workspace.md).
+
 ## Web presentation boundary
 
 `session-toolbar.js` groups the existing summary action IDs under `history-summary-menu-button` and session metadata/status actions under `session-options-button`. Presentation changes preserve their authorization, selection and exact execution paths. The existing `mentions-button` is now a hidden-by-default timeline jump control, not a persistent inbox-dialog trigger; its accessible name reports unread count and intent. `message-actions.js` derives tab-local read state from actually visible, current, undeleted mention messages and fences delayed navigation by authenticated account/project and navigation generation. Bounded non-content read IDs use account/project-scoped session storage with a memory fallback, not a server read-receipt mutation; the authenticated mentions GET contract is unchanged.
@@ -890,3 +953,17 @@ require a reload rather than silently ignoring new response fields. No client
 can start a saved Team through ordinary request/continuation paths. No new user-facing MCP execution authority,
 package version, publication or deployment is introduced by this preview. See
 [ADR-0061](adr/0061-account-private-saved-agent-teams.md) for the durable boundary.
+
+`files` requires connection/project/session scope and a strict operation union.
+Local operations (`localTree`, `localRead`, `localChanges`, `localDiff`, `baseline`,
+`native`) resolve the active owner's workspace; the caller cannot supply a root
+or native identity. Read-only session actors cannot use the local capability.
+Cloud operations (`branches`, `tree`, `content`, `history`, `changes`, `save`)
+reuse the existing file-workspace input/result schemas, including their nested
+HTTP snake_case fields. The native `save` subset permits one write of up to
+64 KiB; saves keep the same base commit and idempotency key on retry. No server
+migration is involved. File lists cap at 300 entries, individual text at 64 KiB,
+and private baseline content at 2 MiB; truncation/incomplete comparisons are
+explicit. No baseline persists across owner shutdown. `native` returns only the
+exact bound local Session ID; public DSH navigation is optional and fails with
+manual-open guidance when unavailable.

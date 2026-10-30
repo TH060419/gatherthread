@@ -253,3 +253,23 @@ disabled or deleted. Product flow, quotas, HTTP contracts and security controls
 are owned by their respective canonical documents; the durable split between
 configuration and execution is recorded in
 [ADR-0061](adr/0061-account-private-saved-agent-teams.md).
+
+
+## Native DSH workspace projection
+
+The DSH bundle now contributes a sidebar entry and main workspace panel alongside
+its existing settings panel. The Client calls the native Host `workspace/action`
+RPC; `packages/dsh-host/src/workspace.ts` revalidates the paired scope and maps
+canonical `/v1` responses to bounded visible data. Agent requests re-enter the
+existing DSH connector rather than a second execution loop. See
+[ADR-0065](adr/0065-dsh-native-collaboration-workspace.md) and the
+[RPC contract](INTERFACE_CONTRACTS.md#dsh-workspace-rpc-prototype).
+
+`workspace-files.ts` owns bounded private file previews and volatile per-project
+comparison baselines. Ordinary local connector execution captures a baseline
+before prompting; it does not depend on DSH's native workspace-change service,
+which excludes subagent sessions. Comparisons are project-wide observations,
+not exact per-Agent attribution. Shared-executor/native-chat work is not an
+additional automatic capture trigger. Cloud operations proxy the existing file
+workspace contracts through the paired Host, retaining authoritative server ACLs
+and Git conflict checks; this is not a second synchronization engine.
