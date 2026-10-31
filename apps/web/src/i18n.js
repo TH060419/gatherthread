@@ -934,7 +934,7 @@ const ZH_CN = Object.freeze({
   "Role": "角色",
   "Participant": "参与者",
   "Viewer": "访者",
-  "Participants edit multi sessions, create their own solo sessions, and read everyone else's solo sessions. Viewers are read only everywhere.": "参与者可编辑 Multi，并可创建自己的 Solo；访者在所有位置均为只读。",
+  "Participants can create Multi and personal Solo sessions, and write in Multi or their own Solo. Viewers are read only everywhere.": "参与者可创建 Multi 和自己的 Solo，并在 Multi 或自己的 Solo 中发言；访者在所有位置均为只读。",
   "Expires in": "有效期",
   "1 hour": "1 小时",
   "24 hours": "24 小时",

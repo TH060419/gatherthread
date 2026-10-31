@@ -70,3 +70,4 @@ Current account guidance (2026-10-08): `main` uses verified-email registration a
 | [0064](0064-portable-configuration-and-empty-solo.md) | Portable configuration and conditional empty Solo cleanup | accepted / local implementation | 2026-10-30 |
 | [0065](0065-dsh-native-collaboration-workspace.md) | Native DSH workspace over canonical collaboration history | proposed / local prototype | 2026-10-29 |
 | [0066](0066-isolated-macos-desktop-workspace.md) | Isolated macOS desktop workspace and local connection management | proposed / local prototype | 2026-10-31 |
+| [0067](0067-participant-multi-creation.md) | Participants may create Multi sessions | accepted | 2026-11-01 |

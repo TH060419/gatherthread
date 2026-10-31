@@ -434,12 +434,24 @@ test("participants create creator-owned solo sessions while project owners and v
       idempotency_key: "member-personal-solo-mode",
     }), (error: unknown) => error instanceof ApiError && error.status === 403);
 
-    assert.throws(() => f.service.createSession(f.member, {
+    const multiInput = {
       project_id: project.id,
-      idempotency_key: "member-illegal-multi-create",
-      mode: "multi",
-      title: "Not allowed",
-    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+      idempotency_key: "member-multi-create",
+      mode: "multi" as const,
+      title: "Team discussion",
+    };
+    const multi = f.service.createSession(f.member, multiInput);
+    assert.equal(multi.session.owner_user_id, f.member.user_id);
+    assert.equal(f.database.membershipRole(multi.session.id, f.member.user_id), "participant");
+    assert.equal(f.service.createSession(f.member, multiInput).event.id, multi.event.id);
+    assert.throws(() => f.service.createSession(f.member, { ...multiInput, title: "Changed" }),
+      (error: unknown) => error instanceof ApiError && error.status === 409);
+    for (const actor of [f.member, f.owner]) {
+      assert.ok(f.service.appendEvent(actor, multi.session.id, {
+        idempotency_key: `multi-chat-${actor.user_id}`, type: "human_chat", visibility: "session",
+        payload: { text: "Shared discussion" },
+      }));
+    }
     assert.throws(() => f.service.appendEvent(f.owner, created.session.id, {
       idempotency_key: "owner-illegal-personal-solo-chat",
       type: "human_chat",
@@ -462,6 +474,10 @@ test("participants create creator-owned solo sessions while project owners and v
     }), (error: unknown) => error instanceof ApiError && error.status === 403);
 
     f.service.setProjectMembership(f.owner, project.id, f.member.user_id, "viewer");
+    assert.throws(() => f.service.createSession(f.member, multiInput),
+      (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.createSession(f.member, { ...multiInput, idempotency_key: "viewer-new-multi" }),
+      (error: unknown) => error instanceof ApiError && error.status === 403);
     assert.throws(() => f.service.appendEvent(f.member, created.session.id, {
       idempotency_key: "viewer-illegal-personal-solo-chat",
       type: "human_chat",

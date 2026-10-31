@@ -521,8 +521,8 @@ test("HTTP project participants create personal solos that remain read only to t
     })).status, 403);
     assert.equal((await api(running.origin, "/v1/projects/personal-http/sessions", {
       method: "POST", token: participant.body.data.token,
-      body: { idempotency_key: "participant-cannot-create-multi", mode: "multi", title: "Forbidden" },
-    })).status, 403);
+      body: { idempotency_key: "participant-create-multi", mode: "multi", title: "Team discussion" },
+    })).status, 201);
     assert.equal((await api(running.origin, `/v1/sessions/${created.body.data.session.id}/events`, {
       method: "POST", token: participant.body.data.token,
       body: {
