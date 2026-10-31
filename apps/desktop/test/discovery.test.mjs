@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile, rm, stat, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm, stat, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { DesktopHost } from '../src/host.mjs';
 import { ProgramStore } from '../src/program-store.mjs';
-import { programCandidates } from '../src/program-discovery.mjs';
+import { isAppPrivatePath, programCandidates } from '../src/program-discovery.mjs';
+import { probeExecutable } from '../src/executable.mjs';
 const root = new URL('../../../.local/desktop-build/discovery-tests/', import.meta.url);
 async function fixture(t) {
   await mkdir(root, { recursive: true }); const dir = await mkdtemp(new URL('case-', root));
@@ -12,10 +13,17 @@ async function fixture(t) {
   const store = new ProgramStore(path.join(dir, 'preferences.json'));
   const executable = async (relative, version = 'codex-cli 0.166.0') => {
     const file = path.join(dir, relative); await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, `#!/bin/sh\nprintf '%s\\n' '${version}'\n`, { mode: 0o700 }); return file;
+    await writeFile(file, version, { mode: 0o700 }); return file;
   };
+  // Exercise real discovery, file validation and version parsing on every OS;
+  // only the platform-specific child process is a fixture.
+  const probe = (file, harness, env) => probeExecutable(file, harness, env, {
+    platform: 'linux', execFileImpl: (command, _args, _options, done) => {
+      readFile(command, 'utf8').then(stdout => done(null, stdout, ''), error => done(error, '', ''));
+    },
+  });
   const host = options => new DesktopHost({ environment: 'test', origin: 'https://test.gatherthread.cn',
-    resources: { node: process.execPath }, ui: {}, programStore: store, candidates: async () => [], ...options });
+    resources: { node: process.execPath }, ui: {}, programStore: store, candidates: async () => [], probe, ...options });
   return { dir, store, executable, host };
 }
 test('auto-detection prefers the saved location and verifies it again on restart', async t => {
@@ -24,7 +32,7 @@ test('auto-detection prefers the saved location and verifies it again on restart
   const first = f.host(); await first.discover('codex');
   assert.equal(first.status().executables[0].label, file);
   assert.equal(first.status().detection[0].remembered, true);
-  await writeFile(file, "#!/bin/sh\nprintf 'codex-cli 0.167.0\\n'\n");
+  await writeFile(file, 'codex-cli 0.167.0');
   const second = f.host(); await second.discover('codex');
   assert.equal(second.status().executables[0].version, 'codex-cli 0.167.0');
 });
@@ -44,9 +52,11 @@ test('corrupt or oversized preferences do not break discovery', async t => {
 });
 test('concurrent preferences writes keep both harnesses and private file permissions', async t => {
   const f = await fixture(t);
-  await Promise.all([f.store.set('codex', '/test/codex'), f.store.set('claude-code', '/test/claude')]);
-  assert.deepEqual(await f.store.read(), { codex: '/test/codex', 'claude-code': '/test/claude' });
-  assert.equal((await stat(f.store.file)).mode & 0o777, 0o600);
+  const codex = path.join(f.dir, 'codex'), claude = path.join(f.dir, 'claude');
+  await Promise.all([f.store.set('codex', codex), f.store.set('claude-code', claude)]);
+  assert.deepEqual(await f.store.read(), { codex, 'claude-code': claude });
+  // Windows exposes synthesized mode bits rather than POSIX permissions.
+  if (process.platform !== 'win32') assert.equal((await stat(f.store.file)).mode & 0o777, 0o600);
 });
 for (const relative of ['Application.app/Contents/Resources/codex', 'npm-install/node_modules/.bin/codex'])
   test(`selecting the container resolves ${relative}`, async t => {
@@ -109,10 +119,11 @@ test('aliases are probed once and failures are bounded without exposing raw diag
 test('version-manager search is bounded, prefers recent Node, and ignores relative and app-private PATH entries', async t => {
   const f = await fixture(t);
   for (const version of ['v20.1.0', 'v24.0.0', 'v22.1.0']) await mkdir(path.join(f.dir, '.nvm/versions/node', version), { recursive: true });
+  const custom = path.join(f.dir, 'custom/bin'), internal = path.join(f.dir, 'ChatGPT.app/Contents/bin');
   const candidates = await programCandidates('codex', { home: f.dir,
-    searchPath: '.:relative:/Applications/ChatGPT.app/Contents/bin:/custom/bin' });
-  assert.ok(candidates.includes('/custom/bin/codex'));
-  assert.ok(!candidates.some(p => p.includes('.app/Contents/') || !path.isAbsolute(p)));
+    searchPath: ['.', 'relative', internal, custom].join(path.delimiter) });
+  assert.ok(candidates.includes(path.join(custom, 'codex')));
+  assert.ok(!candidates.some(p => isAppPrivatePath(p) || !path.isAbsolute(p)));
   assert.ok(candidates.indexOf(path.join(f.dir, '.nvm/versions/node/v24.0.0/bin/codex')) < candidates.indexOf(path.join(f.dir, '.nvm/versions/node/v20.1.0/bin/codex')));
 });
 

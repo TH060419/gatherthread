@@ -8,7 +8,7 @@ import { parseHandoff, connectorArguments, childEnvironment, fail } from './poli
 import { claimAuthorization } from './authorization.mjs';
 import { ConnectorSupervisor } from './supervisor.mjs';
 import { probeExecutable } from './executable.mjs';
-import { programCandidates, selectedProgramCandidates } from './program-discovery.mjs';
+import { isAppPrivatePath, programCandidates, selectedProgramCandidates } from './program-discovery.mjs';
 
 export async function inspectFile(file, executable = false) {
   if (!path.isAbsolute(file) || /[\u0000-\u001f]/u.test(file)) fail(executable ? 'invalid_executable' : 'invalid_workspace');
@@ -87,7 +87,7 @@ export class DesktopHost {
         if (this.selectionEpoch.get(harness) !== epoch) return;
         if (probed >= 4 || Date.now() > deadline) { error ??= 'executable_probe_timeout'; break; }
         let file; try { file = await inspectFile(selected, true); } catch { continue; }
-        if (selected !== saved && file.path.includes('.app/Contents/')) continue;
+        if (selected !== saved && isAppPrivatePath(file.path)) continue;
         if (seen.has(file.path)) continue; seen.add(file.path); probed++;
         try {
           const version = await this.probe(file.path, harness, this.probeEnvironment()); await recheck(file, true);
