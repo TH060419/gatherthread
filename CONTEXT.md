@@ -41,7 +41,7 @@ The project member who manages the project, invitations, member roles, and multi
 _Avoid_: Deployment operator, session owner
 
 **Project Participant**:
-A project member who may contribute to multi sessions, create and write their own Personal Solo Sessions, and read every other member's solo sessions without modifying them.
+A project member who may create and contribute to Multi sessions, create and write their own Personal Solo Sessions, and read other visible sessions without modifying another member's Solo.
 _Avoid_: Editor, session participant
 
 **Project Viewer**:

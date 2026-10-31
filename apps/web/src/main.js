@@ -3874,11 +3874,6 @@ async function retryAgentRequest(requestId, button, continuing = false) {
 function openCreateDialog() {
   if (state.project?.role !== "owner" && state.project?.role !== "participant") return;
   element("create-error").textContent = "";
-  const multi = createForm.querySelector("input[name='mode'][value='multi']");
-  const solo = createForm.querySelector("input[name='mode'][value='solo']");
-  const participant = state.project.role === "participant";
-  multi.disabled = participant;
-  if (participant) solo.checked = true;
   createDialog.showModal();
   requestAnimationFrame(() => element("session-name").focus());
 }

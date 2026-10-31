@@ -47,6 +47,14 @@ test('DSH workspace: two members share canonical context; receipt retry creates 
     const reply = await dshWorkspaceAction({ action: 'read', ...scopeB, afterSequence: read.cursor, contentRevision: read.contentRevision }, optsB);
     assert.ok(reply.messages.some(item => item.type === 'agent_response' && item.content.includes('参与者 B')), JSON.stringify({messages: reply.messages, completed: result.completed}));
 
+    const participantMulti = { action: 'createSession', connectionId: listingB.connectionId, projectId: project.id,
+      title: '参与者发起的协作', mode: 'multi', idempotencyKey: 'participant-create-multi' };
+    const multi = await dshWorkspaceAction(participantMulti, optsB);
+    assert.equal(multi.session.mode, 'multi');
+    assert.equal((await dshWorkspaceAction(participantMulti, optsB)).sessionId, multi.sessionId);
+    assert.ok((await dshWorkspaceAction({ action: 'sessions', connectionId: listingA.connectionId, projectId: project.id }, optsA)).sessions.some(s => s.id === multi.sessionId));
+    await assert.rejects(dshWorkspaceAction({ action: 'discardEmptySolo', ...scopeB, sessionId: multi.sessionId }, optsB), /workspace_read_only/);
+
     const newConversation = { action: 'createSession', connectionId: listingA.connectionId, projectId: project.id,
       title: '私有测试笔记', mode: 'solo', idempotencyKey: 'create-private-solo' };
     const created = await dshWorkspaceAction(newConversation, optsA);

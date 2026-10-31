@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { opendir, stat } from 'node:fs/promises';
 
 const nameFor = harness => harness === 'codex' ? 'codex' : 'claude';
+export const isAppPrivatePath = value => /\.app[/\\]Contents[/\\]/iu.test(value);
 export const safeProgramPath = value => typeof value === 'string' && value.length <= 4096
   && path.isAbsolute(value) && !/[\u0000-\u001f\u007f]/u.test(value);
 async function versions(root, suffix) {
@@ -21,7 +22,7 @@ export async function programCandidates(harness, { home = homedir(), searchPath 
   const name = nameFor(harness);
   const dirs = [path.join(home, '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin',
     path.join(home, '.npm-global/bin'), path.join(home, '.volta/bin'), path.join(home, '.asdf/shims'),
-    ...searchPath.split(path.delimiter).filter(p => safeProgramPath(p) && !p.includes('.app/Contents/')).slice(0, 16),
+    ...searchPath.split(path.delimiter).filter(p => safeProgramPath(p) && !isAppPrivatePath(p)).slice(0, 16),
     ...await versions(path.join(home, '.nvm/versions/node'), 'bin'),
     ...await versions(path.join(home, '.local/share/fnm/node-versions'), 'installation/bin')];
   const result = dirs.map(dir => path.join(dir, name));

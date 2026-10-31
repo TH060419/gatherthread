@@ -3062,9 +3062,6 @@ export class CollaborationDatabase {
     const projectRole = this.projectMembershipRole(input.project_id, actor.user_id);
     if (projectRole === null) throw notFound("Project");
     if (projectRole === "viewer") throw forbidden("Viewers cannot create shared sessions");
-    if (projectRole === "participant" && input.mode !== "solo") {
-      throw forbidden("Participants may create only their own solo sessions");
-    }
     const existingSession = this.sqlite.prepare("SELECT id FROM sessions WHERE id = ?").get(input.session_id);
     if (existingSession) {
       const session = this.requireSession(input.session_id);

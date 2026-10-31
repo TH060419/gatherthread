@@ -1521,7 +1521,7 @@ export class MockCollaborationApi {
       throw new ApiError("Invalid session visibility.", { status: 422, code: "invalid_visibility" });
     }
     const project = this.projects.find((item) => item.id === projectId);
-    if (!project || project.role === "viewer" || (project.role === "participant" && mode !== "solo")) {
+    if (!project || !["owner", "participant"].includes(project.role)) {
       throw new ApiError("Your project role cannot create this session.", { status: 403, code: "forbidden" });
     }
     const id = `session-${createIdempotencyKey("new").split(":").at(-1)}`;
