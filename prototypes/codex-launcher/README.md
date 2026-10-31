@@ -58,6 +58,30 @@ already be installed and signed in.
 
 ## Install and connect
 
+The Windows UI has four pages listed in its keyboard-accessible navigation:
+**Plugin preparation**, **Account & model**, **Local workspace**, and
+**Connection & sync**. Plugin installation remains optional
+and requires the existing confirmation; advancing through setup never installs
+code or submits a password. **Start connection** on the third page performs the
+authorization and opens the fourth **Connection & sync** page. That page
+shows connector readiness, session connection, historical retry/recovery feedback, the actual
+workspace, and a bounded scrollable log, with Stop and Minimize controls. Retry
+records are explicitly past activity: not every producer emits a recovery record,
+so they do not assert an active fault or alter current session connection state.
+The initial decorated window fits the nearest monitor work area (excluding the
+taskbar). Smaller windows retain fixed navigation and scrollable content, with a
+compact four-page selector when the sidebar would crowd the form.
+
+The third page has a single local-directory bar prefilled with the default root,
+`%USERPROFILE%/GatherThread Projects`, alongside **Change path**. Selecting an
+existing folder replaces the displayed path and selects that folder for the connector;
+cancelling the picker retains the previous selection. **Use default** restores the
+default location. **Open folder** opens the current selection in Explorer (or its nearest
+existing parent before the root is created). The connector resolves the project-name
+subfolder after authorization; the activity page displays its reported full path.
+Using the default still uses `--create-workspace`; choosing an existing
+folder still uses `--workspace`. The Launcher does not create folders just to preview them.
+
 1. Extract the ZIP and run `GatherThreadLauncher/Install.cmd`. It copies the
    bundle to `%LOCALAPPDATA%/Programs/GatherThread Launcher`, registers the
    `gatherthread-connect:` URL Scheme for the current Windows user, and opens
@@ -144,6 +168,17 @@ separate old one-use-authorization form; the new Web path no longer requires it.
 Unsupported/self-hosted origins retain the folded manual terminal path.
 
 ## Build and verification
+
+For an offline preview of the actual widgets, run
+`python prototypes/codex-launcher/preview_launcher.py`. It uses clearly labelled
+example data and never installs plugins or claims a device. Add
+`--screenshots <output-directory>` to capture all four pages on Windows. The
+preview script is a development helper, not part of the installed bundle.
+Native UI checks run with
+`python -m unittest discover -s prototypes/codex-launcher -p "test_launcher*.py"`.
+Build the bridge first (`npm run build:ts`) to include the real heartbeat-to-UI
+regression test; it reports a skip if Node or the compiled bridge is unavailable.
+Windows CI builds the bridge before running these native UI tests.
 
 On a Windows development machine with Python 3.13, Node 24, npm, and the repo
 dependencies installed, run `python prototypes/codex-launcher/build_dist.py`.

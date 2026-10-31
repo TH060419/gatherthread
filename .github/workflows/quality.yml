@@ -60,7 +60,7 @@ jobs:
         run: python -m unittest discover -s prototypes/codex-launcher -p test_icons.py -v
       - if: matrix.os == 'windows-latest'
         name: Test Windows Codex Launcher
-        run: python -m unittest discover -s prototypes/codex-launcher -p test_launcher.py -v
+        run: python -m unittest discover -s prototypes/codex-launcher -p "test_launcher*.py" -v
       - if: matrix.os == 'windows-latest'
         name: Build and verify Windows Codex Launcher
         run: |
