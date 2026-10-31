@@ -1,0 +1,43 @@
+/* Web's compiled stylesheet owns colors, typography, controls and themes.
+   Only the desktop management window's layout is defined here. */
+.desktop-management { height: auto; min-height: 100%; overflow: auto; }
+.desktop-header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:22px 28px 12px; }
+.desktop-header picture { display:block; min-width:0; }
+.desktop-header img { display:block; width:200px; max-width:100%; height:auto; }
+#management-root { display:block; max-width:800px; margin:0 auto; padding:8px 28px 32px; }
+.desktop-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.desktop-heading h1 { margin:4px 0 8px; font-size:28px; }
+.desktop-heading .eyebrow { margin:0; }
+.desktop-note { color:var(--ink-soft); font-size:13px; line-height:1.65; margin:10px 0; overflow-wrap:anywhere; }
+.desktop-card { margin:18px 0; padding:22px; border:1px solid var(--line); border-radius:20px; background:var(--glass-surface-strong); box-shadow:var(--shadow-card); }
+.desktop-card h2 { margin:0 0 12px; font-size:17px; }
+.desktop-card label:not(.desktop-check) { display:block; margin:16px 0 8px; font-weight:600; }
+.desktop-field-row { display:flex; align-items:center; gap:10px; min-width:0; }
+.desktop-field-row select, .desktop-path { flex:1; min-width:0; }
+.desktop-field-row button { flex:none; }
+.desktop-program { margin-top:18px; padding:16px; border:1px solid var(--line); border-radius:14px; background:var(--glass-surface-strong); }
+#program-status { margin:10px 0 4px; font-size:14px; overflow-wrap:anywhere; }
+#program-status[data-state=ready] { color:var(--teal); font-weight:600; }
+.desktop-program-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+.desktop-program-actions button { min-height:40px; }
+#program-details summary { cursor:pointer; font-size:12px; color:var(--ink-soft); margin-top:8px; }
+#program-path { margin:8px 0; }
+.desktop-path { font-size:13px; overflow-wrap:anywhere; color:var(--ink-soft); }
+.desktop-management input[type=password], .desktop-management select { width:100%; min-height:42px; }
+.desktop-check { display:flex; align-items:flex-start; gap:8px; font-size:13px; margin:16px 0 8px; line-height:1.6; }
+.desktop-check input { width:18px; height:18px; min-height:0; flex:none; margin-top:2px; }
+.desktop-wide { width:100%; margin-top:12px; }
+.desktop-facts { display:grid; grid-template-columns:70px minmax(0,1fr); gap:7px 14px; font-size:13px; }
+.desktop-facts dt { color:var(--ink-soft); }
+.desktop-facts dd { margin:0; overflow-wrap:anywhere; }
+.desktop-connection { border-top:1px solid var(--line); padding:14px 0; }
+.desktop-connection:first-child { border-top:0; padding-top:0; }
+.desktop-connection:last-child { padding-bottom:0; }
+.desktop-connection header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.desktop-connection strong { overflow-wrap:anywhere; }
+.desktop-connection .connection-actions { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+.desktop-state { font-size:12px; font-weight:600; color:var(--teal); flex:none; }
+.desktop-state[data-state=failed], .desktop-state[data-state=cleanup_pending] { color:var(--danger); }
+.desktop-stop { color:var(--danger); }
+#feedback { padding:12px 16px; border-radius:12px; border:1px solid var(--line); background:var(--amber-wash); line-height:1.65; font-size:13px; }
+@media(max-width:520px) { .desktop-header { padding:18px 16px 8px; } #management-root { padding:8px 16px 24px; } .desktop-card { padding:16px; } .desktop-field-row { flex-wrap:wrap; } .desktop-field-row select { flex-basis:100%; } }

@@ -88,6 +88,23 @@ function installSoloDrafts(app) {
   vm.runInContext(source.slice(start, end).replace("const soloDrafts =", "globalThis.soloDrafts ="), app);
 }
 
+test("participant create dialog leaves Multi selectable and viewers cannot open it", () => {
+  const multi = { disabled: false, checked: true }, solo = { checked: false };
+  let opened = 0;
+  const app = harness(["openCreateDialog"], {
+    state: { project: { role: "participant" } }, requestAnimationFrame: callback => callback(),
+    createForm: { querySelector: selector => selector.includes("multi") ? multi : solo },
+    createDialog: { showModal: () => opened++ },
+  });
+  app.openCreateDialog();
+  assert.equal(opened, 1);
+  assert.equal(multi.disabled, false);
+  assert.equal(solo.checked, false);
+  app.state.project.role = "viewer";
+  app.openCreateDialog();
+  assert.equal(opened, 1);
+});
+
 function soloNavigationFixture(overrides = {}) {
   const app = harness(["selectSession"], {
     mobileWorkspace: { close: noop }, codeSyncUi: { close: noop }, historySummaryUi: { reset: noop },

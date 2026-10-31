@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { HISTORY_SUMMARY_MAX_CONTEXT_BYTES, AgentExecutionStateInputSchema, AgentExecutionStateSchema } from "@gatherthread/protocol";
+import { HISTORY_SUMMARY_MAX_CONTEXT_BYTES, AgentExecutionStateInputSchema, AgentExecutionStateSchema, AgentRequestClaimSchema, DiscardEmptySoloResultSchema, SessionAvatarProfilesSchema } from "@gatherthread/protocol";
 import { AgentSharesResponseSchema, AgentShareJobsResponseSchema, AgentShareJobClaimResponseSchema,
   AgentShareJobLeaseResponseSchema, AgentShareJobEventResponseSchema, AgentShareJobResponseSchema,
   AgentShareAvailabilityResponseSchema, AgentShareJobLeaseInputSchema, AgentShareJobProgressInputSchema,
@@ -100,6 +100,10 @@ export class HttpCollaborationClient implements CollaborationApi {
     return members.map(fromWireSessionMember);
   }
 
+  async listSessionAvatarProfiles(sessionId: string) {
+    return SessionAvatarProfilesSchema.parse(await this.#request(`/sessions/${encodeURIComponent(sessionId)}/avatar-profiles`)).profiles;
+  }
+
   async createSession(
     projectId: string,
     input: { sessionId?: string; title: string; mode: "solo" | "multi"; visibility?: "project" | "private"; idempotencyKey: string },
@@ -144,6 +148,21 @@ export class HttpCollaborationClient implements CollaborationApi {
       displayName: requiredString(body.username, "actor.username"),
       deviceId: requiredString(body.device_id, "actor.device_id"),
     };
+  }
+
+  async pauseAgentRequest(sessionId: string, requestId: string): Promise<void> {
+    const claim = AgentRequestClaimSchema.parse(await this.#request(`/sessions/${encodeURIComponent(sessionId)}/agent-requests/${encodeURIComponent(requestId)}/pause`, {
+      method: "POST", body: "{}",
+    }));
+    if (claim.request_event_id !== requestId || claim.status !== "paused") throw new Error("Invalid pause receipt");
+  }
+
+  async discardEmptySolo(sessionId: string): Promise<boolean> {
+    const receipt = DiscardEmptySoloResultSchema.parse(await this.#request(`/sessions/${encodeURIComponent(sessionId)}/discard-empty`, {
+      method: "POST", body: "{}",
+    }));
+    if (receipt.session_id !== sessionId) throw new Error("Invalid empty Solo receipt");
+    return receipt.discarded;
   }
 
   async readEvents(
@@ -723,6 +742,7 @@ function fromWireSessionMember(value: unknown): SessionMemberSummary {
     };
   }
   return {
+    ...(typeof input.user_id === "string" ? { userId: input.user_id } : {}),
     displayName: requiredString(input.display_name, "member.display_name"),
     role: requiredString(input.role, "member.role") as SessionMemberSummary["role"],
     runtime,

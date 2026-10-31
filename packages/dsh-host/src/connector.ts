@@ -57,6 +57,8 @@ export interface DshHostConnectorOptions {
   actorUserId?: string;
   executionGate?: DshExecutionGate;
   onLifecycle?: (update: DshConnectorLifecycleUpdate) => void;
+  /** Local-only bounded file comparison; failure must not block Agent execution. */
+  beforeExecution?: (requestId: string, signal: AbortSignal) => Promise<void>;
   /** Adopt a completed DSH-native Session whose canonical Session was just created. */
   adoptExistingLocalSession?: boolean;
 }
@@ -90,6 +92,7 @@ export class DshHostConnector {
   readonly #executionGate: DshExecutionGate | undefined;
   readonly #onLifecycle: ((update: DshConnectorLifecycleUpdate) => void) | undefined;
   readonly #adoptExistingLocalSession: boolean;
+  readonly #beforeExecution: DshHostConnectorOptions["beforeExecution"];
   #state: ConnectorState | undefined;
   #runtime: DshRegisteredRuntime | undefined;
   #sharedExecutor: SharedAgentExecutor | undefined;
@@ -142,6 +145,7 @@ export class DshHostConnector {
     this.#executionGate = options.executionGate;
     this.#onLifecycle = options.onLifecycle;
     this.#adoptExistingLocalSession = options.adoptExistingLocalSession === true;
+    this.#beforeExecution = options.beforeExecution;
     if (options.heartbeatIntervalMs !== undefined
       && (!Number.isSafeInteger(options.heartbeatIntervalMs) || options.heartbeatIntervalMs < 1)) {
       throw new Error("DSH connector heartbeat interval must be a positive integer");
@@ -948,7 +952,8 @@ export class DshHostConnector {
     const fromSequence = active.dshFromSequence;
     const runtime = this.#requireRuntime();
     const abort = new AbortController();
-    let executionStopped = false;
+    // Until prompt is entered there is no native turn requiring cleanup.
+    let executionStopped = true;
     this.#activeExecutionAbort = abort;
     const sourceSessionId = executionSessionId ?? this.#host.sessionId;
     const publisher = createLiveOutputPublisher({
@@ -1005,6 +1010,9 @@ export class DshHostConnector {
         "Update the connector to support native Team cancellation", "connector_update_required");
       await executionWatch.check(); executionWatch.assertReady();
       await verifyRevision(); abort.signal.throwIfAborted();
+      await this.#beforeExecution?.(requestId, abort.signal).catch(() => undefined);
+      abort.signal.throwIfAborted();
+      executionStopped = false;
       const result = await this.#host.prompt(text, selection, executionSessionId, abort.signal);
       executionStopped = true;
       await executionWatch.check(); abort.signal.throwIfAborted();

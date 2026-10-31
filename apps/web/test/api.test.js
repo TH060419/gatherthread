@@ -368,6 +368,18 @@ test("created sessions retain explicit solo or multi mode", async () => {
   assert.equal(detail.members[0].role, "owner");
 });
 
+test("participants can create Multi without becoming project owners; viewers cannot", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const project = api.projects.find(item => item.id === "project-orbit");
+  project.role = "participant";
+  const session = await api.createSession(project.id, { name: "Team discussion", mode: "multi" });
+  assert.equal(session.mode, "multi");
+  assert.equal(session.role, "participant");
+  project.role = "viewer";
+  await assert.rejects(() => api.createSession(project.id, { name: "Forbidden", mode: "multi" }),
+    error => error.status === 403);
+});
+
 test("mock project creation leaves an empty project until the owner creates a session", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
   const project = await api.createProject({ name: "New research" });

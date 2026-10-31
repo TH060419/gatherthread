@@ -61,6 +61,7 @@ One deployment has one active authoritative host as defined by [ADR-0003](adr/00
 ```text
 apps/server       HTTP, WebSocket, authentication, ACL, persistence
 apps/web          collaboration UI
+apps/desktop      macOS prototype: isolated deployed Web + local connector manager
 site              product home source and application entry links
 packages/protocol shared schemas and event contracts
 packages/mcp      MCP tools/resources over the collaboration API
@@ -70,6 +71,8 @@ tests/e2e          multi-client and bridge end-to-end tests
 ```
 
 ## Web entry architecture
+
+The local macOS prototype in `apps/desktop` loads this exact deployed origin in an unprivileged Electron window. A separate bundled local window manages explicit native starts via strict IPC; it does not proxy Web authentication or embed a device token in the page. Existing connectors remain execution owners. [ADR-0066](adr/0066-isolated-macos-desktop-workspace.md) records boundaries and release gates.
 
 The owner host publishes one browser origin. `/` is the public product home; its primary actions open the authenticated application at `/app/`. Both surfaces are assembled by the `apps/web` build, so the product page does not introduce another network service, cookie scope, API origin, or WebSocket origin. The product page and application keep independent CSS and JavaScript entry points to prevent global marketing styles from changing workspace behavior.
 
@@ -81,7 +84,7 @@ Operational links created before the product home remain valid. A request to the
 
 Sessions retain their initial `visibility` default (`project` or legacy `private`) and add creator-managed per-member overrides for both Solo and Multi. `session_readers` joins current project membership, immutable creator identity, that default and explicit overrides. `membershipRole` and list/count/mention queries all use this view. `sessions.visibility_revision`, target-scoped mutation receipts and per-user blocked-through sequences provide concurrency, recovery and a permanent barrier against pre-denial work. A denial also terminally fences that member's already accepted Team runs, including queued and paused runs with no child request yet; exact native-exit identities remain retained. This is mutable authorization metadata, separate from canonical conversation content and its deletion revision. Mode changes preserve readers. The Members sidebar owns the UI; new creation forms preserve the project-visible default. See [Interface contracts](INTERFACE_CONTRACTS.md#session-member-visibility) and [ADR-0062](adr/0062-per-member-session-visibility.md). The historical project-visible behavior below is additionally constrained by this readers boundary.
 
-`projects` and `project_memberships` define the collaboration and authorization boundary. Every session has exactly one `project_id` and one immutable `owner_user_id`. Project creation inserts only the project and owner membership in one SQLite write transaction. The project owner may rename the project and create `multi`; both owners and participants may create personal `solo` sessions. A Solo's `owner_user_id` is its creator and is the only non-viewer actor allowed to write or rename it, so even the project owner reads another member's Solo. The project owner may switch a session they created between `solo` and `multi`; participant-created Solos cannot be converted to bypass the project role boundary. Project invitations grant one project role across current and future sessions. A permitted session title or mode change updates the mutable record and publishes a metadata-only `session_state_change` event so Web clients converge without rewriting canonical conversation content. Project renames use an owner-only, idempotent project metadata mutation and do not rename local harness workspaces. Session deletion is authorized to either the immutable session creator or project owner; project deletion is owner-only. SQLite foreign-key cascades atomically remove dependent cloud records, after which realtime scopes close and local connectors deactivate publishing without deleting native tasks or workspaces. Local harness titles remain independent display metadata.
+`projects` and `project_memberships` define the collaboration and authorization boundary. Every session has exactly one `project_id` and one immutable `owner_user_id`. Project creation inserts only the project and owner membership in one SQLite write transaction. The project owner may rename the project; both owners and participants may create `multi` and personal `solo` sessions (ADR-0067). A Solo's `owner_user_id` is its creator and is the only non-viewer actor allowed to write or rename it, so even the project owner reads another member's Solo. The project owner may switch a session they created between `solo` and `multi`; participant-created Solos retain their mode. Project invitations grant one project role across current and future sessions. A permitted session title or mode change updates the mutable record and publishes a metadata-only `session_state_change` event so Web clients converge without rewriting canonical conversation content. Project renames use an owner-only, idempotent project metadata mutation and do not rename local harness workspaces. Session deletion is authorized to either the immutable session creator or project owner; project deletion is owner-only. SQLite foreign-key cascades atomically remove dependent cloud records, after which realtime scopes close and local connectors deactivate publishing without deleting native tasks or workspaces. Local harness titles remain independent display metadata.
 
 User accounts register with a verified email address and a self-set password, then sign in with email and password. All new accounts can create projects under the current project roles and resource rules. Registration is closed by default; existing email/password login remains available while signup is disabled or paused. Password recovery is implemented with a browser-bound, single-use email code. Its independent GATHERTHREAD_PASSWORD_RECOVERY switch is closed by default and requires configured providers plus rollout validation; signup may remain closed. No user access token is displayed or saved. Project role checks remain authoritative. [ADR-0036](adr/0036-verified-email-registration-and-password-login.md) supersedes historical account onboarding in ADR-0028.
 
@@ -253,3 +256,23 @@ disabled or deleted. Product flow, quotas, HTTP contracts and security controls
 are owned by their respective canonical documents; the durable split between
 configuration and execution is recorded in
 [ADR-0061](adr/0061-account-private-saved-agent-teams.md).
+
+
+## Native DSH workspace projection
+
+The DSH bundle now contributes a sidebar entry and main workspace panel alongside
+its existing settings panel. The Client calls the native Host `workspace/action`
+RPC; `packages/dsh-host/src/workspace.ts` revalidates the paired scope and maps
+canonical `/v1` responses to bounded visible data. Agent requests re-enter the
+existing DSH connector rather than a second execution loop. See
+[ADR-0065](adr/0065-dsh-native-collaboration-workspace.md) and the
+[RPC contract](INTERFACE_CONTRACTS.md#dsh-workspace-rpc-prototype).
+
+`workspace-files.ts` owns bounded private file previews and volatile per-project
+comparison baselines. Ordinary local connector execution captures a baseline
+before prompting; it does not depend on DSH's native workspace-change service,
+which excludes subagent sessions. Comparisons are project-wide observations,
+not exact per-Agent attribution. Shared-executor/native-chat work is not an
+additional automatic capture trigger. Cloud operations proxy the existing file
+workspace contracts through the paired Host, retaining authoritative server ACLs
+and Git conflict checks; this is not a second synchronization engine.

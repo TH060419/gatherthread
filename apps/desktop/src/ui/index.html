@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'">
+  <title>GatherThread · 本机 Agent</title>
+  <link rel="stylesheet" href="web-styles.css">
+  <link rel="stylesheet" href="desktop.css">
+</head>
+<body class="desktop-management">
+  <header class="desktop-header">
+    <picture><source media="(prefers-color-scheme:dark)" srcset="brand-dark.svg"><img src="brand-light.svg" alt="GatherThread" width="200" height="42"></picture>
+    <button id="language" type="button" class="button-secondary" aria-label="Switch language">EN</button>
+  </header>
+  <main id="management-root">
+    <div class="desktop-heading"><div><p id="environment" class="eyebrow"></p><h1 data-zh="本机 Agent" data-en="Local Agents">本机 Agent</h1></div><button type="button" id="back" data-zh="返回工作区" data-en="Workspace">返回工作区</button></div>
+    <p class="desktop-note" data-zh="这里管理本机连接；共享对象、模型和团队仍在工作区中配置。" data-en="Manage this Mac’s connections here. Configure sharing, models and Teams in the workspace.">这里管理本机连接；共享对象、模型和团队仍在工作区中配置。</p>
+    <div id="feedback" role="status" aria-live="polite" hidden></div>
+    <section id="demo-panel" class="desktop-card" hidden><h2 data-zh="本机模拟验收" data-en="Local simulation">本机模拟验收</h2><p class="desktop-note" data-zh="全部为虚构账号和模拟模型，不连接真实模型，不消耗付费额度。" data-en="Fictional accounts and a mock model. No real model or paid usage.">全部为虚构账号和模拟模型，不连接真实模型，不消耗付费额度。</p><button type="button" id="prepare-demo" data-zh="准备模拟连接" data-en="Prepare simulated connection">准备模拟连接</button></section>
+    <section class="desktop-card" aria-labelledby="connect-title"><h2 id="connect-title" data-zh="连接到项目" data-en="Connect to a project">连接到项目</h2>
+      <p id="handoff-empty" class="desktop-note" data-zh="在工作区选择「管理我的 Agent → 添加我的 Agent → 连接 Codex / Claude Code → 打开启动器」，即可带入当前项目。" data-en="In the workspace, choose Manage my Agent → Add my Agent → Connect Codex / Claude Code → Open Launcher to bring this project here.">在工作区选择「管理我的 Agent → 添加我的 Agent → 连接 Codex / Claude Code → 打开启动器」，即可带入当前项目。</p>
+      <form id="connect-form" hidden>
+        <dl id="handoff-summary" class="desktop-facts"></dl>
+        <div class="desktop-program" aria-labelledby="program-title">
+          <strong id="program-title" data-zh="本机 Agent 程序" data-en="Local Agent program">本机 Agent 程序</strong>
+          <p id="program-status" role="status" aria-live="polite"></p>
+          <select id="executable" required aria-labelledby="program-title" hidden></select>
+          <details id="program-details" hidden><summary data-zh="查看程序位置" data-en="Show program location">查看程序位置</summary><p id="program-path" class="desktop-path"></p></details>
+          <p id="program-hint" class="desktop-note"></p>
+          <div class="desktop-program-actions"><button type="button" id="find-cli" data-zh="重新查找" data-en="Find again">重新查找</button><button type="button" id="choose-cli" data-zh="选择应用或程序…" data-en="Choose app or program…">选择应用或程序…</button></div>
+        </div>
+        <label data-zh="项目目录" data-en="Project folder">项目目录</label>
+        <div class="desktop-field-row"><span id="workspace-label" class="desktop-path"></span><button type="button" id="choose-folder" data-zh="选择文件夹" data-en="Choose folder">选择文件夹</button></div>
+        <label for="password" data-zh="GatherThread 账号密码" data-en="GatherThread account password">GatherThread 账号密码</label>
+        <input id="password" type="password" minlength="8" maxlength="128" autocomplete="off" required>
+        <label class="desktop-check"><input id="code-sync" type="checkbox"><span data-zh="允许此连接同步项目文件（仍需在项目中启用同步）" data-en="Allow this connection to sync project files (project sync must also be enabled)">允许此连接同步项目文件（仍需在项目中启用同步）</span></label>
+        <p class="desktop-note" data-zh="密码只用于本次授权，不会保存。插件与 Hooks 仍需在 Agent 中检查并明确允许。" data-en="Your password is used once and is not saved. Review and explicitly allow plugins and Hooks in your Agent.">密码只用于本次授权，不会保存。插件与 Hooks 仍需在 Agent 中检查并明确允许。</p>
+        <button id="connect" class="button-primary desktop-wide" type="submit" data-zh="授权并连接" data-en="Authorize and connect">授权并连接</button>
+      </form>
+    </section>
+    <section class="desktop-card" aria-labelledby="connections-title"><h2 id="connections-title" data-zh="连接状态" data-en="Connections">连接状态</h2><div id="connections"></div></section>
+    <section id="dsh-panel" class="desktop-card"><h2>DeepSeek Harness</h2><p class="desktop-note" data-zh="DSH 使用它自己的 GatherThread 插件完成配对和运行。桌面端不会改写已有 profile，也不会重复启动另一个 DSH 连接。" data-en="DSH pairs and runs through its own GatherThread plugin. Desktop does not rewrite profiles or start duplicate DSH connections.">DSH 使用它自己的 GatherThread 插件完成配对和运行。桌面端不会改写已有 profile，也不会重复启动另一个 DSH 连接。</p><button id="open-dsh" type="button" data-zh="打开已安装的 DSH" data-en="Open installed DSH">打开已安装的 DSH</button></section>
+    <p class="desktop-note" data-zh="关闭协作窗口后连接继续保持。退出应用或电脑睡眠时停止本机连接；恢复后请手动重新授权。" data-en="Connections continue when you close the workspace window. Quitting or sleeping stops local connections; reconnect explicitly afterwards.">关闭协作窗口后连接继续保持。退出应用或电脑睡眠时停止本机连接；恢复后请手动重新授权。</p>
+  </main>
+  <script type="module" src="ui.mjs"></script>
+</body>
+</html>

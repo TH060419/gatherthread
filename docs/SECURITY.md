@@ -1,5 +1,7 @@
 # Security policy and threat model
 
+The proposed [macOS desktop boundary](adr/0066-isolated-macos-desktop-workspace.md) gives remote collaboration content no preload or native IPC. Only the exact packaged management main frame can invoke strict allowlisted actions with host-issued opaque file handles. Credentials remain transient in the host/owned connector; raw process output is discarded. Uncertain shutdown retains process ownership. Permissions/downloads are scoped to the active exact-origin workspace. Local-demo identities are independent and its renderer has loopback-only egress.
+
 ## Scope and current status
 
 This document defines the first-release security boundary for the collaboration server, browser client, MCP surface, local bridge, transcript adapters, and operational tooling.
@@ -48,7 +50,7 @@ The beginner example has a separate opaque-origin sandbox, fresh mock API state 
 - Device revocation also revokes its runtimes and unused delegated authorizations, removes unused realtime tickets, and closes or revalidates active sockets.
 - Authorization is checked on every implemented project, session, replay page, subscribe, live fan-out, socket heartbeat, append, claim, completion, invitation, and device operation. Membership removal closes affected sockets before another event or cursor is emitted.
 - Visible project participants can write `multi`; a visible owner or participant can write only a Solo whose immutable creator ID matches the authenticated actor. Project viewers retain read-only access only to conversations visible to them. Both modes apply creator-managed per-member read overrides, on top of current project membership and the initial audience. The creator always remains visible while a member, and project ownership does not bypass a denial. All discovery, read, write, snapshot, runtime and realtime boundaries share the same authoritative readers view. Rejection happens before sequence allocation or fan-out.
-- Only the project owner can create `multi`, issue invitations, or change another member's project role. A participant or viewer can remove only their own membership; the owner cannot remove their own membership. Owners and participants can create personal `solo`; a project owner has no write override on another member's Solo. All new email accounts retain normal project creation; invitations affect only project membership. Role changes cover current and future sessions and revoke newly ineligible runtimes.
+- Only the project owner can issue invitations or change another member's project role. A participant or viewer can remove only their own membership; the owner cannot remove their own membership. Owners and participants can create `multi` and personal `solo` (ADR-0067); a project owner has no write override on another member's Solo. All new email accounts retain normal project creation; invitations affect only project membership. Role changes cover current and future sessions and revoke newly ineligible runtimes.
 - A session's immutable creator or the project owner may delete its cloud copy, provided they can access that session; a hidden conversation has no project-owner individual-delete override. Only the project owner may delete a cloud project, whose cascade includes hidden sessions without disclosing their contents. Authorization and deletion occur in one transaction, dependent cloud data is removed by foreign-key cascade, and affected sockets and unused realtime tickets are invalidated. No server deletion path invokes local filesystem or native-task deletion.
 - Only the session creator with a current non-viewer project role and active device can alter member visibility. Strict session/target-scoped writes use revision CAS and exact idempotency receipts; recovering an old receipt never reapplies its earlier grant. A denial persists a monotonically increasing per-user sequence fence, invalidates unfinished snapshots, pauses claims and revokes native runtimes in the same transaction. Regrant cannot validate an old request again. Existing runner checks and confirmed-exit cleanup retain resource slots; no cloud ACL change deletes local files or retracts already delivered copies.
 - Account deletion requires an authenticated browser session, Origin check, explicit confirmation and prior owner-project/branch resolution. Ownership handoff is owner-only to an existing participant and checks the recipient's cloud-code quota atomically. Deletion removes the user's Solo cloud sessions and credentials, revokes their sockets and remembered-browser entries, and replaces server-side author/creator account links in retained Multi history with a common deleted-member identity. User-authored message text and reachable shared Git history are not rewritten. Local Codex/DSH workspaces are never deleted.
@@ -472,3 +474,30 @@ session-plan preview rows have no public execution route and are not silently
 promoted into enabled saved Teams. Existing backup/provider retention boundaries
 remain as defined above. See
 [ADR-0061](adr/0061-account-private-saved-agent-teams.md).
+
+
+The native DSH workspace prototype keeps the pairing grant in the Host credential
+service. Its strict action allowlist accepts no URL, caller-selected filesystem root, arbitrary event
+payload or foreign execution profile. Each call revalidates its account/device
+scope and project/session access; stale UI replies are discarded. Canonical
+visible text crosses to the Client through bounded previews/explicit expansion,
+rendered with DSH's public untrusted Markdown renderer (or plain text fallback).
+Raw HTML never executes. HTTP(S) images follow DSH's lazy-loading/no-referrer
+policy and may contact their authored origin; the plugin supplies no credential
+or local-media resolver. Image preview/drag uses the host-provided DSH services.
+Local Markdown file links are explicit read-only previews through the existing
+project-file allowlist, not arbitrary native paths or attachment uploads. Avatar
+images are build-time copies of the reviewed Web catalog; users cannot supply
+an avatar URL. Preview bounds do not substitute for authoritative execution context. See the
+[workspace contract](INTERFACE_CONTRACTS.md#dsh-workspace-rpc-prototype).
+
+The explicit native file action additionally permits bounded local project text
+for the paired user's writable sessions. It rejects absolute/traversal/private
+paths, symlinks, hardlinks and generated directories, validates root/ancestor and
+file identities, and refuses recognized secrets, binary or oversized content.
+Local previews/baselines never enter canonical history automatically. Comparison
+metadata is incomplete when any relevant scan is omitted; absence then cannot
+prove deletion. Cloud reads/writes use the grant's origin and server ACLs, never
+browser-supplied endpoints or credentials. Local editing is not exposed. Native
+DSH's own file viewer retains its upstream permissions; this plugin does not
+proxy arbitrary native paths or promise cross-process filesystem write locking.

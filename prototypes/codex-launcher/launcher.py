@@ -573,6 +573,45 @@ def configure_window_icon(window: tk.Tk) -> None:
         pass
 
 
+def launcher_work_area(window: tk.Tk) -> tuple[int, int, int, int]:
+    """Nearest monitor's usable bounds, excluding its taskbar/docked toolbars."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [("size", wintypes.DWORD), ("monitor", wintypes.RECT),
+                        ("work", wintypes.RECT), ("flags", wintypes.DWORD)]
+
+        user = ctypes.windll.user32
+        user.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user.MonitorFromWindow.restype = wintypes.HANDLE
+        user.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MonitorInfo)]
+        info = MonitorInfo()
+        info.size = ctypes.sizeof(info)
+        monitor = user.MonitorFromWindow(int(window.frame(), 0), 2)
+        if monitor and user.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return info.work.left, info.work.top, info.work.right, info.work.bottom
+        work = wintypes.RECT()
+        if user.SystemParametersInfoW(0x0030, 0, ctypes.byref(work), 0):
+            return work.left, work.top, work.right, work.bottom
+    return 0, 0, window.winfo_screenwidth(), max(1, window.winfo_screenheight() - 48)
+
+
+def windows_high_contrast() -> bool:
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    class HighContrast(ctypes.Structure):
+        _fields_ = [("size", wintypes.UINT), ("flags", wintypes.DWORD), ("scheme", wintypes.LPWSTR)]
+
+    value = HighContrast()
+    value.size = ctypes.sizeof(value)
+    return bool(ctypes.windll.user32.SystemParametersInfoW(0x0042, value.size, ctypes.byref(value), 0) and value.flags & 1)
+
+
 def create_start_menu_shortcut(directory: Path) -> None:
     """Create one current-user entry pointing only at this installation."""
     shortcut = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "GatherThread Launcher.lnk"
@@ -628,8 +667,7 @@ class Launcher(tk.Tk):
         super().__init__()
         self.title("GatherThread · Connect Agent")
         configure_window_icon(self)
-        self.geometry("760x760")
-        self.minsize(680, 640)
+        self.minsize(640, 400)
         self.events: queue.Queue[tuple[str, str | tuple[int, str, str, bool]]] = queue.Queue()
         self.connector: subprocess.Popen[str] | None = None
         self.connector_lock = threading.Lock()
@@ -668,120 +706,404 @@ class Launcher(tk.Tk):
             self._apply_link(link)
         else:
             self._refresh_authorization_form()
+        self._fit_window_to_work_area()
         self.after(100, self._poll)
         self.protocol("WM_DELETE_WINDOW", self._background)
 
     def _build(self) -> None:
-        outer = ttk.Frame(self, padding=18)
-        outer.pack(fill="both", expand=True)
-        form = ttk.Frame(outer)
-        form.pack(fill="both", expand=True)
-        canvas = tk.Canvas(form, highlightthickness=0, borderwidth=0)
-        scrollbar = ttk.Scrollbar(form, orient="vertical", command=canvas.yview)
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        root = ttk.Frame(canvas)
-        form_window = canvas.create_window((0, 0), window=root, anchor="nw")
-        root.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(form_window, width=event.width))
-
-        def scroll_form(event):
-            selected = event.widget
-            while selected is not None:
-                if selected is root:
-                    canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
-                    return "break"
-                selected = getattr(selected, "master", None)
-        self.bind_all("<MouseWheel>", scroll_form, add="+")
-        banner = tk.Frame(root, bg="#edf7f6", padx=20, pady=14)
-        banner.pack(fill="x", pady=(0, 16))
+        self.high_contrast = windows_high_contrast()
+        self.configure(bg="#f6f7f9")
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("TFrame", background="#ffffff")
+        style.configure("TLabel", background="#ffffff", foreground="#253047", font=("Microsoft YaHei UI", 10))
+        style.configure("Muted.TLabel", foreground="#667085")
+        style.configure("Title.TLabel", font=("Microsoft YaHei UI", 22, "bold"))
+        style.configure("Heading.TLabel", font=("Microsoft YaHei UI", 12, "bold"))
+        style.configure("Card.TFrame", bordercolor="#e0e5ef", lightcolor="#e0e5ef", darkcolor="#e0e5ef")
+        style.configure("Vertical.TScrollbar", arrowsize=0, width=8, background="#cbd4e3", troughcolor="#f6f7f9", borderwidth=0)
+        style.layout("Vertical.TScrollbar", [("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
+        style.configure("TEntry", padding=9, fieldbackground="#ffffff", bordercolor="#d7dde5", lightcolor="#d7dde5", darkcolor="#d7dde5")
+        style.configure("TCombobox", padding=7)
+        style.configure("TButton", font=("Microsoft YaHei UI", 10), padding=(14, 9), background="#f4f6f8", bordercolor="#d7dde5")
+        style.map("TButton", background=[("active", "#e8edf2")], bordercolor=[("focus", "#5376cf")])
+        style.configure("Primary.TButton", background="#315bd6", foreground="#ffffff", bordercolor="#315bd6")
+        style.map("Primary.TButton", background=[("disabled", "#dce2ef"), ("active", "#264bb9")], foreground=[("disabled", "#6b7280")])
+        self.page = 0
+        self.default_root = str(Path.home() / "GatherThread Projects")
+        self.workspace_display = tk.StringVar(value=self.workspace.get() or self.default_root)
+        self.workspace_hint = tk.StringVar()
+        self.workspace.trace_add("write", self._refresh_workspace_display)
+        self._refresh_workspace_display()
+        self.actual_workspace = tk.StringVar(value="连接后显示实际目录 / Available after connection")
+        self.connection_state = tk.StringVar(value="尚未连接 / Not connected")
+        self.plugin_state = tk.StringVar(value="等待安装或使用已有插件 / Install or use your existing plugin")
+        self.session_state = tk.StringVar(value="等待连接会话 / Waiting for sessions")
+        self.latest_event = tk.StringVar(value="尚无同步反馈 / No activity yet")
+        self.sync_feedback = tk.StringVar(value="尚无同步反馈 / No sync feedback yet")
+        self.step_labels = []
+        shell = tk.Frame(self, bg="#f6f7f9")
+        shell.pack(fill="both", expand=True, padx=24, pady=20)
+        top = tk.Frame(shell, bg="#f6f7f9")
+        top.pack(fill="x", pady=(0, 18))
+        tk.Label(top, textvariable=self.target_label, bg="#f6f7f9", fg="#253047", font=("Microsoft YaHei UI", 18, "bold")).pack(side="left")
         try:
-            self.brand_image = tk.PhotoImage(file=str(runtime_dir() / "assets/gatherthread-lockup.png")).subsample(4)
-            tk.Label(banner, image=self.brand_image, bg="#edf7f6").pack(anchor="w")
+            self.brand_image = tk.PhotoImage(file=str(runtime_dir() / "assets/gatherthread-lockup.png")).subsample(6)
+            tk.Label(top, image=self.brand_image, bg="#f6f7f9").pack(side="right")
         except tk.TclError:
-            tk.Label(banner, text="本地 Agent 启动器", bg="#edf7f6", fg="#102b2a", font=("Segoe UI", 18, "bold")).pack(anchor="w")
-        tk.Label(banner, text="连接本机，协作随行。", bg="#edf7f6", fg="#327570", font=("Segoe UI", 11)).pack(anchor="w", pady=(6, 0))
-        ttk.Label(root, textvariable=self.target_label, font=("Segoe UI", 18, "bold")).pack(anchor="w")
-        ttk.Label(root, text="网页负责项目和会话；此窗口负责启动并保持本机连接器运行。", wraplength=690).pack(anchor="w", pady=(4, 14))
-        ttk.Label(root, textvariable=self.origin).pack(anchor="w", pady=(0, 3))
-        self.environment_label = ttk.Label(root, text="正式环境 / Production")
-        self.environment_label.pack(anchor="w", pady=(0, 9))
-        details = ttk.Frame(root)
-        details.pack(fill="x")
-        ttk.Label(details, text="项目 ID（网页打开时自动填入；格式：project-***）").pack(anchor="w")
-        ttk.Entry(details, textvariable=self.project).pack(fill="x", pady=(2, 9))
-        ttk.Label(details, textvariable=self.cli_label).pack(anchor="w")
-        ttk.Entry(details, textvariable=self.codex).pack(fill="x", pady=(2, 9))
-        ttk.Label(details, text="本地工作目录（可选；留空使用默认项目目录）").pack(anchor="w")
-        workspace_row = ttk.Frame(details)
-        workspace_row.pack(fill="x", pady=(2, 9))
-        ttk.Entry(workspace_row, textvariable=self.workspace).pack(side="left", fill="x", expand=True)
-        ttk.Button(workspace_row, text="浏览…", command=self._choose_workspace).pack(side="left", padx=(8, 0))
-        ttk.Button(workspace_row, text="默认目录", command=lambda: self.workspace.set("")).pack(side="left", padx=(8, 0))
-        self.code_sync_row = ttk.Frame(details)
-        self.code_sync_checkbox = ttk.Checkbutton(self.code_sync_row, variable=self.code_sync,
-            text="允许此设备同步项目文件（GT Cloud；上传仍需在项目中开启）")
-        self.code_sync_checkbox.pack(anchor="w")
-        settings = ttk.Frame(details)
-        self.model_settings = settings
-        settings.pack(fill="x", pady=(2, 9))
-        self.codex_only_settings = []
-        for label, var, width in (("模型", self.model, 24), ("上下文 Token 上限", self.context_tokens, 14)):
-            column = ttk.Frame(settings)
-            column.pack(side="left", padx=(0, 14))
-            ttk.Label(column, text=label).pack(anchor="w")
-            ttk.Entry(column, textvariable=var, width=width).pack(anchor="w")
-            if var is self.context_tokens:
-                self.codex_only_settings.append(column)
-        history = ttk.Frame(settings)
-        history.pack(side="left")
-        ttk.Label(history, text="首次历史导入").pack(anchor="w")
-        ttk.Combobox(history, textvariable=self.history_sync, values=("first-connect", "never"), state="readonly", width=16).pack(anchor="w")
-        self.codex_only_settings.append(history)
-        self.authorization_area = ttk.Frame(root)
-        self.authorization_area.pack(fill="x", pady=(0, 12))
-        self.email_form = ttk.Frame(self.authorization_area)
-        ttk.Label(self.email_form, text="邮箱账号 / Email account（由网页填入）").pack(anchor="w")
-        ttk.Entry(self.email_form, textvariable=self.email, state="readonly").pack(fill="x", pady=(2, 8))
-        ttk.Label(self.email_form, text="账号密码 / Password").pack(anchor="w")
-        self.password_entry = ttk.Entry(self.email_form, textvariable=self.password, show="•")
-        self.password_entry.pack(fill="x", pady=(2, 4))
-        ttk.Label(self.email_form, text="只用于本次授权，不保存密码；其他设备仍保持登录。", wraplength=690).pack(anchor="w")
-        self.legacy_form = ttk.Frame(self.authorization_area)
-        ttk.Label(self.legacy_form, text="旧版链接：一次性设备授权 / Legacy one-use authorization").pack(anchor="w")
-        ttk.Entry(self.legacy_form, textvariable=self.token, show="•").pack(fill="x", pady=(2, 4))
-        ttk.Label(self.legacy_form, text="建议返回网页重新打开启动器，使用邮箱账号密码授权。", wraplength=690).pack(anchor="w")
-        self.web_form = ttk.Frame(self.authorization_area)
-        ttk.Label(self.web_form, text="先在网页登录，再从项目的 Agent 连接入口打开此窗口。", wraplength=690).pack(anchor="w")
-        ttk.Button(self.web_form, text="打开 GatherThread 网页 / Open website", command=lambda: webbrowser.open(self.origin.get() + "/app/")).pack(anchor="w", pady=(5, 0))
-        self.authorization_area.pack_configure(before=details)
-        details_toggle = ttk.Button(root, text="更多连接设置")
-        details_toggle.pack(before=details, anchor="w", pady=(0, 9))
-        details.pack_forget()
+            tk.Label(top, text="LOCAL CONNECTOR / 本地连接器", bg="#f6f7f9", fg="#667085").pack(side="right")
+        body = tk.Frame(shell, bg="#f6f7f9")
+        body.pack(fill="both", expand=True)
+        self.body = body
+        self.compact_navigation = ttk.Combobox(shell, state="readonly", values=("01 插件准备 / Plugin", "02 账号与模型 / Account", "03 本地目录 / Workspace", "04 连接与同步状态 / Status"))
+        self.compact_navigation.current(0)
+        self.compact_navigation.bind("<<ComboboxSelected>>", lambda _e: self._navigate_page(self.compact_navigation.current()))
+        sidebar = self.sidebar = tk.Frame(body, bg="#eef1f7", width=215)
+        sidebar.pack(side="left", fill="y", padx=(0, 16))
+        sidebar.pack_propagate(False)
+        tk.Label(sidebar, text="开始连接 / GET STARTED", bg="#eef1f7", fg="#667085", font=("Microsoft YaHei UI", 9)).pack(anchor="w", padx=18, pady=(22, 18))
+        for index, (number, title, subtitle) in enumerate((("01", "插件准备", "Bundled plugin"), ("02", "账号与模型", "Account & model"), ("03", "本地目录", "Local workspace"), ("04", "连接与同步状态", "Connection & sync"))):
+            label = tk.Label(sidebar, text=f"{number}   {title}\n        {subtitle}", justify="left", anchor="w", padx=8, pady=15, bg="#eef1f7", fg="#667085", font=("Microsoft YaHei UI", 11), cursor="hand2", takefocus=True, highlightthickness=2, highlightbackground="#eef1f7", highlightcolor="#315bd6")
+            label.pack(fill="x", padx=8, pady=3)
+            for event in ("<Button-1>", "<Return>", "<space>"):
+                label.bind(event, lambda _e, target=index: self._navigate_page(target))
+            self.step_labels.append(label)
+        tk.Label(sidebar, text="设置完成后\n在状态页查看连接与同步进度。\n\n网页负责项目和会话；\n此窗口保持本机连接。", justify="left", wraplength=175, bg="#eef1f7", fg="#667085", font=("Microsoft YaHei UI", 9)).pack(side="bottom", anchor="w", padx=18, pady=24)
+        panel = self.panel = ttk.Frame(body, padding=(28, 22))
+        panel.pack(side="left", fill="both", expand=True)
+        context = ttk.Frame(panel)
+        context.pack(fill="x", pady=(0, 12))
+        self.environment_label = ttk.Label(context, text="正式环境 / Production", style="Muted.TLabel")
+        self.environment_label.pack(anchor="w")
+        ttk.Label(context, textvariable=self.origin, style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
+        ttk.Separator(panel).pack(fill="x")
+        viewport = ttk.Frame(panel)
+        viewport.pack(fill="both", expand=True, pady=(18, 8))
+        self.page_canvas = tk.Canvas(viewport, bg="#ffffff", highlightthickness=0, width=580, height=1)
+        self.page_canvas.pack(side="left", fill="both", expand=True)
+        page_scroll = ttk.Scrollbar(viewport, command=self.page_canvas.yview)
+        page_scroll.pack(side="right", fill="y")
+        self.page_canvas.configure(yscrollcommand=page_scroll.set)
+        self.page_host = ttk.Frame(self.page_canvas)
+        page_window = self.page_canvas.create_window((0, 0), window=self.page_host, anchor="nw")
+        self.page_host.bind("<Configure>", lambda _e: self.page_canvas.configure(scrollregion=self.page_canvas.bbox("all")))
+        self.page_canvas.bind("<Configure>", lambda e: self.page_canvas.itemconfigure(page_window, width=e.width))
+        self.pages = [ttk.Frame(self.page_host) for _ in range(4)]
 
-        def toggle_details():
-            if details.winfo_manager():
-                details.pack_forget()
-                details_toggle.configure(text="更多连接设置")
+        def heading(parent, eyebrow, title, detail):
+            ttk.Label(parent, text=eyebrow, style="Muted.TLabel").pack(anchor="w")
+            ttk.Label(parent, text=title, style="Title.TLabel").pack(anchor="w", pady=(4, 8))
+            ttk.Label(parent, text=detail, style="Muted.TLabel", wraplength=600).pack(anchor="w", pady=(0, 18))
+
+        def field(parent, title, variable, **kwargs):
+            ttk.Label(parent, text=title).pack(anchor="w", pady=(8, 4))
+            entry = ttk.Entry(parent, textvariable=variable, **kwargs)
+            entry.pack(fill="x")
+            return entry
+
+        first, account, directory, progress = self.pages
+        heading(first, "PAGE 01 / 04", "先准备好插件", "随包提供本地连接所需组件。已有 GatherThread 插件可跳过安装。\nPrepare your plugin, or continue with an existing installation.")
+        for title, detail in (("GatherThread Agent 插件", "MCP 协作工具 · 连接网页项目与本地 Agent"), ("Hooks · 本地会话同步", "仅在审查并允许后，按会话设置同步所选 Agent 中的直接输入"), ("本地连接器 + 私有 Node 24", "随包固定版本连接器，无需额外安装 Python、Node 或 npm")):
+            row = ttk.Frame(first, padding=(14, 10), relief="solid", borderwidth=1, style="Card.TFrame")
+            row.pack(fill="x", pady=(0, 8))
+            ttk.Label(row, text=title, style="Heading.TLabel").pack(anchor="w")
+            ttk.Label(row, text=detail, style="Muted.TLabel", wraplength=550).pack(anchor="w", pady=(3, 0))
+        ttk.Label(first, text="安装前请确认信任 MCP / Hook 代码；安装后重启所选 Agent，\n在 /hooks 中审查并允许。只连接所选 Agent。\nReview and trust Hooks explicitly before syncing local turns.", style="Muted.TLabel", wraplength=590).pack(anchor="w", pady=(6, 12))
+        self.install_button = ttk.Button(first, text="安装随包插件 / Install plugin", command=self._install)
+        self.install_button.pack(anchor="w")
+        ttk.Label(first, textvariable=self.plugin_state, style="Muted.TLabel", wraplength=590).pack(anchor="w", pady=(8, 0))
+
+        heading(account, "PAGE 02 / 04", "确认账号与模型", "邮箱和模型由网页带入。输入账号密码，授权本机独立连接。\nConfirm your account and model, then enter your password.")
+        self.authorization_area = ttk.Frame(account)
+        self.authorization_area.pack(fill="x")
+        self.email_form = ttk.Frame(self.authorization_area)
+        field(self.email_form, "邮箱账号 / Email · 由网页填入", self.email, state="readonly")
+        self.password_entry = field(self.email_form, "账号密码 / Password", self.password, show="•")
+        ttk.Label(self.email_form, text="仅用于本次授权，不保存密码；其他设备保持登录。\nUsed once, never saved. Other devices stay signed in.", style="Muted.TLabel", wraplength=590).pack(anchor="w", pady=(8, 10))
+        self.legacy_form = ttk.Frame(self.authorization_area)
+        field(self.legacy_form, "旧版一次性设备授权 / Legacy authorization", self.token, show="•")
+        ttk.Label(self.legacy_form, text="建议返回网页重新打开，使用邮箱密码授权。", style="Muted.TLabel").pack(anchor="w", pady=8)
+        self.web_form = ttk.Frame(self.authorization_area)
+        ttk.Label(self.web_form, text="请在网页登录，再从项目的「连接 Codex」打开启动器。", wraplength=590).pack(anchor="w", pady=8)
+        ttk.Button(self.web_form, text="打开网页 / Open website", command=lambda: webbrowser.open(self.origin.get() + "/app/")).pack(anchor="w", pady=8)
+        field(account, "模型 / Model", self.model)
+        self.codex_only_settings = []
+        settings = ttk.Frame(account)
+        self.model_settings = settings
+        self.code_sync_row = ttk.Frame(account)
+        self.code_sync_checkbox = ttk.Checkbutton(self.code_sync_row, variable=self.code_sync, text="允许此设备同步项目文件 / Allow project file sync")
+        self.code_sync_checkbox.pack(anchor="w")
+        settings.pack(fill="x", pady=(12, 0))
+        for title, variable in (("上下文 Token 上限 / Context limit", self.context_tokens), ("首次历史导入 / Initial history", self.history_sync)):
+            column = ttk.Frame(settings)
+            column.pack(side="left", fill="x", expand=True, padx=(0, 12))
+            self.codex_only_settings.append(column)
+            ttk.Label(column, text=title, style="Muted.TLabel").pack(anchor="w", pady=(0, 4))
+            if variable is self.history_sync:
+                ttk.Combobox(column, textvariable=variable, values=("first-connect", "never"), state="readonly", width=20).pack(fill="x")
             else:
-                details.pack(after=details_toggle, fill="x")
-                details_toggle.configure(text="收起连接设置")
-        details_toggle.configure(command=toggle_details)
-        ttk.Label(root, text="随包插件为选中的 Agent 提供共序 MCP 与 Hooks。安装前请审查并信任；只连接所选 Agent，不会改用其他 Agent。", wraplength=690).pack(anchor="w")
-        buttons = ttk.Frame(outer)
-        buttons.pack(fill="x", pady=(12, 9))
-        self.install_button = ttk.Button(buttons, text="可选：安装随包插件", command=self._install)
-        self.install_button.pack(side="left")
-        self.connect_button = ttk.Button(buttons, text="启动连接", command=self._connect)
-        self.connect_button.pack(side="left", padx=8)
-        self.stop_button = ttk.Button(buttons, text="停止连接", command=self._stop)
+                ttk.Entry(column, textvariable=variable, width=20).pack(fill="x")
+        field(account, "项目 ID / Project · 由网页填入", self.project)
+
+        heading(directory, "PAGE 03 / 04", "本地目录", "下方已显示默认路径。点击「更改路径」可选择你要使用的文件夹。\nThe default path is shown below. Change it to your preferred folder.")
+        location = ttk.Frame(directory, padding=16, relief="solid", borderwidth=1, style="Card.TFrame")
+        location.pack(fill="x", pady=(0, 16))
+        ttk.Label(location, text="本地目录 / Local workspace", style="Heading.TLabel").pack(anchor="w")
+        path_row = ttk.Frame(location)
+        path_row.pack(fill="x", pady=(12, 0))
+        self.workspace_entry = ttk.Entry(path_row, textvariable=self.workspace_display, state="readonly")
+        self.workspace_entry.pack(side="left", fill="x", expand=True)
+        self.change_workspace_button = ttk.Button(path_row, text="更改路径 / Change", command=self._choose_workspace)
+        self.change_workspace_button.pack(side="right", padx=(8, 0))
+        ttk.Label(location, textvariable=self.workspace_hint, style="Muted.TLabel", wraplength=550).pack(anchor="w", pady=(12, 0))
+        actions = ttk.Frame(directory)
+        actions.pack(fill="x", pady=(8, 18))
+        ttk.Button(actions, text="打开此位置 / Open folder", command=self._browse_workspace).pack(side="left")
+        ttk.Button(actions, text="使用默认目录 / Use default", command=lambda: self.workspace.set("")).pack(side="left", padx=8)
+        advanced = ttk.Frame(directory)
+        def toggle_advanced():
+            if advanced.winfo_manager():
+                advanced.pack_forget()
+            else:
+                advanced.pack(fill="x", after=advanced_button)
+        advanced_button = ttk.Button(directory, text="高级：Codex 路径 / Advanced", command=toggle_advanced)
+        advanced_button.pack(anchor="w")
+        ttk.Label(advanced, textvariable=self.cli_label).pack(anchor="w", pady=(8, 4))
+        ttk.Entry(advanced, textvariable=self.codex).pack(fill="x")
+        ttk.Label(directory, text="确认后点击「启动连接」。此窗口需保持运行，关闭运行中的窗口会最小化。\nKeep this Launcher running while connected.", style="Muted.TLabel", wraplength=590).pack(anchor="w", pady=(16, 0))
+
+        heading(progress, "PAGE 04 / 04", "连接与同步状态", "连接过程和同步反馈集中显示在这里。\nConnection progress and live activity in one place.")
+        for title, variable in (("本机连接 / Connection", self.connection_state), ("会话状态 / Sessions", self.session_state), ("最近同步反馈 / Last sync feedback", self.sync_feedback), ("实际工作目录 / Workspace", self.actual_workspace), ("最近反馈 / Latest activity", self.latest_event)):
+            ttk.Label(progress, text=title, style="Muted.TLabel").pack(anchor="w", pady=(5, 2))
+            ttk.Label(progress, textvariable=variable, wraplength=590).pack(anchor="w", pady=(0, 5))
+        ttk.Label(progress, text="运行日志 / Activity log", style="Muted.TLabel").pack(anchor="w", pady=(8, 5))
+        log_box = ttk.Frame(progress)
+        log_box.pack(fill="both", expand=True)
+        self.log = tk.Text(log_box, height=5, state="disabled", wrap="word", bg="#f6f7f9", fg="#475467", font=("Consolas", 9), relief="flat", padx=12, pady=10)
+        self.log.pack(side="left", fill="both", expand=True)
+        scroll = ttk.Scrollbar(log_box, command=self.log.yview)
+        scroll.pack(side="right", fill="y")
+        self.log.configure(yscrollcommand=scroll.set)
+        controls = ttk.Frame(progress)
+        controls.pack(fill="x", pady=(12, 0))
+        self.stop_button = ttk.Button(controls, text="停止连接 / Stop", command=self._stop)
         self.stop_button.pack(side="left")
-        ttk.Button(buttons, text="退居后台", command=self._background).pack(side="right")
-        ttk.Label(outer, textvariable=self.status, wraplength=690).pack(anchor="w", pady=(4, 8))
-        self.log = tk.Text(outer, height=5, state="disabled", wrap="word")
-        self.log.pack(fill="x")
-        ttk.Label(outer, text="关闭窗口会最小化到任务栏；恢复窗口后可停止连接。", wraplength=690).pack(anchor="w", pady=(7, 0))
+        ttk.Button(controls, text="退居后台 / Minimize", command=self._background).pack(side="right")
+        footer_separator = ttk.Separator(panel)
+        footer_separator.pack(fill="x", pady=(4, 10))
+        self.notice = ttk.Label(panel, textvariable=self.status, style="Muted.TLabel", wraplength=600)
+        self.notice.pack(anchor="w", pady=(0, 8))
+        footer = ttk.Frame(panel)
+        footer.pack(fill="x")
+        self.back_button = ttk.Button(footer, text="上一步 / Back", command=lambda: self._show_page(self.page - 1))
+        self.back_button.pack(side="left")
+        self.next_button = ttk.Button(footer, text="已有插件，继续 / Continue", style="Primary.TButton", command=self._next_page)
+        self.next_button.pack(side="right")
+        self.connect_button = ttk.Button(footer, text="启动连接 / Connect", style="Primary.TButton", command=self._connect)
+        # Reserve navigation first, so large fonts/small windows cannot hide it.
+        for widget in (viewport, footer_separator, self.notice, footer):
+            widget.pack_forget()
+        footer.pack(side="bottom", fill="x")
+        self.notice.pack(side="bottom", anchor="w", pady=(8, 8))
+        footer_separator.pack(side="bottom", fill="x", pady=(4, 10))
+        viewport.pack(fill="both", expand=True, pady=(18, 8))
+        self.bind("<Configure>", self._resize_layout, add="+")
+        self.bind("<MouseWheel>", self._scroll_page, add="+")
+        self.bind("<FocusIn>", self._reveal_focus, add="+")
+        if self.high_contrast:
+            self._apply_high_contrast(style)
+        self.status.trace_add("write", self._status_changed)
+        self._show_page(0)
+
+    def _fit_window_to_work_area(self) -> None:
+        """Fit the whole decorated window, in the same coordinate space as Tk."""
+        self.update_idletasks()
+        left, top, right, bottom = launcher_work_area(self)
+        border = max(0, self.winfo_rootx() - self.winfo_x())
+        title = max(0, self.winfo_rooty() - self.winfo_y())
+        available_width = max(1, right - left - 16 - 2 * border)
+        available_height = max(1, bottom - top - 16 - title - border)
+        width, height = min(1020, available_width), min(900, available_height)
+        self.minsize(min(640, width), min(400, height))
+        self.geometry(f"{width}x{height}")
+        self.update_idletasks()
+        x = left + (right - left - width - 2 * border) // 2
+        y = top + (bottom - top - height - title - border) // 2
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            position = ctypes.windll.user32.SetWindowPos
+            position.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                 ctypes.c_int, ctypes.c_int, wintypes.UINT]
+            # Native positioning handles monitors left/above the primary screen.
+            position(int(self.frame(), 0), None, x, y, 0, 0, 0x0015)
+        else:
+            self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.update_idletasks()
+
+    def _resize_layout(self, event) -> None:
+        if event.widget is not self:
+            return
+        compact = event.width < 900
+        if compact and self.sidebar.winfo_manager():
+            self.sidebar.pack_forget()
+            self.compact_navigation.pack(fill="x", pady=(0, 10), before=self.body)
+        elif not compact and not self.sidebar.winfo_manager():
+            self.compact_navigation.pack_forget()
+            self.sidebar.pack(side="left", fill="y", padx=(0, 16), before=self.panel)
+        # Size text to the real content column so it cannot cover navigation.
+        column = max(120, event.width - (0 if compact else 231) - 104)
+        self.notice.configure(wraplength=column)
+
+    def _apply_high_contrast(self, style) -> None:
+        for name in ("TFrame", "Card.TFrame", "TLabel", "Muted.TLabel", "Title.TLabel", "Heading.TLabel"):
+            style.configure(name, background="SystemWindow", foreground="SystemWindowText")
+        for name in ("TEntry", "TCombobox"):
+            style.configure(name, fieldbackground="SystemWindow", foreground="SystemWindowText")
+            style.map(name, fieldbackground=[("readonly", "SystemWindow")], foreground=[("readonly", "SystemWindowText")])
+        for name in ("TButton", "Primary.TButton"):
+            style.configure(name, background="SystemButtonFace", foreground="SystemButtonText")
+            style.map(name, background=[("active", "SystemHighlight"), ("disabled", "SystemButtonFace")], foreground=[("disabled", "SystemGrayText"), ("active", "SystemHighlightText")])
+
+        def recolor(widget):
+            if isinstance(widget, (tk.Frame, tk.Label, tk.Canvas, tk.Text)):
+                widget.configure(background="SystemWindow")
+                if isinstance(widget, (tk.Label, tk.Text)):
+                    widget.configure(foreground="SystemWindowText")
+            for child in widget.winfo_children():
+                recolor(child)
+
+        self.configure(background="SystemWindow")
+        recolor(self)
+
+    def _show_page(self, page: int) -> None:
+        self.page = max(0, min(3, page))
+        self.compact_navigation.current(self.page)
+        for frame in self.pages:
+            frame.pack_forget()
+        self.pages[self.page].pack(fill="both", expand=True)
+        for index, label in enumerate(self.step_labels):
+            if self.high_contrast:
+                label.configure(bg="SystemHighlight" if index == self.page else "SystemWindow", fg="SystemHighlightText" if index == self.page else "SystemWindowText")
+            else:
+                label.configure(bg="#dfe7ff" if index == self.page else "#eef1f7", fg="#264bb9" if index == self.page else "#667085")
+        self.back_button.configure(state="disabled" if self.page == 0 or self.busy else "normal")
+        self.back_button.configure(text="返回设置 / Settings" if self.page == 3 else "上一步 / Back")
+        self.next_button.pack_forget()
+        self.connect_button.pack_forget()
+        if self.page < 2:
+            self.next_button.configure(text="已有插件，继续 / Continue" if self.page == 0 else "下一步 / Next")
+            self.next_button.pack(side="right")
+        elif self.page == 2:
+            self.connect_button.pack(side="right")
+        if self.page == 1 and self.link_version in {"2", "3"}:
+            self.password_entry.focus_set()
+        self.page_canvas.yview_moveto(0)
+
+    def _navigate_page(self, page: int) -> None:
+        if not self.busy or page == 3:
+            self._show_page(page)
+        else:
+            self.compact_navigation.current(self.page)
+
+    def _refresh_workspace_display(self, *_args) -> None:
+        custom = self.workspace.get()
+        self.workspace_display.set(custom or self.default_root)
+        self.workspace_hint.set(
+            "已选择自定义目录，连接器将使用此文件夹。\nSelected folder will be used as the workspace."
+            if custom else
+            "当前使用默认位置，连接后在此创建项目名称子目录。\nDefault location; a project-named subfolder is resolved after connection."
+        )
+
+    def _scroll_page(self, event) -> None:
+        if isinstance(event.widget, (tk.Text, ttk.Combobox)):
+            return
+        self.page_canvas.yview_scroll(-int(event.delta / 120), "units")
+
+    def _reveal_focus(self, event) -> None:
+        widget = event.widget
+        if str(widget).startswith(str(self.pages[self.page])):
+            self.update_idletasks()
+            top = widget.winfo_rooty() - self.page_host.winfo_rooty()
+            bottom = top + widget.winfo_height()
+            visible_top = self.page_canvas.canvasy(0)
+            visible_bottom = visible_top + self.page_canvas.winfo_height()
+            total = max(1, self.page_host.winfo_height())
+            if top < visible_top:
+                self.page_canvas.yview_moveto(top / total)
+            elif bottom > visible_bottom:
+                self.page_canvas.yview_moveto((bottom - self.page_canvas.winfo_height() + 12) / total)
+
+    def _next_page(self) -> None:
+        if self.busy:
+            return
+        if self.page == 1:
+            try:
+                if self.link_version in {"2", "3"}:
+                    valid_password(self.password.get())
+                elif self.link_version == "1":
+                    if not re.fullmatch(r"gtd_[A-Za-z0-9_-]{43}", self.token.get().strip()):
+                        raise ValueError("请输入有效的一次性设备授权 / Enter a valid authorization")
+                else:
+                    raise ValueError("请从网页的「连接 Codex」打开启动器 / Open from the website")
+                (valid_claude_model if self.harness == "claude-code" else valid_model)(self.model.get())
+                valid_context_tokens(self.context_tokens.get())
+                valid_history_sync(self.history_sync.get())
+            except ValueError as error:
+                self.status.set(str(error))
+                self.password_entry.focus_set()
+                return
+        self._show_page(self.page + 1)
+
+    def _browse_workspace(self) -> None:
+        directory = Path(self.workspace.get() or self.default_root)
+        while not directory.is_dir() and directory != directory.parent:
+            directory = directory.parent
+        try:
+            os.startfile(str(directory))
+        except OSError:
+            self.status.set("无法打开默认位置，可复制上方路径手动浏览。 / Copy the path to browse manually.")
+
+    def _status_changed(self, *_args) -> None:
+        value = self.status.get()
+        if (self.busy or self.connector is not None
+                or value.startswith(("操作失败", "已断开", "连接器已退出"))
+                or value == AUTHORIZATION_CANCELLED):
+            self._display_activity("status", value)
+
+    def _display_activity(self, kind: str, value: str) -> None:
+        # Interpret only connector-owned line prefixes, never arbitrary success words.
+        if kind == "error":
+            self.connection_state.set("操作失败 / Failed")
+            self.session_state.set("连接未完成，请查看日志 / Check activity for details")
+            self.latest_event.set(value[:240])
+        elif kind == "status":
+            self.connection_state.set(value)
+            if "已退出" in value or "已断开" in value or value == AUTHORIZATION_CANCELLED:
+                self.session_state.set("连接已结束 / Connection ended")
+        elif kind == "log_only":
+            self.latest_event.set(value[:240])
+        elif kind == "log":
+            self.latest_event.set(value[:240])
+            if value.startswith("Workspace: "):
+                self.actual_workspace.set(value[len("Workspace: "):])
+            elif value.startswith("Claude Code ready: "):
+                self.connection_state.set("Claude Code 已就绪 / Claude Code ready")
+            elif value.startswith("Codex App Server ready: "):
+                self.connection_state.set("Codex 已就绪 / Codex ready")
+            elif value.startswith("Connected session: ") or value.startswith('Connected "claude-code" session: '):
+                self.connection_state.set("已连接 / Connected")
+                self.session_state.set("会话连接成功 / Session connected")
+            elif value == "GatherThread connector ready." or value.startswith("GatherThread project: "):
+                self.connection_state.set("已连接项目 / Project connected")
+            retry = re.fullmatch(r"gatherthread-codex \(([^)\r\n]+)\): .*; retrying", value)
+            recovered = re.fullmatch(r"gatherthread-codex \(([^)\r\n]+)\): recovered", value)
+            # These are historical records, not a current health/active-retry contract.
+            # Heartbeat/sharing failures need not produce a matching recovery log.
+            if retry:
+                self.sync_feedback.set("曾记录同步重试；可在日志中查看详情 / A sync retry was recorded; see the log")
+            elif recovered:
+                self.sync_feedback.set("曾收到同步恢复反馈 / A sync recovery was reported")
 
     def _clear_secrets(self, *_args) -> None:
         self.password.set("")
@@ -899,7 +1221,10 @@ class Launcher(tk.Tk):
         return node, codex
 
     def _choose_workspace(self) -> None:
-        directory = filedialog.askdirectory(parent=self, mustexist=True, title="选择 Agent 本地工作目录")
+        initial = Path(self.workspace.get() or self.default_root)
+        while not initial.is_dir() and initial != initial.parent:
+            initial = initial.parent
+        directory = filedialog.askdirectory(parent=self, initialdir=str(initial), mustexist=True, title="选择 Agent 本地工作目录 / Choose workspace")
         if directory:
             self.workspace.set(directory)
 
@@ -920,6 +1245,8 @@ class Launcher(tk.Tk):
         self.connect_button.configure(state="disabled" if value or pending or running or not self.link_version or self.authorization_used else "normal")
         self.password_entry.configure(state="disabled" if value or running else "normal")
         self.code_sync_checkbox.configure(state="disabled" if value or self.connector and self.connector.poll() is None else "normal")
+        self.next_button.configure(state="disabled" if value or pending else "normal")
+        self.back_button.configure(state="disabled" if value or self.page == 0 else "normal")
 
     def _install(self) -> None:
         if self.busy or getattr(self, "claude_discovery_pending", False) or (self.connector and self.connector.poll() is None):
@@ -936,6 +1263,7 @@ class Launcher(tk.Tk):
                                      "将通过所选 Agent 的官方命令，为当前系统用户安装随包 GatherThread 插件。\n\n请确认信任其中的 MCP/Hook 代码；此操作不会替你批准 Agent 的工具操作。"):
             return
         self._set_busy(True)
+        self.plugin_state.set("正在安装插件… / Installing plugin…")
 
         def work() -> None:
             commands = plugin_install_commands(codex, installed_dir(), self.harness)
@@ -945,8 +1273,9 @@ class Launcher(tk.Tk):
                     result = subprocess.run(args, env=self._env(), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180, shell=False, creationflags=self._flags())
                     if result.returncode:
                         raise RuntimeError((result.stderr or result.stdout or "插件安装失败")[-1200:])
-                self.events.put(("status", "插件安装完成。请在所选 Agent 中重启会话，并通过 /hooks 审查 Hooks。"))
+                self.events.put(("plugin", "插件安装完成。请在所选 Agent 中重启会话，并通过 /hooks 审查 Hooks。 / Installed; review Hooks."))
             except (OSError, subprocess.TimeoutExpired, RuntimeError) as error:
+                self.events.put(("plugin", "插件安装失败，请查看第四页 / Installation failed; check page 4"))
                 self.events.put(("error", str(error)))
             finally:
                 self.events.put(("idle", ""))
@@ -1007,6 +1336,7 @@ class Launcher(tk.Tk):
             self.authorization_used = True
         self._set_busy(True)
         self.status.set("正在授权本机 " + HARNESSES[harness] + "… / Authorizing this Agent device…")
+        self.events.put(("page", "3"))
 
         def work() -> None:
             credential = token
@@ -1109,6 +1439,17 @@ class Launcher(tk.Tk):
         try:
             for _ in range(100):
                 kind, value = self.events.get_nowait()
+                activity_kind = "log"
+                if kind == "page":
+                    self.sync_feedback.set("尚无同步反馈 / No sync feedback yet")
+                    self.session_state.set("等待连接会话 / Waiting for sessions")
+                    self.actual_workspace.set("等待连接器确认 / Waiting for connector")
+                    self._show_page(int(value))
+                    continue
+                if kind == "plugin":
+                    self.plugin_state.set(value)
+                    self.status.set(value)
+                    continue
                 if kind in ("connector_started", "connector_log", "connector_exit", "connector_stop_pending"):
                     process, value = value
                     if self.connector is not process:
@@ -1135,6 +1476,8 @@ class Launcher(tk.Tk):
                     if process.poll() is None and getattr(self, "stopping_connector", None) is not process and (value == "GatherThread connector ready." or value.startswith("Connected session: ")
                             or value.startswith('Connected "claude-code" session: ')):
                         self.status.set("已连接；保持启动器运行，即可在网页使用此 Agent。")
+                    if process.poll() is not None or getattr(self, "stopping_connector", None) is process:
+                        activity_kind = "log_only"
                     kind = "log"
                 if kind == "log":
                     self.log.configure(state="normal")
@@ -1142,10 +1485,12 @@ class Launcher(tk.Tk):
                     self.log.delete("1.0", "end-100000c")
                     self.log.see("end")
                     self.log.configure(state="disabled")
+                    self._display_activity(activity_kind, value)
                 elif kind == "status":
                     self.status.set(value)
                 elif kind == "error":
                     self.status.set("操作失败：" + value)
+                    self._display_activity("error", value)
                 elif kind == "idle":
                     self._set_busy(False)
                 elif kind == "claude_discovery":

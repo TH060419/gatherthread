@@ -223,3 +223,114 @@ without stopping cloud-to-local projection, or choose **Manual upload** to scan
 and send completed eligible local turns. The manual action is also the recovery
 path after a missed native event or transport interruption, uses the existing
 durable idempotent outbox, and never silently re-enables automatic upload.
+
+## Native collaboration workspace prototype (latest DSH)
+
+This branch adds **GatherThread / 共序** to DSH's sidebar using the official main
+panel Slot. Prototype development targets **DSH 0.2.2-alpha.2**, the newest
+published alpha checked on 2026-10-30. The older release instructions and
+compatibility matrix above describe the existing connector baseline, not a
+requirement to downgrade a newer DSH installation.
+
+1. Build a local package: `npm run build:ts && npm run build:dsh-plugin`, then
+   `npm pack --workspace @gatherthread/dsh-host --ignore-scripts`.
+2. In a matching latest Desktop installation, use its bundled CLI:
+   `dsh plugin --profile desktop add "/absolute/path/to/gatherthread-dsh-host-0.1.0-beta.6.tgz"`.
+   Restart DSH. Never start the Electron-owned desktop profile from a second CLI.
+3. In **Settings → GatherThread / 共序**, pair your account and select the local
+   provider/model using the existing connection flow.
+4. Open **GatherThread / 共序** in the sidebar, then select a project and session
+   from the workspace's left column. Search filters the session list without
+   changing the active conversation. The middle column holds shared messages
+   and the composer; the right column shows members and shared context.
+   **发送聊天** sends only a human message. **请求本机 DSH** explicitly starts an
+   Agent request on this device. The **DSH · 推理强度** button below the composer
+   opens model/reasoning selectors using the native runtime's available catalog.
+   They do not overwrite the saved connection default.
+5. **＋ 新建会话** creates a Multi conversation or private Solo; **重命名** is
+   available to session managers. **引用** links a canonical message rather than
+   copying it into the outgoing prompt. **复制** copies the displayed text.
+6. Once an ordinary local request is running, **暂停 Agent** pauses its claim.
+   **继续 Agent** starts a new request with the original model and current shared
+   context, preserving an unsent chat draft. It does not restore internal thought.
+7. Expand **共享上下文 → 查看当前上下文** to preview the effective shared context.
+   On narrow panels, **成员与上下文** opens a dialog instead of squeezing the
+   conversation. Execution progress remains expandable. Messages show
+   their participants, Agent progress/replies, and fixed failure notices.
+8. Shared messages use the host's **MarkdownText**, code highlighting, math and
+   tables. Click an image to open DSH's native lightbox; broken images show a
+   fallback. **查看原文** switches to source, **展开长消息** reads a longer bounded
+   canonical message, and **复制展开内容** copies that displayed expansion.
+   Members use the same catalog avatars as Web; replies add the Agent badge to
+   the verified execution owner's avatar.
+9. A relative Markdown file link opens a read-only local-project preview using
+   the existing file safety checks. Missing/oversized/binary files give recovery
+   guidance and a native file-panel entry. This is the local copy, not the
+   sender's original attachment. HTTP(S) links remain ordinary external links;
+   this change does not add binary uploads or authenticated remote attachments.
+
+The isolated latest-runtime check used an official package installation in a
+custom Web profile (the shared Desktop UI/Host stack), a local GT server and a
+mock model. It verified that another member's shared message reaches the actual
+DSH provider request, that the reply returns to canonical history, and that a
+second request succeeds after restarting DSH with the same saved conversations. It did not
+upgrade the user's app, use paid models or test an installed latest Electron
+binary. Chromium and Safari checks cover the native workspace; Safari additionally
+verifies native select menus, Chinese input, chat receipts and context previews.
+
+V4 compatibility can also be checked without a model or user profile. Set
+`GATHERTHREAD_TEST_DSH_V4_MODULE` to the absolute `@deepseek-ai/dsh-session/lib/index.js`
+path in an isolated latest DSH installation, then run
+`node --test packages/dsh-host/dist/test/dsh-v4-replay.test.js` after the TypeScript
+build. This uses DSH's own storage relationship validator and restore API to cover
+shared imports, native permission metadata, context replacement, reconnect and
+deletion-safe projections. Existing malformed local sessions are preserved and
+refused; the prototype does not silently rewrite their history.
+
+Drafts and pending request identities remain in memory across panel navigation;
+copy important drafts before reloading DSH. After a missing receipt, use
+**重试同一次发送** to reuse the request identity. If choosing **保留草稿，结束重试**,
+check shared history before sending it as a new request. An offline local Agent
+never silently routes to another device/model.
+
+**管理我的 Agent**, beside the model selector, opens local connection settings
+or explicitly labelled **前往网页版** links for Agent sharing and Agent Teams. These links open the current project in a separate browser tab (the system browser in DSH Desktop); choose the corresponding feature under **管理我的 Agent** there. Browser authentication is separate from DSH pairing. A local test server must serve the built Web app as well as `/v1`; an API-only fixture cannot open a working management page. The dialog shows the target URL, next step, and a copy fallback after clicking.
+
+Workspace controls and dialogs reuse the host-provided `@deepseek-ai/dsh-client-ui-primitives` Button, Modal, and product icons, plus official `--dsw-*` theme tokens. Older hosts without the atoms retain a basic accessible HTML fallback. No upstream source, theme bundle, or private desktop API is copied into the plugin.
+These links use the paired server and selected project/session; they contain no
+device grant and may require a separate Web sign-in. Full sharing/Team editors
+and project administration have not yet been migrated into the native panel.
+The existing connection settings retain their Git controls. Architecture and limits:
+[ADR-0065](../../docs/adr/0065-dsh-native-collaboration-workspace.md).
+
+In the collaboration workspace, **文件 / Files** opens local previews and
+comparisons or GT-cloud/GitHub branches, text editing and commit history.
+**Git 同步 / Git sync** opens the current project's existing synchronization
+controls. Native DSH file preview opens the exact connected conversation.
+Local files remain private unless the user explicitly adds a text excerpt to a
+chat draft and sends it. Local editing, binary attachments and advanced Git
+review/merge still use existing native/Web tools. See the canonical
+[prototype scope](../../docs/PRODUCT_SPEC.md#dsh-collaboration-workspace-prototype)
+and [RPC limits](../../docs/INTERFACE_CONTRACTS.md#dsh-workspace-rpc-prototype).
+
+### Beta 6 alignment
+
+The prototype is based on main `ec69ada` (Beta 6, 2026-10-30), including the
+reviewed Web updates in #124, #126 and #127. Team presets, versioned JSON
+import/export and AI-assisted configuration remain available through the
+workspace's **Manage my Agents → Agent Teams** Web entry. Browser preferences
+remain browser-local; they do not override DSH's native theme or permissions.
+
+A private Solo created in this DSH panel is a cleanup candidate only during this
+Client lifetime. Switching projects/conversations asks the server to discard it
+only if no submitted content exists. Chat drafts, file drafts and uncertain send
+receipts retain the conversation. Server-side atomic checks preserve concurrent
+writes and deny other users' Solo/Multi. Failed cleanup shows a retained-session
+notice; an older server never falls back to unconditional deletion. Closing the
+entire panel/process may leave an empty Solo, which can be managed on Web.
+
+DSH public Button, Modal, icons, theme tokens, main/sidebar Slots and native file
+navigation remain reused. The official master interfaces were also checked at
+`ce7073d512`; the isolated runtime is the current published alpha
+`0.2.2-alpha.2` (the npm `latest` line is `0.2.1-rc.5`). No private UI module or
+second copy of DSH's window chrome is introduced.

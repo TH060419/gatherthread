@@ -92,7 +92,7 @@ import {
   withoutDshPairingHash,
 } from "./dsh.js?v=20261030-config-1";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
-import { calendarDayKey, formatFullTimestamp, formatTimelineDay } from "./timeline-dates.js?v=20260927-1";
+import { calendarDayKey, formatEventTimestamp, formatFullTimestamp, formatTimelineDay } from "./timeline-dates.js?v=20261031-1";
 import {
   captureTimelineScroll,
   isTimelineAtBottom,
@@ -2718,7 +2718,7 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     sequence.className = "event-sequence";
     sequence.textContent = `#${event.sequence}`;
     time.dateTime = event.createdAt;
-    time.textContent = formatTimestamp(event.createdAt);
+    time.textContent = formatEventTimestamp(event.createdAt);
     timeButton.className = "event-time-button";
     timeButton.type = "button";
     timeButton.dataset.fullTime = formatFullTimestamp(event.createdAt, locale) ?? time.textContent;
@@ -3874,11 +3874,6 @@ async function retryAgentRequest(requestId, button, continuing = false) {
 function openCreateDialog() {
   if (state.project?.role !== "owner" && state.project?.role !== "participant") return;
   element("create-error").textContent = "";
-  const multi = createForm.querySelector("input[name='mode'][value='multi']");
-  const solo = createForm.querySelector("input[name='mode'][value='solo']");
-  const participant = state.project.role === "participant";
-  multi.disabled = participant;
-  if (participant) solo.checked = true;
   createDialog.showModal();
   requestAnimationFrame(() => element("session-name").focus());
 }

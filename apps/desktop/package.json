@@ -1,0 +1,20 @@
+{
+  "name": "@gatherthread/desktop",
+  "version": "0.1.0-beta.6",
+  "private": true,
+  "type": "module",
+  "description": "GatherThread macOS desktop workspace prototype",
+  "license": "Apache-2.0",
+  "main": "dist/main.mjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "package:mac": "node scripts/package.mjs",
+    "smoke": "electron . --desktop-smoke"
+  },
+  "devDependencies": {
+    "electron": "45.1.0",
+    "@electron/packager": "20.3.0"
+  }
+}
