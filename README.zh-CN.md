@@ -1,5 +1,7 @@
 # GatherThread 共序
 
+> **插件与桌面端整合预览。** 本实验分支同时包含 [DSH 协作工作区插件](packages/dsh-host/README.md)和 [macOS 桌面端原型](apps/desktop/README.md)，用于独立开发和体验，不代表已经合并主线、发布版本或上线正式服；原有 DSH PR 继续独立审核。
+
 **多人协作，多端接续。让自己的 Agent 试着组队。**
 
 让讨论和开发发生在同一个地方。GatherThread 把**多人联机、共享会话、各自的 AI Agent 和文件协作**放在一起：说清楚要做什么，请自己的 Agent 开始做，同伴一起看进展、检查成果。换到手机或平板，也能接着推进。

@@ -1,5 +1,7 @@
 # GatherThread
 
+> **Plugin + desktop integration preview.** This experimental branch combines the DSH collaboration plugin ([guide](packages/dsh-host/README.md)) and the macOS desktop prototype ([build and try](apps/desktop/README.md)). It is not a released build or a production deployment; the existing DSH PR remains independently reviewable.
+
 **Work together. Continue anywhere. Try your Agents as a team.**
 
 GatherThread puts your team's discussion, AI-assisted work, and file review in one shared conversation. Collaborate live, use your own Agent, and continue from a computer, phone, or tablet. Less copying between chats. More progress everyone can follow.

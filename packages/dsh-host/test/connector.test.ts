@@ -2726,3 +2726,34 @@ async function bounded<T>(value: Promise<T>, milliseconds: number): Promise<T> {
     }),
   ]);
 }
+
+test("a Team cancelled while capturing files never prompts and releases its unstarted claim", async () => {
+  const cfg = config(), api = new FakeApi(), persistence = freshPersistence(), store = new MemoryConnectorStateStore();
+  const event = request(1); event.payload = { ...(event.payload as object), agent_team: { run_id: 'file-baseline-run' } }; api.events.push(event);
+  let active = true, acknowledgments = 0, capturing!: () => void;
+  const captureStarted = new Promise<void>(resolve => { capturing = resolve; });
+  const control: DshCollaborationApi = Object.assign(api, {
+    async readAgentExecution() { return { active }; },
+    async acknowledgeAgentExecutionStopped() { acknowledgments++; },
+  });
+  const connector = new DshHostConnector({ config: cfg, api: control, host: new FakeHost(cfg.dshSessionId, persistence), stateStore: store,
+    beforeExecution: async (id, signal) => {
+      assert.equal(id, event.id); capturing();
+      await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    },
+  });
+  await connector.start({ schedule: false, runImmediately: false });
+  const rejected = assert.rejects(connector.pollOnce(), /execution was stopped/);
+  await captureStarted; active = false; await rejected;
+  assert.equal(persistence.prompts.length, 0); assert.equal(acknowledgments, 1);
+  assert.equal((await store.load())!.activeRequest, undefined);
+  await connector.stop();
+});
+test("a failed optional file snapshot cannot prevent an authorized Agent task", async () => {
+  const cfg = config(), api = new FakeApi(), persistence = freshPersistence(); api.events.push(request(1)); let called = 0;
+  const connector = new DshHostConnector({ config: cfg, api, host: new FakeHost(cfg.dshSessionId, persistence), stateStore: new MemoryConnectorStateStore(),
+    beforeExecution: async () => { called++; throw new Error('fixture unreadable project file'); } });
+  await connector.start({ schedule: false, runImmediately: false }); await connector.pollOnce();
+  assert.equal(called, 1); assert.equal(persistence.prompts.length, 1); assert.equal(api.completions.length, 1);
+  await connector.stop();
+});

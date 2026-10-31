@@ -1,9 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { calendarDayKey, formatFullTimestamp, formatTimelineDay } from "../src/timeline-dates.js";
+import { calendarDayKey, formatEventTimestamp, formatFullTimestamp, formatTimelineDay } from "../src/timeline-dates.js";
 
 const localDay = (year, month, day, hour = 12) => new Date(year, month - 1, day, hour);
+
+test("message timestamps always show the local year/month/day before the time", () => {
+  for (const date of [localDay(2026, 1, 2, 0), localDay(2025, 12, 31, 23)]) {
+    const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
+    assert.equal(formatEventTimestamp(date.toISOString()), `${calendarDayKey(date).replaceAll("-", "/")} ${time}`);
+  }
+  assert.match(formatEventTimestamp(localDay(2026, 1, 2)), /^2026\/01\/02 /);
+  assert.equal(formatEventTimestamp("not a date"), "Unknown time");
+});
 
 test("timeline labels follow local calendar days across midnight", () => {
   const now = localDay(2026, 9, 27, 0);

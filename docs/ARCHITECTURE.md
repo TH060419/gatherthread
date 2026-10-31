@@ -61,6 +61,7 @@ One deployment has one active authoritative host as defined by [ADR-0003](adr/00
 ```text
 apps/server       HTTP, WebSocket, authentication, ACL, persistence
 apps/web          collaboration UI
+apps/desktop      macOS prototype: isolated deployed Web + local connector manager
 site              product home source and application entry links
 packages/protocol shared schemas and event contracts
 packages/mcp      MCP tools/resources over the collaboration API
@@ -70,6 +71,8 @@ tests/e2e          multi-client and bridge end-to-end tests
 ```
 
 ## Web entry architecture
+
+The local macOS prototype in `apps/desktop` loads this exact deployed origin in an unprivileged Electron window. A separate bundled local window manages explicit native starts via strict IPC; it does not proxy Web authentication or embed a device token in the page. Existing connectors remain execution owners. [ADR-0066](adr/0066-isolated-macos-desktop-workspace.md) records boundaries and release gates.
 
 The owner host publishes one browser origin. `/` is the public product home; its primary actions open the authenticated application at `/app/`. Both surfaces are assembled by the `apps/web` build, so the product page does not introduce another network service, cookie scope, API origin, or WebSocket origin. The product page and application keep independent CSS and JavaScript entry points to prevent global marketing styles from changing workspace behavior.
 
@@ -253,3 +256,23 @@ disabled or deleted. Product flow, quotas, HTTP contracts and security controls
 are owned by their respective canonical documents; the durable split between
 configuration and execution is recorded in
 [ADR-0061](adr/0061-account-private-saved-agent-teams.md).
+
+
+## Native DSH workspace projection
+
+The DSH bundle now contributes a sidebar entry and main workspace panel alongside
+its existing settings panel. The Client calls the native Host `workspace/action`
+RPC; `packages/dsh-host/src/workspace.ts` revalidates the paired scope and maps
+canonical `/v1` responses to bounded visible data. Agent requests re-enter the
+existing DSH connector rather than a second execution loop. See
+[ADR-0065](adr/0065-dsh-native-collaboration-workspace.md) and the
+[RPC contract](INTERFACE_CONTRACTS.md#dsh-workspace-rpc-prototype).
+
+`workspace-files.ts` owns bounded private file previews and volatile per-project
+comparison baselines. Ordinary local connector execution captures a baseline
+before prompting; it does not depend on DSH's native workspace-change service,
+which excludes subagent sessions. Comparisons are project-wide observations,
+not exact per-Agent attribution. Shared-executor/native-chat work is not an
+additional automatic capture trigger. Cloud operations proxy the existing file
+workspace contracts through the paired Host, retaining authoritative server ACLs
+and Git conflict checks; this is not a second synchronization engine.

@@ -40,6 +40,7 @@ function fixture(
     /** Gates Session flushing, so a test can dispose before a rebuild. */
     flushGate?: Promise<void>;
     initialTitle?: string;
+    sessionVersion?: number;
   } = {},
 ) {
   const listeners = new Map<string, Set<Listener>>();
@@ -70,7 +71,8 @@ function fixture(
   let pendingMessage: unknown;
   const session = {
     id: "dsh-session-1",
-    header: { version: 2, cwd: "/readonly/workspace" },
+    header: { version: fixtureOptions.sessionVersion ?? 2, cwd: "/readonly/workspace" },
+    get surface() { return { nodes: events.filter(event => (event as any).surfaceOp === "append").map(event => event.seq) }; },
     get seq() { return events.length; },
     snapshotEvents(from = 0) { return events.slice(from); },
     append(type: string, data: unknown, options?: unknown) {
@@ -565,6 +567,32 @@ test("a resumed native Session keeps its locally edited title", async () => {
   assert.equal(f.calls.order.filter((operation) => operation === "rename").length, 1);
   assert.ok(f.calls.order.includes("workspace:attach"), "the resumed Session remains in the workspace");
   await restarted.dispose();
+});
+
+test("V4 projections reserve an empty native system head and rebuild before importing shared chat", async () => {
+  const f = fixture(false, { sessionVersion: 4 });
+  const facade = createDshHostFacade({ context: f.context, sessionId: "dsh-session-1",
+    workspacePath: "/readonly/workspace", provider: "deepseek-official", model: "deepseek-v4-flash",
+    moduleImporter: async () => ({
+      createSystemMessage: (text: string) => { assert.equal(text, ""); return { id: "empty-head", role: "system", content: [], source: { kind: "system-prompt" } }; },
+      freezeMessage: (message: unknown) => structuredClone(message),
+    }) });
+  await facade.projectCanonicalEvents([{ eventId: "shared-b", canonicalSequence: 1, role: "user", content: "User B's decision", occurredAt: "2026-10-29T00:00:00Z" }]);
+  assert.deepEqual(f.events.map(event => event.type), ["turn/start", "step/start", "system/message", "step/end", "turn/end", "user/message"]);
+  assert.equal(f.calls.resume, 1, "the native loop must start after the prelude turn");
+  assert.equal(f.session.surface.nodes[0], 2);
+  assert.deepEqual((f.events[2]!.data as any).message.content, [], "shared text must never become system instructions");
+  await facade.dispose();
+});
+
+test("V4 borrowed headless history refuses imports without mutating a user's native conversation", async () => {
+  const f = fixture(true, { sessionVersion: 4, exposeLiveAgent: true });
+  const facade = createDshHostFacade({ context: f.context, sessionId: "dsh-session-1",
+    workspacePath: "/readonly/workspace", provider: "deepseek-official", model: "deepseek-v4-flash" });
+  await assert.rejects(facade.projectCanonicalEvents([{ eventId: "shared-b", canonicalSequence: 1, role: "user", content: "shared", occurredAt: "2026-10-29T00:00:00Z" }]), /protected system head/);
+  assert.deepEqual(f.events, []);
+  assert.equal(f.calls.dispose, 0);
+  await facade.dispose();
 });
 
 test("adopting an already-live DSH Session does not replace its local title", async () => {

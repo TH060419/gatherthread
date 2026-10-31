@@ -32,6 +32,17 @@ export function formatTimelineDay(value, locale, now = new Date()) {
   }).format(date);
 }
 
+export function formatEventTimestamp(value) {
+  const date = calendarDate(value);
+  if (!date) return "Unknown time";
+  const day = calendarDayKey(date).replaceAll("-", "/");
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+  return `${day} ${time}`;
+}
+
 export function formatFullTimestamp(value, locale) {
   const date = calendarDate(value);
   if (!date) return null;
