@@ -87,7 +87,8 @@ assert.equal(dshPackage.exports?.["."]?.types, "./types/native-plugin.d.ts");
 assert.equal(dshPackage.exports?.["./plugin"]?.default, "./dist/bundle/plugin.js");
 assert.equal(dshPackage.exports?.["./client"]?.default, "./client/client.js");
 assert.deepEqual(dshPackage.dsh?.client, {
-  inject: ["@deepseek-ai/dsh-client-connection", "@deepseek-ai/dsh-client-ui-settings"],
+  inject: ["@deepseek-ai/dsh-client-connection", "@deepseek-ai/dsh-client-ui-settings",
+    "@deepseek-ai/dsh-client-ui-layout", "@deepseek-ai/dsh-client-ui-sidebar"],
   platform: "web",
 });
 assert.equal(
